@@ -202,19 +202,21 @@ const AdsView = ({
         return [];
       };
 
-      // Search Terms
+      // Search Terms (SP uses 7-day, SB uses 14-day attribution windows)
       const spST = getRecords('sp_search_terms', '_apiSpSearchTerms').filter(inRange);
-      if (spST.length > 0) {
+      const sbST = getRecords('sb_search_terms', '_apiSbSearchTerms').filter(inRange);
+      const allSearchTerms = [...spST, ...sbST];
+      if (allSearchTerms.length > 0) {
         intel.hasData = true;
         const tm = {};
-        spST.forEach(r => {
-          const t = r['Customer Search Term'] || ''; if (!t) return;
+        allSearchTerms.forEach(r => {
+          const t = r['Customer Search Term'] || r['searchTerm'] || ''; if (!t) return;
           if (!tm[t]) tm[t] = { term: t, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-          tm[t].spend += Number(r['Spend'] || 0);
-          tm[t].sales += Number(r['7 Day Total Sales'] || 0);
-          tm[t].clicks += Number(r['Clicks'] || 0);
-          tm[t].impressions += Number(r['Impressions'] || 0);
-          tm[t].orders += Number(r['7 Day Total Orders (#)'] || 0);
+          tm[t].spend += Number(r['Spend'] || r['cost'] || 0);
+          tm[t].sales += Number(r['7 Day Total Sales'] || r['14 Day Total Sales'] || r['sales7d'] || r['salesClicks14d'] || 0);
+          tm[t].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+          tm[t].impressions += Number(r['Impressions'] || r['impressions'] || 0);
+          tm[t].orders += Number(r['7 Day Total Orders (#)'] || r['14 Day Total Orders (#)'] || r['purchases7d'] || r['purchasesClicks14d'] || 0);
         });
         const terms = Object.values(tm);
         intel.wastedSpend = terms.filter(t => t.spend >= 5 && t.sales === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
@@ -236,10 +238,11 @@ const AdsView = ({
           rows.forEach(r => {
             const n = r['Campaign Name'] || r['campaignName'] || ''; if (!n) return;
             if (!cm[n]) cm[n] = { name: n, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
-            cm[n].spend += Number(r['Spend'] || r['spend'] || 0);
-            cm[n].sales += Number(r['Sales'] || r['sales'] || r['7 Day Total Sales'] || 0);
+            cm[n].spend += Number(r['Spend'] || r['cost'] || r['spend'] || 0);
+            cm[n].sales += Number(r['Sales'] || r['7 Day Total Sales'] || r['sales'] || r['sales7d'] || 0);
             cm[n].clicks += Number(r['Clicks'] || r['clicks'] || 0);
             cm[n].impressions += Number(r['Impressions'] || r['impressions'] || 0);
+            cm[n].orders += Number(r['7 Day Total Orders (#)'] || r['purchases7d'] || 0);
           });
           intel.topCampaigns = Object.values(cm).filter(c => c.spend > 0).map(c => ({ ...c, roas: c.spend > 0 ? c.sales / c.spend : 0, acos: c.sales > 0 ? (c.spend / c.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 15);
         }
@@ -251,12 +254,12 @@ const AdsView = ({
         intel.hasData = true;
         const sm = {};
         skuRows.forEach(r => {
-          const sku = r['Advertised SKU'] || r['SKU'] || ''; if (!sku) return;
-          if (!sm[sku]) sm[sku] = { sku, asin: r['Advertised ASIN'] || '', spend: 0, sales: 0, clicks: 0, orders: 0 };
-          sm[sku].spend += Number(r['Spend'] || 0);
-          sm[sku].sales += Number(r['7 Day Total Sales'] || 0);
-          sm[sku].clicks += Number(r['Clicks'] || 0);
-          sm[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || 0);
+          const sku = r['Advertised SKU'] || r['advertisedSku'] || r['SKU'] || ''; if (!sku) return;
+          if (!sm[sku]) sm[sku] = { sku, asin: r['Advertised ASIN'] || r['advertisedAsin'] || '', spend: 0, sales: 0, clicks: 0, orders: 0 };
+          sm[sku].spend += Number(r['Spend'] || r['cost'] || 0);
+          sm[sku].sales += Number(r['7 Day Total Sales'] || r['sales7d'] || 0);
+          sm[sku].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+          sm[sku].orders += Number(r['7 Day Total Orders (#)'] || r['7 Day Total Units (#)'] || r['purchases7d'] || r['unitsSoldClicks7d'] || 0);
         });
         intel.skuPerformance = Object.values(sm).filter(s => s.spend > 0).map(s => ({ ...s, roas: s.spend > 0 ? s.sales / s.spend : 0, acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 999 })).sort((a, b) => b.spend - a.spend).slice(0, 10);
       } else if (Array.isArray(adsIntelData.skuAdPerformance) && adsIntelData.skuAdPerformance.length > 0) {
@@ -270,12 +273,12 @@ const AdsView = ({
         intel.hasData = true;
         const pm = {};
         plRows.forEach(r => {
-          const p = r['Placement'] || ''; if (!p) return;
+          const p = r['Placement'] || r['placementClassification'] || ''; if (!p) return;
           if (!pm[p]) pm[p] = { placement: p, spend: 0, sales: 0, clicks: 0, impressions: 0 };
-          pm[p].spend += Number(r['Spend'] || 0);
-          pm[p].sales += Number(r['7 Day Total Sales'] || 0);
-          pm[p].clicks += Number(r['Clicks'] || 0);
-          pm[p].impressions += Number(r['Impressions'] || 0);
+          pm[p].spend += Number(r['Spend'] || r['cost'] || 0);
+          pm[p].sales += Number(r['7 Day Total Sales'] || r['sales7d'] || 0);
+          pm[p].clicks += Number(r['Clicks'] || r['clicks'] || 0);
+          pm[p].impressions += Number(r['Impressions'] || r['impressions'] || 0);
         });
         intel.placementInsights = Object.values(pm).map(p => ({ ...p, roas: p.spend > 0 ? p.sales / p.spend : 0, cpc: p.clicks > 0 ? p.spend / p.clicks : 0, ctr: p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0 }));
       }
