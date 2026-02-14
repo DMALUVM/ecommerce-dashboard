@@ -1171,6 +1171,55 @@ const get3PLForPeriod = (ledger, periodKey) => {
   return { breakdown, metrics };
 };
 
+// ── SEC-003v2: Encrypted Credential Storage ──────────────────────────────────
+// Credentials are AES-GCM encrypted with a key derived from the user's ID
+// before saving to Supabase. This allows cross-device access while keeping
+// secrets unreadable in the database. Key is deterministic per user.
+const CRED_SALT = 'tallowbourn-cred-v1';
+
+async function deriveCredKey(userId) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(userId), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: enc.encode(CRED_SALT), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptCreds(userId, credObj) {
+  try {
+    const key = await deriveCredKey(userId);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(credObj));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+    return {
+      iv: btoa(String.fromCharCode(...iv)),
+      data: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
+      _encrypted: true,
+    };
+  } catch (e) {
+    console.warn('[CredEncrypt] Encryption failed, falling back to stripped:', e.message);
+    return null; // Caller will fall back to stripping
+  }
+}
+
+async function decryptCreds(userId, encObj) {
+  try {
+    if (!encObj?._encrypted || !encObj?.iv || !encObj?.data) return null;
+    const key = await deriveCredKey(userId);
+    const iv = Uint8Array.from(atob(encObj.iv), c => c.charCodeAt(0));
+    const ciphertext = Uint8Array.from(atob(encObj.data), c => c.charCodeAt(0));
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  } catch (e) {
+    console.warn('[CredDecrypt] Decryption failed:', e.message);
+    return null;
+  }
+}
+
 export default function Dashboard() {
   const [view, setView] = useState('dashboard'); // Start with dashboard
   const [weekEnding, setWeekEnding] = useState('');
@@ -4380,28 +4429,52 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (cloudDataObj.adsIntelData) cloudDataObj.adsIntelData = trimIntelData(cloudDataObj.adsIntelData, 150);
   if (cloudDataObj.dtcIntelData) cloudDataObj.dtcIntelData = trimIntelData(cloudDataObj.dtcIntelData, 150);
   
-  // SEC-003: Strip integration credentials from cloud saves
-  // Credentials stay in memory + localStorage for sync; they never go to Supabase
+  // SEC-003v2: Encrypt integration credentials before cloud save
+  // Credentials are AES-GCM encrypted with user's ID — readable only by the same user
   const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials'];
-  CREDENTIAL_KEYS.forEach(key => {
-    if (cloudDataObj[key]) {
-      // Keep only non-sensitive fields (connected status, storeUrl, etc.)
-      const cred = cloudDataObj[key];
-      cloudDataObj[key] = {
-        connected: cred.connected || false,
-        lastSync: cred.lastSync || null,
-        ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
-        ...(cred.realmId && { realmId: cred.realmId }),
-        ...(cred.customerId && { customerId: cred.customerId }),
-        ...(cred.sellerId && { sellerId: cred.sellerId }),
-        ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
-        // Ads API metadata (non-secret) — preserve connection state for cloud restore
-        ...(cred.adsConnected !== undefined && { adsConnected: cred.adsConnected }),
-        ...(cred.adsLastSync && { adsLastSync: cred.adsLastSync }),
-        ...(cred.adsProfileId && { adsProfileId: cred.adsProfileId }),
-      };
+  if (session?.user?.id) {
+    for (const key of CREDENTIAL_KEYS) {
+      if (cloudDataObj[key]) {
+        const cred = cloudDataObj[key];
+        // Only encrypt if there are actual secrets to protect
+        const hasSecrets = cred.clientSecret || cred.apiKey || cred.refreshToken || cred.accessToken || cred.adsRefreshToken || cred.adsClientSecret;
+        if (hasSecrets) {
+          const encrypted = await encryptCreds(session.user.id, cred);
+          if (encrypted) {
+            cloudDataObj[key] = encrypted;
+          } else {
+            // Fallback: strip secrets if encryption fails
+            cloudDataObj[key] = {
+              connected: cred.connected || false,
+              lastSync: cred.lastSync || null,
+              ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
+              ...(cred.realmId && { realmId: cred.realmId }),
+              ...(cred.customerId && { customerId: cred.customerId }),
+              ...(cred.sellerId && { sellerId: cred.sellerId }),
+              ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
+              ...(cred.adsConnected !== undefined && { adsConnected: cred.adsConnected }),
+              ...(cred.adsLastSync && { adsLastSync: cred.adsLastSync }),
+              ...(cred.adsProfileId && { adsProfileId: cred.adsProfileId }),
+            };
+          }
+        } else {
+          // No secrets — save metadata as-is (e.g. connected: false state)
+          cloudDataObj[key] = {
+            connected: cred.connected || false,
+            lastSync: cred.lastSync || null,
+            ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
+            ...(cred.realmId && { realmId: cred.realmId }),
+            ...(cred.customerId && { customerId: cred.customerId }),
+            ...(cred.sellerId && { sellerId: cred.sellerId }),
+            ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
+            ...(cred.adsConnected !== undefined && { adsConnected: cred.adsConnected }),
+            ...(cred.adsLastSync && { adsLastSync: cred.adsLastSync }),
+            ...(cred.adsProfileId && { adsProfileId: cred.adsProfileId }),
+          };
+        }
+      }
     }
-  });
+  }
   
   const payload = {
     user_id: session.user.id,
@@ -4737,43 +4810,41 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
     // Load credentials from cloud - SEC-003: cloud saves no longer contain secrets
-    // Only merge non-secret metadata (connected, lastSync, storeUrl) into existing state
-    // Actual API keys/tokens stay in memory from localStorage init
-    if (cloud.shopifyCredentials?.connected) {
-      setShopifyCredentials(prev => ({
-        ...prev,
-        connected: cloud.shopifyCredentials.connected,
-        lastSync: cloud.shopifyCredentials.lastSync || prev.lastSync,
-        storeUrl: cloud.shopifyCredentials.storeUrl || prev.storeUrl,
-      }));
-    }
-    if (cloud.packiyoCredentials?.connected) {
-      setPackiyoCredentials(prev => ({
-        ...prev,
-        connected: cloud.packiyoCredentials.connected,
-        lastSync: cloud.packiyoCredentials.lastSync || prev.lastSync,
-      }));
-    }
-    if (cloud.amazonCredentials?.connected || cloud.amazonCredentials?.adsConnected) {
-      setAmazonCredentials(prev => ({
-        ...prev,
-        connected: cloud.amazonCredentials.connected || prev.connected,
-        lastSync: cloud.amazonCredentials.lastSync || prev.lastSync,
-        sellerId: cloud.amazonCredentials.sellerId || prev.sellerId,
-        marketplaceId: cloud.amazonCredentials.marketplaceId || prev.marketplaceId,
-        // Restore Ads API metadata (secrets stay in localStorage only)
-        adsConnected: cloud.amazonCredentials.adsConnected || prev.adsConnected,
-        adsLastSync: cloud.amazonCredentials.adsLastSync || prev.adsLastSync,
-        adsProfileId: cloud.amazonCredentials.adsProfileId || prev.adsProfileId,
-      }));
-    }
-    if (cloud.qboCredentials?.connected) {
-      setQboCredentials(prev => ({
-        ...prev,
-        connected: cloud.qboCredentials.connected,
-        lastSync: cloud.qboCredentials.lastSync || prev.lastSync,
-        realmId: cloud.qboCredentials.realmId || prev.realmId,
-      }));
+    // SEC-003v2: Decrypt integration credentials from cloud
+    // If encrypted, decrypt full credentials and restore to state + localStorage
+    const CRED_RESTORE_MAP = [
+      { key: 'shopifyCredentials', setter: setShopifyCredentials, lsKey: 'ecommerce_shopify_creds_v1' },
+      { key: 'packiyoCredentials', setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1' },
+      { key: 'amazonCredentials', setter: setAmazonCredentials, lsKey: 'ecommerce_amazon_creds_v1' },
+      { key: 'qboCredentials', setter: setQboCredentials, lsKey: 'ecommerce_qbo_creds_v1' },
+    ];
+    for (const { key, setter, lsKey } of CRED_RESTORE_MAP) {
+      const cloudCred = cloud[key];
+      if (!cloudCred) continue;
+      if (cloudCred._encrypted && session?.user?.id) {
+        // Decrypt full credentials from cloud
+        const decrypted = await decryptCreds(session.user.id, cloudCred);
+        if (decrypted) {
+          setter(prev => ({ ...prev, ...decrypted }));
+          try { lsSet(lsKey, JSON.stringify(decrypted)); } catch (e) {}
+          continue;
+        }
+      }
+      // Fallback: merge metadata only (old stripped format or decryption failed)
+      if (cloudCred.connected) {
+        setter(prev => ({
+          ...prev,
+          connected: cloudCred.connected,
+          lastSync: cloudCred.lastSync || prev.lastSync,
+          ...(cloudCred.storeUrl && { storeUrl: cloudCred.storeUrl }),
+          ...(cloudCred.sellerId && { sellerId: cloudCred.sellerId }),
+          ...(cloudCred.marketplaceId && { marketplaceId: cloudCred.marketplaceId }),
+          ...(cloudCred.realmId && { realmId: cloudCred.realmId }),
+          ...(cloudCred.adsConnected !== undefined && { adsConnected: cloudCred.adsConnected }),
+          ...(cloudCred.adsLastSync && { adsLastSync: cloudCred.adsLastSync }),
+          ...(cloudCred.adsProfileId && { adsProfileId: cloudCred.adsProfileId }),
+        }));
+      }
     }
 
     // Also keep localStorage in sync for offline backup
@@ -4810,33 +4881,28 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
-    // SEC-003: Cloud saves no longer contain secrets, so only restore connection status
-    // Actual credentials remain in localStorage from the original connection flow
-    // Only set connected status if we don't already have full credentials locally
-    if (cloud.shopifyCredentials?.connected) {
-      const local = JSON.parse(lsGet('ecommerce_shopify_creds_v1') || '{}');
-      if (!local.clientSecret && !local.storeUrl) writeToLocal('ecommerce_shopify_creds_v1', JSON.stringify({ ...local, connected: cloud.shopifyCredentials.connected, lastSync: cloud.shopifyCredentials.lastSync }));
-    }
-    if (cloud.packiyoCredentials?.connected) {
-      const local = JSON.parse(lsGet('ecommerce_packiyo_creds_v1') || '{}');
-      if (!local.apiKey) writeToLocal('ecommerce_packiyo_creds_v1', JSON.stringify({ ...local, connected: cloud.packiyoCredentials.connected, lastSync: cloud.packiyoCredentials.lastSync }));
-    }
-    if (cloud.amazonCredentials?.connected || cloud.amazonCredentials?.adsConnected) {
-      const local = JSON.parse(lsGet('ecommerce_amazon_creds_v1') || '{}');
-      if (!local.refreshToken && !local.adsRefreshToken) {
-        writeToLocal('ecommerce_amazon_creds_v1', JSON.stringify({ 
-          ...local, 
-          connected: cloud.amazonCredentials.connected, 
-          lastSync: cloud.amazonCredentials.lastSync,
-          adsConnected: cloud.amazonCredentials.adsConnected,
-          adsLastSync: cloud.amazonCredentials.adsLastSync,
-          adsProfileId: cloud.amazonCredentials.adsProfileId,
-        }));
+    // SEC-003v2: Decrypt credentials on fresh device and write to localStorage
+    const CRED_FRESH_MAP = [
+      { key: 'shopifyCredentials', lsKey: 'ecommerce_shopify_creds_v1' },
+      { key: 'packiyoCredentials', lsKey: 'ecommerce_packiyo_creds_v1' },
+      { key: 'amazonCredentials', lsKey: 'ecommerce_amazon_creds_v1' },
+      { key: 'qboCredentials', lsKey: 'ecommerce_qbo_creds_v1' },
+    ];
+    for (const { key, lsKey } of CRED_FRESH_MAP) {
+      const cloudCred = cloud[key];
+      if (!cloudCred) continue;
+      if (cloudCred._encrypted && session?.user?.id) {
+        const decrypted = await decryptCreds(session.user.id, cloudCred);
+        if (decrypted) {
+          writeToLocal(lsKey, JSON.stringify(decrypted));
+          continue;
+        }
       }
-    }
-    if (cloud.qboCredentials?.connected) {
-      const local = JSON.parse(lsGet('ecommerce_qbo_creds_v1') || '{}');
-      if (!local.accessToken) writeToLocal('ecommerce_qbo_creds_v1', JSON.stringify({ ...local, connected: cloud.qboCredentials.connected, lastSync: cloud.qboCredentials.lastSync }));
+      // Fallback: old stripped format — write metadata only
+      if (cloudCred.connected) {
+        const local = JSON.parse(lsGet(lsKey) || '{}');
+        writeToLocal(lsKey, JSON.stringify({ ...local, connected: cloudCred.connected, lastSync: cloudCred.lastSync }));
+      }
     }
 
     setCloudStatus('');
