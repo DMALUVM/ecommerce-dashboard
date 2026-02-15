@@ -10453,8 +10453,9 @@ const savePeriods = async (d) => {
         const d = JSON.parse(e.target.result); 
         let restored = [];
         
-        // Build merged data for cloud sync
-        let mergedData = { ...combinedData };
+        // Build clean data for cloud sync — do NOT start from combinedData
+        // which may contain stale data from a different store
+        let mergedData = {};
         
         // Core data - deep merge to preserve ad data in weekly data
         if (d.sales && Object.keys(d.sales).length > 0) { 
@@ -10653,6 +10654,52 @@ const savePeriods = async (d) => {
           lsSet('ecommerce_amazon_campaigns_v1', JSON.stringify(d.amazonCampaigns));
           mergedData.amazonCampaigns = d.amazonCampaigns;
           restored.push(`${d.amazonCampaigns.campaigns?.length || 0} ad campaigns`);
+        }
+        if (d.adsIntelData && Object.keys(d.adsIntelData).length > 0) {
+          setAdsIntelData(d.adsIntelData);
+          lsSet('ecommerce_ads_intel_v1', JSON.stringify(d.adsIntelData));
+          mergedData.adsIntelData = d.adsIntelData;
+          restored.push('ads intelligence');
+        }
+        if (d.dtcIntelData && Object.keys(d.dtcIntelData).length > 0) {
+          setDtcIntelData(d.dtcIntelData);
+          lsSet('ecommerce_dtc_intel_v1', JSON.stringify(d.dtcIntelData));
+          mergedData.dtcIntelData = d.dtcIntelData;
+          restored.push('DTC ads intelligence');
+        }
+        if (d.reportHistory && Object.keys(d.reportHistory).length > 0) {
+          setReportHistory(d.reportHistory);
+          mergedData.reportHistory = d.reportHistory;
+          restored.push('report history');
+        }
+        if (d.actionItems && (d.actionItems.items?.length > 0 || Object.keys(d.actionItems).length > 0)) {
+          setActionItems(d.actionItems);
+          mergedData.actionItems = d.actionItems;
+          restored.push('action items');
+        }
+        if (d.confirmedRecurring && d.confirmedRecurring.length > 0) {
+          setConfirmedRecurring(d.confirmedRecurring);
+          lsSet('ecommerce_recurring_v1', JSON.stringify(d.confirmedRecurring));
+          mergedData.confirmedRecurring = d.confirmedRecurring;
+          restored.push('recurring charges');
+        }
+        if (d.returnRates && Object.keys(d.returnRates).length > 0) {
+          setReturnRates(d.returnRates);
+          lsSet('ecommerce_return_rates_v1', JSON.stringify(d.returnRates));
+          mergedData.returnRates = d.returnRates;
+          restored.push('return rates');
+        }
+        if (d.leadTimeSettings && Object.keys(d.leadTimeSettings).length > 0) {
+          setLeadTimeSettings(d.leadTimeSettings);
+          lsSet('ecommerce_lead_times_v1', JSON.stringify(d.leadTimeSettings));
+          mergedData.leadTimeSettings = d.leadTimeSettings;
+          restored.push('lead time settings');
+        }
+        if (d.aiForecasts && Object.keys(d.aiForecasts).length > 0) {
+          setAiForecasts(d.aiForecasts);
+          lsSet('ecommerce_ai_forecasts_v1', JSON.stringify(d.aiForecasts));
+          mergedData.aiForecasts = d.aiForecasts;
+          restored.push('AI forecasts');
         }
         if (d.bankingData && d.bankingData.transactions?.length > 0) {
           setBankingData(d.bankingData);
