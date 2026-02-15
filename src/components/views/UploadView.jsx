@@ -500,19 +500,19 @@ const UploadView = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <div className="space-y-1.5">
                       <p className="text-purple-400 font-medium mb-1.5">Meta Ads Manager</p>
+                      <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded font-semibold text-[10px]">HIGH</span><span className="text-white">Daily CSV</span><span className="text-slate-500">— daily spend & ROAS tracking</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded font-semibold text-[10px]">HIGH</span><span className="text-white">Ad-level report</span><span className="text-slate-500">— per-ad ROAS & spend</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded font-semibold text-[10px]">HIGH</span><span className="text-white">Campaign performance</span><span className="text-slate-500">— budget allocation</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded font-semibold text-[10px]">MED</span><span className="text-slate-300">Ad Set breakdown</span><span className="text-slate-500">— targeting insights</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-slate-500/20 text-slate-300 rounded font-semibold text-[10px]">OPT</span><span className="text-slate-400">Age / Gender / Placement</span><span className="text-slate-500">— demographics</span></div>
-                      <p className="text-slate-500 mt-1">Export from Ads Manager table → XLSX or daily CSV</p>
                     </div>
                     <div className="space-y-1.5">
                       <p className="text-blue-400 font-medium mb-1.5">Google Ads</p>
+                      <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded font-semibold text-[10px]">HIGH</span><span className="text-white">Daily CSV</span><span className="text-slate-500">— daily spend & conversion tracking</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded font-semibold text-[10px]">HIGH</span><span className="text-white">Search Terms report</span><span className="text-slate-500">— keyword waste analysis</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded font-semibold text-[10px]">HIGH</span><span className="text-white">Campaign Performance</span><span className="text-slate-500">— spend & ROAS by campaign</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded font-semibold text-[10px]">MED</span><span className="text-slate-300">Ad Group performance</span><span className="text-slate-500">— granular targeting</span></div>
                       <div className="flex items-center gap-1.5"><span className="px-1.5 py-0.5 bg-slate-500/20 text-slate-300 rounded font-semibold text-[10px]">OPT</span><span className="text-slate-400">Asset Groups / Keywords</span><span className="text-slate-500">— PMax & search</span></div>
-                      <p className="text-slate-500 mt-1">Download XLSX from Reports tab or daily CSV from table</p>
                     </div>
                     <div className="space-y-1.5">
                       <p className="text-green-400 font-medium mb-1.5">Shopify</p>
@@ -527,6 +527,68 @@ const UploadView = ({
                       <p className="text-slate-500 mt-1">Brand Analytics → Search Query Perf → Download XLSX</p>
                     </div>
                   </div>
+                  
+                  {/* Date Range & Upload Cadence */}
+                  <div className="mt-3 pt-3 border-t border-slate-700/50">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Calendar className="w-3 h-3 text-violet-400" />
+                      <span className="text-xs text-violet-300 font-medium">Recommended Date Range</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="bg-violet-500/10 rounded-lg px-2.5 py-1.5">
+                        <span className="text-violet-300 font-medium">First upload:</span>
+                        <span className="text-slate-300 ml-1">Last 30 days</span>
+                        <span className="text-slate-500 ml-1">— builds baseline history</span>
+                      </div>
+                      <div className="bg-violet-500/10 rounded-lg px-2.5 py-1.5">
+                        <span className="text-violet-300 font-medium">Weekly:</span>
+                        <span className="text-slate-300 ml-1">Mon–Sun (7 days)</span>
+                        <span className="text-slate-500 ml-1">— upload each Tuesday</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1.5">Overlapping dates auto-merge — duplicates won't double-count. OK to re-upload wider ranges.</p>
+                  </div>
+                  
+                  {/* Collapsible Export Guide */}
+                  <details className="mt-3 pt-3 border-t border-slate-700/50 group">
+                    <summary className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-200 transition-colors select-none">
+                      <HelpCircle className="w-3 h-3" />
+                      <span className="font-medium">Step-by-step export guide</span>
+                      <ChevronDown className="w-3 h-3 ml-auto group-open:rotate-180 transition-transform" />
+                    </summary>
+                    <div className="mt-3 space-y-3 text-[11px]">
+                      {/* Meta Export Guide */}
+                      <div className="bg-purple-500/5 border border-purple-500/20 rounded-lg p-2.5">
+                        <p className="text-purple-400 font-semibold mb-1.5">Meta Ads Manager Export</p>
+                        <div className="space-y-1 text-slate-300">
+                          <p><span className="text-purple-300 font-medium">Daily CSV (Quick Backfill):</span> Ads Manager → Columns: Customize → Add: Date, Ad name, Amount spent, Impressions, Link clicks, Purchases value (all), Purchase ROAS (all) → Set date range → Export → CSV</p>
+                          <p><span className="text-purple-300 font-medium">Campaign report:</span> Ads Manager → Campaign tab → Columns: Performance → Set date range → Export → XLSX. Make sure "Campaign name", "Amount spent", "Impressions" columns are visible.</p>
+                          <p><span className="text-purple-300 font-medium">Ad-level report:</span> Same steps but navigate to Ad tab before exporting.</p>
+                          <p><span className="text-purple-300 font-medium">Demographics:</span> Breakdown button → By Delivery → Age or Gender or Placement → Export XLSX.</p>
+                        </div>
+                      </div>
+                      {/* Google Export Guide */}
+                      <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-2.5">
+                        <p className="text-blue-400 font-semibold mb-1.5">Google Ads Export</p>
+                        <div className="space-y-1 text-slate-300">
+                          <p><span className="text-blue-300 font-medium">Daily CSV (Quick Backfill):</span> Campaigns → Columns: Modify → Include: Day, Campaign, Cost, Impressions, Clicks, Conversions, Conv. value → Set date range → Download icon → CSV</p>
+                          <p><span className="text-blue-300 font-medium">Campaign report:</span> Reports tab → Predefined → Basic → Campaign → Set columns: Campaign, State, Type, Cost, Clicks, Impr., Conversions, Conv. value → Download XLSX</p>
+                          <p><span className="text-blue-300 font-medium">Search Terms:</span> Keywords tab → Search Terms → Set date range → Download XLSX. Columns: Search term, Campaign, Cost, Impr., Clicks, Conversions.</p>
+                          <p><span className="text-blue-300 font-medium">Ad Groups:</span> Ad Groups tab → Set date range → Download XLSX.</p>
+                        </div>
+                      </div>
+                      {/* Upload Tips */}
+                      <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5">
+                        <p className="text-emerald-400 font-semibold mb-1.5">Tips</p>
+                        <div className="space-y-1 text-slate-300">
+                          <p>Upload all files at once — report type and platform are auto-detected from column headers.</p>
+                          <p>Daily CSVs go into the <span className="text-white font-medium">Quick Backfill</span> section below. Campaign/Search Terms/Demographics go into the <span className="text-white font-medium">Upload Meta / Google Data</span> button above for full AI analysis.</p>
+                          <p>Weekly routine: Every Tuesday, export Mon–Sun from Google & Meta, upload all files here. Takes about 2 minutes.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                  
                   <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1">
                     <HelpCircle className="w-3 h-3 flex-shrink-0" />
                     Accepts XLSX, CSV, or ZIP. Upload all reports together — type is auto-detected. Daily ad spend auto-feeds into weekly data cards.
