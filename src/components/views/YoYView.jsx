@@ -115,6 +115,49 @@ const YoYView = ({
     const currentYearData = currentYear ? getYearData(currentYear) : null;
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
+    // Comparable previous year: only include months where current year has data (for fair YoY)
+    const previousYearComparable = useMemo(() => {
+      if (!previousYear || !currentYear) return null;
+      // Find which months have data in current year
+      const currentMonthsWithData = new Set();
+      Object.keys(allDaysData).filter(d => d.startsWith(currentYear)).forEach(d => {
+        currentMonthsWithData.add(d.slice(5, 7)); // "01", "02", etc.
+      });
+      Object.keys(allWeeksData).filter(w => w.startsWith(currentYear)).forEach(w => {
+        // Week keys are like "2026-02-09", get month
+        currentMonthsWithData.add(w.slice(5, 7));
+      });
+      if (currentMonthsWithData.size === 0 || currentMonthsWithData.size >= 12) return null; // No filtering needed
+      
+      // Filter previous year to only matching months
+      const prevDays = Object.keys(allDaysData).filter(d => d.startsWith(previousYear) && currentMonthsWithData.has(d.slice(5, 7)));
+      if (prevDays.length > 0) {
+        const agg = { revenue: 0, profit: 0, units: 0, amazonRev: 0, shopifyRev: 0, adSpend: 0, cogs: 0 };
+        prevDays.forEach(d => {
+          const dd = allDaysData[d];
+          agg.revenue += dd.total?.revenue || 0;
+          agg.profit += getProfit(dd.total);
+          agg.units += dd.total?.units || (dd.amazon?.units || 0) + (dd.shopify?.units || 0);
+          agg.amazonRev += dd.amazon?.sales || dd.amazon?.revenue || 0;
+          agg.shopifyRev += dd.shopify?.revenue || 0;
+          agg.adSpend += dd.total?.adSpend || 0;
+          agg.cogs += dd.total?.cogs || 0;
+        });
+        return { ...agg, months: currentMonthsWithData.size, source: 'daily' };
+      }
+      const prevWeeks = sortedWeeks.filter(w => w.startsWith(previousYear) && currentMonthsWithData.has(w.slice(5, 7)));
+      if (prevWeeks.length > 0) {
+        return {
+          revenue: prevWeeks.reduce((s, w) => s + (allWeeksData[w].total?.revenue || 0), 0),
+          profit: prevWeeks.reduce((s, w) => s + getProfit(allWeeksData[w].total), 0),
+          units: prevWeeks.reduce((s, w) => s + (allWeeksData[w].total?.units || 0), 0),
+          months: currentMonthsWithData.size,
+          source: 'weekly',
+        };
+      }
+      return null;
+    }, [currentYear, previousYear, allDaysData, allWeeksData, sortedWeeks]);
+    
     // Month-over-month YoY comparison - use EXACT same logic as Trends getMonthlyTrends
     // First build ALL monthly data same as Trends, then filter by year
     const buildAllMonthlyData = () => {
@@ -322,30 +365,33 @@ const YoYView = ({
                   <h3 className="text-lg font-semibold text-slate-400">{previousYear}</h3>
                   <span className="text-xs px-2 py-1 bg-slate-600 text-slate-300 rounded">{previousYearData.source === 'period' ? 'Period Data' : 'Weekly Data'}</span>
                 </div>
+                {previousYearComparable && (
+                  <p className="text-xs text-amber-400/80 mb-3">YoY compares {Array.from({length: previousYearComparable.months}, (_, i) => new Date(2000, i).toLocaleString('en', {month: 'short'})).join(', ')} only</p>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-slate-400 text-sm">Revenue</p>
-                    <p className="text-2xl font-bold text-white">{formatCurrency(previousYearData.revenue)}</p>
-                    <YoYBadge change={calcYoYChange(currentYearData.revenue, previousYearData.revenue)} />
+                    <p className="text-2xl font-bold text-white">{formatCurrency(previousYearComparable ? previousYearComparable.revenue : previousYearData.revenue)}</p>
+                    <YoYBadge change={calcYoYChange(currentYearData.revenue, previousYearComparable ? previousYearComparable.revenue : previousYearData.revenue)} />
                   </div>
                   <div>
                     <p className="text-slate-400 text-sm">Net Profit</p>
-                    <p className={`text-2xl font-bold ${previousYearData.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousYearData.profit)}</p>
-                    <YoYBadge change={calcYoYChange(currentYearData.profit, previousYearData.profit)} />
+                    <p className={`text-2xl font-bold ${(previousYearComparable ? previousYearComparable.profit : previousYearData.profit) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousYearComparable ? previousYearComparable.profit : previousYearData.profit)}</p>
+                    <YoYBadge change={calcYoYChange(currentYearData.profit, previousYearComparable ? previousYearComparable.profit : previousYearData.profit)} />
                   </div>
                   <div>
                     <p className="text-slate-400 text-sm">Units Sold</p>
-                    <p className="text-xl font-bold text-white">{formatNumber(previousYearData.units)}</p>
-                    <YoYBadge change={calcYoYChange(currentYearData.units, previousYearData.units)} />
+                    <p className="text-xl font-bold text-white">{formatNumber(previousYearComparable ? previousYearComparable.units : previousYearData.units)}</p>
+                    <YoYBadge change={calcYoYChange(currentYearData.units, previousYearComparable ? previousYearComparable.units : previousYearData.units)} />
                   </div>
                   <div>
                     <p className="text-slate-400 text-sm">Margin</p>
-                    <p className={`text-xl font-bold ${previousYearData.revenue > 0 && (previousYearData.profit/previousYearData.revenue) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {formatPercent(previousYearData.revenue > 0 ? (previousYearData.profit/previousYearData.revenue)*100 : 0)}
+                    <p className={`text-xl font-bold ${(() => { const r = previousYearComparable ? previousYearComparable.revenue : previousYearData.revenue; const p = previousYearComparable ? previousYearComparable.profit : previousYearData.profit; return r > 0 && (p/r) >= 0 ? 'text-emerald-400' : 'text-rose-400'; })()}`}>
+                      {(() => { const r = previousYearComparable ? previousYearComparable.revenue : previousYearData.revenue; const p = previousYearComparable ? previousYearComparable.profit : previousYearData.profit; return formatPercent(r > 0 ? (p/r)*100 : 0); })()}
                     </p>
                   </div>
                 </div>
-                <p className="text-slate-500 text-sm mt-3">{previousYearData.weeks} weeks of data</p>
+                <p className="text-slate-500 text-sm mt-3">{previousYearComparable ? `${previousYearComparable.months} months (YTD comparable)` : `${previousYearData.weeks} weeks of data`}</p>
               </div>
             ) : (
               <div className="bg-slate-800/30 rounded-xl border border-dashed border-slate-600 p-5 flex items-center justify-center">
