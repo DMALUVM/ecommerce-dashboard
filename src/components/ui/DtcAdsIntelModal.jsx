@@ -80,7 +80,7 @@ const parseXlsxSmart = async (file) => {
   // Find the header row — look for known column names (require 3+ matches to avoid title rows like "Search terms report")
   const knownHeaders = ['campaign', 'search term', 'keyword', 'ad group', 'ad set name', 'ad name', 
     'campaign name', 'search query', 'day', 'date', 'landing page type', 'asset group status', 'reporting starts',
-    'keyword status', 'ad group status', 'campaign state', 'reporting starts', 'amount spent', 'impressions', 'clicks', 'cost'];
+    'keyword status', 'ad group status', 'campaign state', 'campaign status', 'reporting starts', 'amount spent', 'impressions', 'clicks', 'cost'];
   
   let headerIdx = 0;
   let bestScore = 0;
@@ -161,7 +161,7 @@ const detectReportType = (headers, rows, fileName) => {
   if (hSet.has('keyword status') && hSet.has('max. cpc')) return 'googleKeywords';
   if (hSet.has('search term') && hSet.has('match type') && (hSet.has('avg. cpc') || hSet.has('cost') || hSet.has('avg. cost'))) return 'googleSearchTerms';
   if (hSet.has('ad group') && hSet.has('campaign') && (hSet.has('clicks') || hSet.has('cost')) && !hSet.has('search term') && !hSet.has('keyword')) return 'googleAdGroup';
-  if (hSet.has('campaign') && hSet.has('campaign state') && hSet.has('cost')) return 'googleCampaign';
+  if (hSet.has('campaign') && (hSet.has('campaign state') || hSet.has('campaign status')) && hSet.has('cost')) return 'googleCampaign';
   // Google Ads daily export (Day + Campaign + Cost/Impressions/Clicks, no Campaign state)
   if (hSet.has('day') && hSet.has('campaign') && (hSet.has('cost') || hSet.has('impressions')) && hSet.has('clicks')) return 'googleCampaign';
   
@@ -248,7 +248,7 @@ const aggregateGoogleCampaigns = (rows, dateRange) => {
   // Original pre-aggregated format (Google Ads Editor / campaign summary exports)
   return rows.filter(r => r['Campaign']).map(r => ({
     campaign: r['Campaign'],
-    state: r['Campaign state'] || '',
+    state: r['Campaign state'] || r['Campaign status'] || '',
     type: r['Campaign type'] || '',
     clicks: num(r['Clicks']),
     impressions: num(r['Impr.']),
