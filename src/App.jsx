@@ -496,6 +496,7 @@ const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
 // This prevents data leakage between users on shared browsers
 // localStorage should ONLY be used when supabase is NOT configured (anonymous mode)
 const shouldUseLocalStorage = !supabase;
+if (typeof window !== 'undefined') { window.supabase = supabase; }
 
 // Safe localStorage getter - only reads if we're in anonymous mode
 const safeLocalStorageGet = (key, defaultValue) => {
@@ -4672,7 +4673,11 @@ useEffect(() => {
 }, [qboCredentials]);
 
 const loadFromCloud = useCallback(async (storeId = null) => {
-  if (!supabase || !session?.user?.id) return { ok: false, reason: 'no_session', stores: [] };
+  if (!supabase || !session?.user?.id) {
+    console.warn('[LoadCloud] Skipped — supabase:', !!supabase, 'session:', !!session?.user?.id);
+    return { ok: false, reason: 'no_session', stores: [] };
+  }
+  console.log('[LoadCloud] START — user:', session.user.id, 'storeId:', storeId);
   setCloudStatus('Loading…');
   
   try {
@@ -4768,6 +4773,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     
     // Store data is directly in the row (not nested)
     const cloud = storeRow?.data || {};
+    console.log('[LoadCloud] Got data — store:', targetStoreId, 'keys:', Object.keys(cloud).length, 'hasWeeks:', !!cloud.sales, 'hasDays:', !!cloud.dailySales);
 
     // Apply cloud data to state
     isLoadingDataRef.current = true;
@@ -5443,15 +5449,17 @@ useEffect(() => {
   if (hasInitializedRef.current && session?.user?.id) return;
   
   const run = async () => {
-    if (!isAuthReady) return;
-    if (isLoadingDataRef.current) return; // Prevent concurrent loads
+    if (!isAuthReady) { console.log('[Init] Waiting for auth…'); return; }
+    if (isLoadingDataRef.current) { console.log('[Init] Already loading, skipping'); return; }
     
     isLoadingDataRef.current = true;
     hasInitializedRef.current = true;
+    console.log('[Init] Running — session:', !!session?.user?.id, 'supabase:', !!supabase);
     
     try {
       if (session?.user?.id && supabase) {
         const result = await loadFromCloud();
+        console.log('[Init] loadFromCloud result:', result.ok, result.reason, 'stores:', result.stores?.length);
         if (!result.ok) {
           // Check the reason - only initialize empty state for truly new users
           if (result.reason === 'no_data') {
@@ -5556,6 +5564,20 @@ useEffect(() => {
   run();
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [session, isAuthReady]);
+
+// Expose loadFromCloud on window for emergency recovery
+useEffect(() => {
+  if (typeof window !== 'undefined') {
+    window.__forceReload = async () => {
+      console.log('[ForceReload] Manually triggering loadFromCloud…');
+      isLoadingDataRef.current = false;
+      const result = await loadFromCloud();
+      console.log('[ForceReload] Result:', result);
+      return result;
+    };
+    window.__session = session;
+  }
+}, [loadFromCloud, session]);
 
 const save = async (d) => {
   try {
