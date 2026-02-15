@@ -141,10 +141,10 @@ const AdsView = ({
         amzSpend += aS; gSpend += gS; mSpend += mS;
         amzRev += aR; shopRev += sR; amzAdRev += aAR;
         spend += aS + gS + mS; rev += aR + sR;
-        gClicks += am.googleClicks || 0; mClicks += am.metaClicks || 0; amzClicks += amzM.clicks || 0;
-        gImpr += am.googleImpressions || 0; mImpr += am.metaImpressions || 0; amzImpr += amzM.impressions || 0;
-        gConv += am.googleConversions || 0; mPurch += am.metaPurchases || day.metaConversions || 0;
-        amzConv += amzM.conversions || 0; mPurchVal += am.metaPurchaseValue || 0;
+        gClicks += am.googleClicks || day.googleClicks || 0; mClicks += am.metaClicks || day.metaClicks || 0; amzClicks += amzM.clicks || day.amazon?.adClicks || 0;
+        gImpr += am.googleImpressions || day.googleImpressions || 0; mImpr += am.metaImpressions || day.metaImpressions || 0; amzImpr += amzM.impressions || day.amazon?.adImpressions || 0;
+        gConv += am.googleConversions || day.googleConversions || 0; mPurch += am.metaPurchases || day.metaPurchases || day.metaConversions || 0;
+        amzConv += amzM.conversions || day.amazon?.adOrders || 0; mPurchVal += am.metaPurchaseValue || day.metaPurchaseValue || 0;
       });
       const totalClicks = gClicks + mClicks + amzClicks;
       const totalImpr = gImpr + mImpr + amzImpr;
@@ -1044,8 +1044,8 @@ const AdsView = ({
             <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><Database className="w-4 h-4 text-cyan-400"/>Loaded Data</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
               <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-orange-500"/><span className="text-white text-xs font-medium">Amazon</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => allDaysData[d]?.amazon?.adSpend > 0).length}d daily · {sortedDays.filter(d => (allDaysData[d]?.amazonAdsMetrics?.spend || 0) > 0).length}d bulk</p></div>
-              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-red-500"/><span className="text-white text-xs font-medium">Google</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.googleSpend || 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.shopify?.adsMetrics?.googleImpressions || 0) > 0).length}d metrics</p></div>
-              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-blue-500"/><span className="text-white text-xs font-medium">Meta</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.metaSpend || 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.shopify?.adsMetrics?.metaImpressions || 0) > 0).length}d metrics</p></div>
+              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-red-500"/><span className="text-white text-xs font-medium">Google</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.googleImpressions ?? allDaysData[d]?.shopify?.adsMetrics?.googleImpressions ?? 0) > 0).length}d metrics</p></div>
+              <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-blue-500"/><span className="text-white text-xs font-medium">Meta</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.metaImpressions ?? allDaysData[d]?.shopify?.adsMetrics?.metaImpressions ?? 0) > 0).length}d metrics</p></div>
             </div>
             {deepReportCount > 0 ? (
               <div>

@@ -116,6 +116,13 @@ const SettingsView = ({
   pushToCloudNow,
   supabase
 }) => {
+  // Logout handler
+  const handleLogout = async () => {
+    if (!supabase) return;
+    try { await supabase.auth.signOut(); } catch (e) { console.error('Logout error:', e); }
+    window.location.reload();
+  };
+  
   // Category lead time form state (local to settings page)
   const [settingsCategoryForm, setSettingsCategoryForm] = useState({ name: '', leadTimeDays: 14, reorderTriggerDays: 60, minOrderWeeks: 22 });
   const [expandedSettingsCategories, setExpandedSettingsCategories] = useState({});
