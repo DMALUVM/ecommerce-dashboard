@@ -150,7 +150,7 @@ const UploadView = ({
           {/* Upload Type Tabs */}
           <div className="flex gap-2 mb-6 p-1 bg-slate-800/50 rounded-xl overflow-x-auto">
             <button onClick={() => setUploadTab('amazon-bulk')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'amazon-bulk' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
-              <Package className="w-5 h-5" />Daily Sales
+              <Package className="w-5 h-5" />SKU Economics
             </button>
             <button onClick={() => setUploadTab('advertising')} className={`flex-1 min-w-fit px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadTab === 'advertising' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg' : 'text-slate-300 hover:bg-slate-700'}`}>
               <TrendingUp className="w-5 h-5" />Advertising
