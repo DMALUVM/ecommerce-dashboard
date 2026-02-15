@@ -9660,6 +9660,7 @@ const savePeriods = async (d) => {
   
   // Process Amazon bulk upload - import into appropriate data structures
   const processAmazonBulkUpload = useCallback(async () => {
+    console.log('[BulkImport] Starting — files:', amazonBulkFiles.length);
     
     if (amazonBulkFiles.length === 0) {
       return;
@@ -9667,6 +9668,7 @@ const savePeriods = async (d) => {
     
     setAmazonBulkProcessing(true);
     const cogsLookup = getCogsLookup();
+    console.log('[BulkImport] COGS lookup keys:', Object.keys(cogsLookup).length);
     
     let dailyImported = 0, weeklyImported = 0, monthlyImported = 0;
     const updatedDailyData = { ...allDaysData };
@@ -9675,9 +9677,10 @@ const savePeriods = async (d) => {
     
     try {
       for (const fileData of amazonBulkFiles) {
-        if (!fileData.data || fileData.error) continue;
+        if (!fileData.data || fileData.error) { console.log('[BulkImport] Skipping file:', fileData.name, fileData.error); continue; }
         
         const { reportType, dateRange, data } = fileData;
+        console.log('[BulkImport] Processing:', fileData.name, 'type:', reportType, 'rows:', data.length);
         
         // Calculate Amazon totals from this file
         let amzRev = 0, amzUnits = 0, amzRet = 0, amzProfit = 0, amzCogs = 0, amzFees = 0, amzAds = 0;
@@ -9842,11 +9845,13 @@ const savePeriods = async (d) => {
             },
           };
           monthlyImported++;
+          console.log('[BulkImport] Monthly saved as key:', monthLabel, 'amzProfit:', amzProfit.toFixed(2), 'amzRev:', amzRev.toFixed(2));
         } else {
           devWarn('Unknown report type:', reportType, 'for file:', fileData.name);
         }
       }
       
+      console.log('[BulkImport] Loop done — daily:', dailyImported, 'weekly:', weeklyImported, 'monthly:', monthlyImported);
       
       // Save all updated data
       if (dailyImported > 0) {
@@ -9894,13 +9899,16 @@ const savePeriods = async (d) => {
         save(updatedWeeklyData);
       }
       if (monthlyImported > 0) {
+        console.log('[BulkImport] Saving periods to state + cloud...');
         setAllPeriodsData(updatedPeriodsData);
         savePeriods(updatedPeriodsData);
         try { safeLocalStorageSet('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
           devError('Failed to save periods data:', e.message);
         }
+        console.log('[BulkImport] Periods saved.');
       }
       
+      console.log('[BulkImport] Cleaning up...');
       setAmazonBulkFiles([]);
       setAmazonBulkParsed(null);
       
@@ -9941,10 +9949,12 @@ const savePeriods = async (d) => {
         setView('periods');
       }
     } catch (err) {
+      console.error('[BulkImport] ERROR:', err.message, err.stack);
       devError('Bulk upload error:', err);
       devError('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
     } finally {
+      console.log('[BulkImport] DONE — setting processing to false');
       setAmazonBulkProcessing(false);
     }
   }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save, savePeriods]);
