@@ -40,6 +40,7 @@ const UploadView = ({
   globalModals,
   handleAmazonBulkFiles,
   handlePeriodFile,
+  hasCogs,
   hasDailySalesData,
   importData,
   invFiles,

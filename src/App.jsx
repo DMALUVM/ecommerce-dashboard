@@ -5579,6 +5579,118 @@ useEffect(() => {
     window.__allDaysData = allDaysData;
     window.__allWeeksData = allWeeksData;
     window.__allPeriodsData = allPeriodsData;
+    
+    // Data repair: fix Amazon netProfit = 0 across all stores
+    window.__repairProfit = (dryRun = true) => {
+      console.log(`[RepairProfit] ${dryRun ? 'DRY RUN' : 'APPLYING CHANGES'}...`);
+      let daysFixed = 0, weeksFixed = 0, periodsFixed = 0;
+      
+      // Repair daily data
+      const repairedDays = { ...allDaysData };
+      Object.entries(repairedDays).forEach(([key, day]) => {
+        const amz = day.amazon;
+        const shop = day.shopify;
+        const tot = day.total;
+        if (amz && amz.revenue > 0 && (amz.netProfit === 0 || amz.netProfit === undefined) && tot && tot.netProfit) {
+          const shopProfit = shop?.netProfit || 0;
+          const amzProfit = tot.netProfit - shopProfit;
+          if (!dryRun) {
+            amz.netProfit = amzProfit;
+            amz.margin = amz.revenue > 0 ? (amzProfit / amz.revenue) * 100 : 0;
+          }
+          daysFixed++;
+          if (daysFixed <= 3) console.log(`  Day ${key}: amazon.netProfit 0 → $${amzProfit.toFixed(2)} (total was $${tot.netProfit.toFixed(2)}, shop $${shopProfit.toFixed(2)})`);
+        }
+      });
+      
+      // Repair weekly data
+      const repairedWeeks = { ...allWeeksData };
+      Object.entries(repairedWeeks).forEach(([key, week]) => {
+        const amz = week.amazon;
+        const shop = week.shopify;
+        const tot = week.total;
+        if (!amz || amz.revenue <= 0 || (amz.netProfit && amz.netProfit !== 0)) return;
+        
+        const shopProfit = shop?.netProfit || 0;
+        const totalHasAmazon = tot && tot.netProfit && Math.abs(tot.netProfit - shopProfit) > 1;
+        
+        let amzProfit;
+        if (totalHasAmazon) {
+          // Total already includes Amazon contribution — extract it
+          amzProfit = tot.netProfit - shopProfit;
+        } else {
+          // Total is missing Amazon — recalculate from components
+          amzProfit = (amz.revenue || 0) - (amz.cogs || 0) - (amz.fees || 0) - (amz.adSpend || 0) - (amz.storageCost || 0);
+        }
+        
+        if (!dryRun) {
+          amz.netProfit = amzProfit;
+          amz.margin = amz.revenue > 0 ? (amzProfit / amz.revenue) * 100 : 0;
+          if (tot) {
+            tot.netProfit = amzProfit + shopProfit;
+            tot.netMargin = tot.revenue > 0 ? (tot.netProfit / tot.revenue) * 100 : 0;
+          }
+        }
+        weeksFixed++;
+        if (weeksFixed <= 3) console.log(`  Week ${key}: amazon.netProfit → $${amzProfit.toFixed(2)}, total → $${(amzProfit + shopProfit).toFixed(2)} (${totalHasAmazon ? 'from total' : 'from components'})`);
+      });
+      
+      // Repair period data
+      const repairedPeriods = { ...allPeriodsData };
+      Object.entries(repairedPeriods).forEach(([key, period]) => {
+        const amz = period.amazon;
+        const shop = period.shopify;
+        const tot = period.total;
+        
+        // Fix shopify netProfit first (needed for accurate amazon extraction)
+        let shopRepaired = false;
+        if (shop && shop.revenue > 0 && (shop.netProfit === 0 || shop.netProfit === undefined)) {
+          const sProfit = (shop.revenue || 0) - (shop.discounts || 0) - (shop.cogs || 0) - (shop.threeplCosts || 0) - (shop.adSpend || 0);
+          if (!dryRun) {
+            shop.netProfit = sProfit;
+            shop.netMargin = shop.revenue > 0 ? (sProfit / shop.revenue) * 100 : 0;
+          }
+          shopRepaired = true;
+          if (periodsFixed <= 5) console.log(`  Period "${key}": shopify.netProfit 0 → $${sProfit.toFixed(2)}`);
+        }
+        
+        // Fix amazon netProfit
+        if (amz && amz.revenue > 0 && (amz.netProfit === 0 || amz.netProfit === undefined)) {
+          const shopProfit = shopRepaired ? ((shop?.revenue || 0) - (shop?.discounts || 0) - (shop?.cogs || 0) - (shop?.threeplCosts || 0) - (shop?.adSpend || 0)) : (shop?.netProfit || 0);
+          let amzProfit;
+          if (tot && tot.netProfit && tot.netProfit > shopProfit + 1) {
+            amzProfit = tot.netProfit - shopProfit;
+          } else {
+            amzProfit = (amz.revenue || 0) - (amz.cogs || 0) - (amz.fees || 0) - (amz.adSpend || 0) - (amz.storageCost || 0);
+          }
+          if (!dryRun) {
+            amz.netProfit = amzProfit;
+            amz.margin = amz.revenue > 0 ? (amzProfit / amz.revenue) * 100 : 0;
+            // Recalculate total to match
+            if (tot) {
+              tot.netProfit = amzProfit + (shop?.netProfit || shopProfit);
+              tot.netMargin = tot.revenue > 0 ? (tot.netProfit / tot.revenue) * 100 : 0;
+            }
+          }
+          periodsFixed++;
+          if (periodsFixed <= 5) console.log(`  Period "${key}": amazon.netProfit 0 → $${amzProfit.toFixed(2)}`);
+        }
+      });
+      
+      console.log(`\n[RepairProfit] Summary: ${daysFixed} days, ${weeksFixed} weeks, ${periodsFixed} periods need repair`);
+      
+      if (!dryRun) {
+        setAllDaysData(repairedDays);
+        setAllWeeksData(repairedWeeks);
+        setAllPeriodsData(repairedPeriods);
+        try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(repairedDays)); } catch(e) {}
+        try { localStorage.setItem('ecommerce_data_v2', JSON.stringify(repairedWeeks)); } catch(e) {}
+        try { localStorage.setItem('ecommerce_periods_v1', JSON.stringify(repairedPeriods)); } catch(e) {}
+        console.log('[RepairProfit] ✅ State + localStorage updated. Cloud will auto-sync.');
+      } else {
+        console.log('[RepairProfit] Run window.__repairProfit(false) to apply changes.');
+      }
+    };
   }
 }, [loadFromCloud, session, allDaysData, allWeeksData, allPeriodsData]);
 
@@ -9687,8 +9799,9 @@ const savePeriods = async (d) => {
           };
           weeklyImported++;
         } else if (reportType === 'monthly') {
-          // Import as period data
-          const monthLabel = dateRange.startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+          // Import as period data — use standard key format: "march-2025"
+          const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+          const monthLabel = `${monthNames[dateRange.startDate.getMonth()]}-${dateRange.startDate.getFullYear()}`;
           
           const existingPeriodShopify = updatedPeriodsData[monthLabel]?.shopify || { revenue: 0, units: 0, cogs: 0, netProfit: 0, adSpend: 0, skuData: [] };
           const periodTotalRev = amzRev + (existingPeriodShopify.revenue || 0);
@@ -9773,6 +9886,7 @@ const savePeriods = async (d) => {
       }
       if (monthlyImported > 0) {
         setAllPeriodsData(updatedPeriodsData);
+        savePeriods(updatedPeriodsData);
         try { safeLocalStorageSet('ecommerce_periods_data_v1', JSON.stringify(updatedPeriodsData)); } catch(e) {
           devError('Failed to save periods data:', e.message);
         }
@@ -9824,7 +9938,7 @@ const savePeriods = async (d) => {
     } finally {
       setAmazonBulkProcessing(false);
     }
-  }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save]);
+  }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save, savePeriods]);
   
   // Process bulk ad upload - update weeks or periods with ad spend
   const processBulkAdUpload = useCallback((parsed, platform) => {

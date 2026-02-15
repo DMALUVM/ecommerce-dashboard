@@ -172,14 +172,16 @@ const TrendsView = ({
           dailyAgg[monthKey].dayCount += 1;
         });
         
-        // For each month: use daily data if it has higher revenue than period, or if no period exists
+        // For each month: use daily data if it has Amazon data (complete picture), otherwise keep period
         Object.entries(dailyAgg).forEach(([mk, daily]) => {
+          const hasAmazon = daily.amazonRev > 0;
           if (!monthData[mk]) {
             monthData[mk] = daily;
-          } else if (daily.revenue > monthData[mk].revenue) {
-            // Daily has more complete data (e.g., period upload was stale)
+          } else if (hasAmazon) {
+            // Daily has Amazon data — it's the authoritative source
             monthData[mk] = daily;
           }
+          // If daily is Shopify-only, keep the period data which has full Amazon+Shopify
         });
       }
       

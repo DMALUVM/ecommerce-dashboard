@@ -122,7 +122,7 @@ const YoYView = ({
     const buildAllMonthlyData = () => {
       const monthData = {};
       
-      // Step 1: Gather period data
+      // Step 1: Gather period (monthly upload) data as fallback
       const monthlyPeriods = Object.keys(allPeriodsData).filter(p => {
         return /^(january|february|march|april|may|june|july|august|september|october|november|december)-?\d{4}$/i.test(p) ||
                /^\d{4}-\d{2}$/.test(p) ||
@@ -143,53 +143,57 @@ const YoYView = ({
         periodByMonth[monthKey] = { key: p, revenue: data.total?.revenue || 0, profit: getProfit(data.total), units: data.total?.units || 0 };
       });
       
-      // Step 2: Gather daily data (exact calendar boundaries)
+      // Step 2: Gather daily data — check if Amazon data exists per month
       const dailyByMonth = {};
       const sortedDays = Object.keys(allDaysData).sort();
       sortedDays.forEach(day => {
         const monthKey = day.substring(0, 7);
-        if (!dailyByMonth[monthKey]) dailyByMonth[monthKey] = { revenue: 0, profit: 0, units: 0 };
+        if (!dailyByMonth[monthKey]) dailyByMonth[monthKey] = { revenue: 0, profit: 0, units: 0, hasAmazon: false };
         const dd = allDaysData[day];
         dailyByMonth[monthKey].revenue += dd.total?.revenue || 0;
         dailyByMonth[monthKey].profit += getProfit(dd.total);
         dailyByMonth[monthKey].units += dd.total?.units || (dd.amazon?.units || 0) + (dd.shopify?.units || 0);
+        if (dd.amazon?.revenue > 0) dailyByMonth[monthKey].hasAmazon = true;
       });
       
-      // Step 3: For each month, use whichever source has higher revenue
-      const allMonthKeys = [...new Set([...Object.keys(periodByMonth), ...Object.keys(dailyByMonth)])];
-      allMonthKeys.forEach(mk => {
-        const period = periodByMonth[mk];
-        const daily = dailyByMonth[mk];
-        
-        if (period && daily) {
-          // Both exist — use whichever has higher revenue (more complete data)
-          if (daily.revenue >= period.revenue) {
-            monthData[mk] = { key: mk, source: 'daily', ...daily };
-          } else {
-            monthData[mk] = { key: period.key, source: 'period', ...period };
-          }
-        } else if (period) {
-          monthData[mk] = { key: period.key, source: 'period', ...period };
-        } else if (daily) {
-          monthData[mk] = { key: mk, source: 'daily', ...daily };
-        }
-      });
-      
-      // Step 4: Fall back to weekly data for months with no period or daily data
+      // Step 3: Gather weekly data — check if Amazon data exists per month
+      const weeklyByMonth = {};
       sortedWeeks.forEach(w => {
         const monthKey = w.substring(0, 7);
-        if (!monthData[monthKey]) {
-          monthData[monthKey] = {
-            key: monthKey,
-            source: 'weekly',
-            revenue: 0, profit: 0, units: 0,
-          };
+        if (!weeklyByMonth[monthKey]) weeklyByMonth[monthKey] = { revenue: 0, profit: 0, units: 0, hasAmazon: false };
+        const week = allWeeksData[w];
+        weeklyByMonth[monthKey].revenue += week.total?.revenue || 0;
+        weeklyByMonth[monthKey].profit += getProfit(week.total);
+        weeklyByMonth[monthKey].units += week.total?.units || 0;
+        if (week.amazon?.revenue > 0) weeklyByMonth[monthKey].hasAmazon = true;
+      });
+      
+      // Step 4: Source hierarchy — daily (if has Amazon) → weekly (if has Amazon) → period
+      const allMonthKeys = [...new Set([...Object.keys(periodByMonth), ...Object.keys(dailyByMonth), ...Object.keys(weeklyByMonth)])];
+      allMonthKeys.forEach(mk => {
+        const daily = dailyByMonth[mk];
+        const weekly = weeklyByMonth[mk];
+        const period = periodByMonth[mk];
+        
+        // Daily wins if it has Amazon data (complete picture)
+        if (daily && daily.hasAmazon) {
+          monthData[mk] = { key: mk, source: 'daily', ...daily };
         }
-        if (monthData[monthKey].source === 'weekly') {
-          const week = allWeeksData[w];
-          monthData[monthKey].revenue += week.total?.revenue || 0;
-          monthData[monthKey].profit += getProfit(week.total);
-          monthData[monthKey].units += week.total?.units || 0;
+        // Weekly wins if it has Amazon data
+        else if (weekly && weekly.hasAmazon) {
+          monthData[mk] = { key: mk, source: 'weekly', ...weekly };
+        }
+        // Period (monthly upload) as fallback
+        else if (period) {
+          monthData[mk] = { key: period.key, source: 'period', ...period };
+        }
+        // Daily with Shopify-only as last resort
+        else if (daily) {
+          monthData[mk] = { key: mk, source: 'daily', ...daily };
+        }
+        // Weekly with Shopify-only
+        else if (weekly) {
+          monthData[mk] = { key: mk, source: 'weekly', ...weekly };
         }
       });
       
