@@ -1033,24 +1033,61 @@ export const mergeTier2IntoIntelData = (existing, tier2Results) => {
 export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, amazonCampaigns) => {
   const sections = [];
   
-  sections.push(`You are an expert Amazon & DTC advertising strategist performing a comprehensive audit of Tallowbourn's advertising across all platforms. Provide specific, actionable recommendations with exact numbers. Do NOT be generic — reference specific campaigns, keywords, ASINs, placements, and metrics.`);
+  sections.push(`You are an expert Amazon & DTC advertising strategist performing a comprehensive audit of Tallowbourn's advertising across all platforms. Provide specific, actionable recommendations with exact numbers. Do NOT be generic — reference specific campaigns, keywords, ASINs, placements, and metrics.
+
+CRITICAL METRIC DEFINITIONS — use these correctly throughout:
+- PLATFORM ROAS = Ad-attributed revenue / Ad spend (what Google/Meta/Amazon report — inflated by attribution overlap)
+- TACOS (Total Ad Cost of Sale) = Ad Spend / Total Revenue × 100 — the TRUE efficiency metric
+- MER (Marketing Efficiency Ratio) = Total Revenue / Total Ad Spend — inverse of TACOS
+- NEVER present total revenue / ad spend as "ROAS". That is MER. ROAS uses ad-ATTRIBUTED revenue only.
+- When reporting Amazon metrics: Ad ROAS = ad-attributed sales / ad spend. TACOS = ad spend / total Amazon revenue.`);
   
   // ── Tier 1: Daily performance context ──
   if (dailySalesSnippet && Object.keys(dailySalesSnippet).length > 0) {
     const dates = Object.keys(dailySalesSnippet).sort();
     const last30 = dates.slice(-30);
-    let amzSpend = 0, amzRev = 0, googleSpend = 0, metaSpend = 0, shopRev = 0;
+    let amzSpend = 0, amzRev = 0, amzAdRev = 0, googleSpend = 0, metaSpend = 0, shopRev = 0;
+    let gClicks = 0, gConv = 0, gImpr = 0, mClicks = 0, mPurch = 0, mImpr = 0;
     
     last30.forEach(d => {
       const day = dailySalesSnippet[d];
-      amzSpend += (day?.amazon?.adSpend || day?.amazonAdsMetrics?.spend || 0);
+      amzSpend += (day?.amazon?.adSpend ?? day?.amazonAdsMetrics?.spend ?? 0);
       amzRev += (day?.amazon?.revenue || 0);
-      googleSpend += (day?.shopify?.googleSpend || 0);
-      metaSpend += (day?.shopify?.metaSpend || 0);
+      amzAdRev += (day?.amazon?.adRevenue || 0);
+      googleSpend += (day?.shopify?.googleSpend ?? day?.googleSpend ?? day?.googleAds ?? 0);
+      metaSpend += (day?.shopify?.metaSpend ?? day?.metaSpend ?? day?.metaAds ?? 0);
       shopRev += (day?.shopify?.revenue || 0);
+      gClicks += (day?.googleClicks || 0);
+      gConv += (day?.googleConversions || 0);
+      gImpr += (day?.googleImpressions || 0);
+      mClicks += (day?.metaClicks || 0);
+      mPurch += (day?.metaPurchases || day?.metaConversions || 0);
+      mImpr += (day?.metaImpressions || 0);
     });
     
-    sections.push(`\n## LAST 30 DAYS OVERVIEW (from daily sales data)\n- Amazon: $${amzSpend.toFixed(0)} ad spend → $${amzRev.toFixed(0)} revenue (TACOS: ${amzRev > 0 ? ((amzSpend/amzRev)*100).toFixed(1) : 'N/A'}%)\n- Google: $${googleSpend.toFixed(0)} ad spend\n- Meta: $${metaSpend.toFixed(0)} ad spend\n- Shopify Revenue: $${shopRev.toFixed(0)}\n- Total Ad Spend: $${(amzSpend+googleSpend+metaSpend).toFixed(0)}\n- Total Revenue: $${(amzRev+shopRev).toFixed(0)}\n- Combined ROAS: ${(amzSpend+googleSpend+metaSpend) > 0 ? ((amzRev+shopRev)/(amzSpend+googleSpend+metaSpend)).toFixed(2) : 'N/A'}x`);
+    const totalSpend = amzSpend + googleSpend + metaSpend;
+    const totalRev = amzRev + shopRev;
+    
+    sections.push(`\n## LAST 30 DAYS OVERVIEW (from daily sales data)
+AMAZON:
+- Ad Spend: $${amzSpend.toFixed(0)} | Total Revenue: $${amzRev.toFixed(0)} | Ad-Attributed Revenue: $${amzAdRev.toFixed(0)}
+- Ad ROAS (attributed): ${amzSpend > 0 ? (amzAdRev/amzSpend).toFixed(2) : 'N/A'}x | TACOS: ${amzRev > 0 ? ((amzSpend/amzRev)*100).toFixed(1) : 'N/A'}%
+- MER (total rev / ad spend): ${amzSpend > 0 ? (amzRev/amzSpend).toFixed(2) : 'N/A'}x
+
+GOOGLE ADS:
+- Ad Spend: $${googleSpend.toFixed(0)}${gClicks > 0 ? ` | Clicks: ${gClicks} | Conversions: ${Math.round(gConv)} | Impressions: ${gImpr.toLocaleString()}` : ''}
+${gClicks > 0 ? `- CPC: $${(googleSpend/gClicks).toFixed(2)} | Conv Rate: ${(gConv/gClicks*100).toFixed(1)}% | CTR: ${(gClicks/gImpr*100).toFixed(2)}%` : '- ⚠️ No click/conversion data available — upload Google Ads daily CSV for full metrics'}
+
+META ADS:
+- Ad Spend: $${metaSpend.toFixed(0)}${mClicks > 0 ? ` | Clicks: ${mClicks} | Purchases: ${Math.round(mPurch)} | Impressions: ${mImpr.toLocaleString()}` : ''}
+${mClicks > 0 ? `- CPC: $${(metaSpend/mClicks).toFixed(2)} | CPA: $${mPurch > 0 ? (metaSpend/mPurch).toFixed(2) : 'N/A'} | CTR: ${(mClicks/mImpr*100).toFixed(2)}%` : '- ⚠️ No click/conversion data available — upload Meta Ads daily CSV for full metrics'}
+
+SHOPIFY DTC: Revenue $${shopRev.toFixed(0)} (${last30.length} days)
+
+CROSS-PLATFORM TOTALS:
+- Total Ad Spend: $${totalSpend.toFixed(0)} | Total Revenue: $${totalRev.toFixed(0)}
+- TACOS: ${totalRev > 0 ? ((totalSpend/totalRev)*100).toFixed(1) : 'N/A'}% | MER: ${totalSpend > 0 ? (totalRev/totalSpend).toFixed(2) : 'N/A'}x
+- ⚠️ Google/Meta platform-reported conversions may overlap with Shopify revenue. Do NOT double-count.`);
   }
   
   // ── Amazon campaign data (from CSV upload, not live API) ──
