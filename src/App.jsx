@@ -9954,8 +9954,11 @@ const savePeriods = async (d) => {
       devError('Error stack:', err.stack);
       setToast({ message: 'Error processing files: ' + err.message, type: 'error' });
     } finally {
-      console.log('[BulkImport] DONE — setting processing to false');
-      setAmazonBulkProcessing(false);
+      // Use setTimeout to ensure React flushes prior state updates before clearing spinner
+      setTimeout(() => {
+        console.log('[BulkImport] DONE — setting processing to false');
+        setAmazonBulkProcessing(false);
+      }, 100);
     }
   }, [amazonBulkFiles, getCogsLookup, allDaysData, allWeeksData, allPeriodsData, save, savePeriods]);
   
