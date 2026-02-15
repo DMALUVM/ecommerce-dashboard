@@ -9537,11 +9537,14 @@ const savePeriods = async (d) => {
   // ============ AMAZON BULK UPLOAD HANDLERS ============
   // Handle Amazon SKU Economics file selection
   const handleAmazonBulkFiles = useCallback(async (files) => {
+    console.log('[BulkParse] Starting — files:', files.length);
     setAmazonBulkProcessing(true);
+    try {
     const parsedFiles = [];
     
     for (const file of files) {
       try {
+        console.log('[BulkParse] Parsing file:', file.name, 'size:', file.size);
         const text = await file.text();
         const data = parseCSV(text);
         
@@ -9646,7 +9649,13 @@ const savePeriods = async (d) => {
     
     setAmazonBulkFiles(parsedFiles);
     setAmazonBulkParsed(summary);
-    setAmazonBulkProcessing(false);
+    console.log('[BulkParse] Done —', parsedFiles.length, 'files parsed. Monthly:', summary.monthlyCount, 'Daily:', summary.dailyCount);
+    } catch (err) {
+      console.error('[BulkParse] ERROR:', err);
+      devError('Bulk parse error:', err);
+    } finally {
+      setAmazonBulkProcessing(false);
+    }
   }, []);
   
   // Process Amazon bulk upload - import into appropriate data structures
