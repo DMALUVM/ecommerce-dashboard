@@ -1468,11 +1468,13 @@ const handleAuth = async (e) => {
     if (authMode === 'sign_up') {
       const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword });
       if (error) throw error;
+      setAuthPassword('');
       setAuthError('Account created. You can sign in now.');
       setAuthMode('sign_in');
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword });
       if (error) throw error;
+      setAuthPassword('');
     }
   } catch (err) {
     setAuthError(err?.message || 'Login failed');
@@ -16522,7 +16524,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
           <form onSubmit={handleUnlock} className="space-y-4">
             <div>
               <label className="block text-sm text-slate-300 mb-1">Password</label>
-              <input value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} type="password" required
+              <input value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} type="password" required autoComplete="current-password"
                 className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-violet-500" />
             </div>
 
@@ -16569,7 +16571,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             </div>
             <div>
               <label className="block text-sm text-slate-300 mb-1">Password</label>
-              <input value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} type="password" required
+              <input value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} type="password" required autoComplete="current-password"
                 className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
             </div>
 
