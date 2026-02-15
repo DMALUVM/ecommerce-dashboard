@@ -63,7 +63,7 @@ const Sparkline = ({ data, color = 'bg-cyan-500', h = 32 }) => {
 // ══════════════════════════════════════════════════════════════
 
 const AdsView = ({
-  adSpend, adsAiInput, adsAiLoading, adsAiMessages, adsIntelData,
+  adSpend, adsApiStatus, adsAiInput, adsAiLoading, adsAiMessages, adsIntelData,
   aiChatModel, setAiChatModel,
   adsAiReportHistory, setAdsAiReportHistory,
   adsMonth, adsQuarter, adsSelectedDay, adsSelectedWeek, adsTimeTab,
@@ -425,7 +425,15 @@ const AdsView = ({
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h1 className="text-2xl lg:text-3xl font-bold text-white">Advertising Command Center</h1>
-              <p className="text-slate-500 text-sm mt-0.5">{sortedDays.length > 0 ? `${sortedDays.length} days tracked` : 'No data yet'}{hasCampaignData ? ` · ${campaigns.length} campaigns` : ''}{deepReportCount > 0 ? ` · ${deepReportCount} deep reports` : ''}</p>
+              <p className="text-slate-500 text-sm mt-0.5">
+                {sortedDays.length > 0 ? `${sortedDays.length} days tracked` : 'No data yet'}{hasCampaignData ? ` · ${campaigns.length} campaigns` : ''}{deepReportCount > 0 ? ` · ${deepReportCount} deep reports` : ''}
+                {adsApiStatus?.connected && (
+                  <span className="inline-flex items-center gap-1.5 ml-2 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-emerald-400 text-[10px] font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
+                    Ads API Live{adsApiStatus.lastSync ? ` · ${new Date(adsApiStatus.lastSync).toLocaleDateString()}` : ''}
+                  </span>
+                )}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-0.5 p-0.5 bg-slate-800/60 rounded-lg border border-slate-700/50">
@@ -756,10 +764,16 @@ const AdsView = ({
                       const total = cur.amzSpend + cur.gSpend + cur.mSpend;
                       if (total === 0) return <p className="text-slate-600 text-xs">No spend data</p>;
                       return <>
-                        <div className="flex h-4 rounded-full overflow-hidden mb-2">
-                          {budgetSplit.amazon > 0 && <div className="bg-orange-500 h-full" style={{ width: `${budgetSplit.amazon}%` }}/>}
-                          {budgetSplit.google > 0 && <div className="bg-red-500 h-full" style={{ width: `${budgetSplit.google}%` }}/>}
-                          {budgetSplit.meta > 0 && <div className="bg-blue-500 h-full" style={{ width: `${budgetSplit.meta}%` }}/>}
+                        <div className="flex h-7 rounded-full overflow-hidden mb-2">
+                          {budgetSplit.amazon > 0 && <div className="bg-orange-500 h-full flex items-center justify-center" style={{ width: `${budgetSplit.amazon}%` }}>
+                            {budgetSplit.amazon >= 15 && <span className="text-[10px] font-bold text-white/90 truncate px-1">{budgetSplit.amazon.toFixed(0)}%</span>}
+                          </div>}
+                          {budgetSplit.google > 0 && <div className="bg-red-500 h-full flex items-center justify-center" style={{ width: `${budgetSplit.google}%` }}>
+                            {budgetSplit.google >= 10 && <span className="text-[10px] font-bold text-white/90 truncate px-1">{budgetSplit.google.toFixed(0)}%</span>}
+                          </div>}
+                          {budgetSplit.meta > 0 && <div className="bg-blue-500 h-full flex items-center justify-center" style={{ width: `${budgetSplit.meta}%` }}>
+                            {budgetSplit.meta >= 10 && <span className="text-[10px] font-bold text-white/90 truncate px-1">{budgetSplit.meta.toFixed(0)}%</span>}
+                          </div>}
                         </div>
                         <div className="flex gap-4 text-xs">
                           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500"/>Amazon {budgetSplit.amazon.toFixed(0)}% <span className="text-slate-600">{formatCurrency(cur.amzSpend)}</span></span>

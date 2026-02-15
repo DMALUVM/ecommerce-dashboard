@@ -17672,6 +17672,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   if (view === 'ads') {
     return wrapView(<AdsView
       adSpend={adSpend}
+      adsApiStatus={{ connected: amazonCredentials.adsConnected, lastSync: amazonCredentials.adsLastSync, profileId: amazonCredentials.adsProfileId }}
       adsAiInput={adsAiInput}
       adsAiLoading={adsAiLoading}
       aiChatModel={aiChatModel}
