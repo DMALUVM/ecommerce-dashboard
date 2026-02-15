@@ -5576,8 +5576,11 @@ useEffect(() => {
       return result;
     };
     window.__session = session;
+    window.__allDaysData = allDaysData;
+    window.__allWeeksData = allWeeksData;
+    window.__allPeriodsData = allPeriodsData;
   }
-}, [loadFromCloud, session]);
+}, [loadFromCloud, session, allDaysData, allWeeksData, allPeriodsData]);
 
 const save = async (d) => {
   try {
