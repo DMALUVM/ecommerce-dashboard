@@ -961,13 +961,19 @@ export const buildDtcActionReportPrompt = (intelData) => {
   advancedContext = `
 === ADVANCED COMPUTED METRICS ===
 
+IMPORTANT METRIC DEFINITIONS:
+  PLATFORM ROAS = Ad-attributed revenue / Ad spend (reported by Google/Meta — inflated by attribution overlap)
+  TACOS (Total Ad Cost of Sale) = Total Ad Spend / Total Revenue × 100 — the TRUE efficiency metric
+  MER (Marketing Efficiency Ratio) = Total Revenue / Total Ad Spend — inverse of TACOS
+
 CROSS-CHANNEL OVERVIEW:
-  Meta: Spend $${Math.round(metaSpend)} | Revenue $${Math.round(metaRevenue)} | ROAS ${metaSpend > 0 ? (metaRevenue / metaSpend).toFixed(2) : 'N/A'} | ${metaPurchases} purchases | CPP $${metaPurchases > 0 ? (metaSpend / metaPurchases).toFixed(2) : 'N/A'}
-  Google: Spend $${Math.round(googleSpend)} | Revenue $${Math.round(googleRevenue)} | ROAS ${googleSpend > 0 ? (googleRevenue / googleSpend).toFixed(2) : 'N/A'} | ${googleConversions} conversions
-  TOTAL ADS: Spend $${Math.round(totalAdSpend)} | Reported Revenue $${Math.round(totalAdRevenue)} | Blended ROAS ${totalAdSpend > 0 ? (totalAdRevenue / totalAdSpend).toFixed(2) : 'N/A'}
-  Shopify: ${shopifyDays}d | Revenue $${Math.round(shopifyRevenue)} | Net $${Math.round(shopifyNet)} | ${shopifyOrders} orders
-  TRUE BLENDED ROAS (Shopify rev / total ad spend): ${totalAdSpend > 0 ? (shopifyRevenue / totalAdSpend).toFixed(2) : 'N/A'}
-  Ad Spend as % of Shopify Revenue: ${shopifyRevenue > 0 ? (totalAdSpend / shopifyRevenue * 100).toFixed(1) : 'N/A'}%
+  Meta: Spend $${Math.round(metaSpend)} | Meta-Attributed Revenue $${Math.round(metaRevenue)} | Platform ROAS ${metaSpend > 0 ? (metaRevenue / metaSpend).toFixed(2) : 'N/A'}x | ${metaPurchases} purchases | CPP $${metaPurchases > 0 ? (metaSpend / metaPurchases).toFixed(2) : 'N/A'}
+  Google: Spend $${Math.round(googleSpend)} | Google-Attributed Revenue $${Math.round(googleRevenue)} | Platform ROAS ${googleSpend > 0 ? (googleRevenue / googleSpend).toFixed(2) : 'N/A'}x | ${googleConversions} conversions
+  TOTAL ADS: Spend $${Math.round(totalAdSpend)} | Combined Platform-Attributed Revenue $${Math.round(totalAdRevenue)}
+  Shopify: ${shopifyDays}d | Actual Revenue $${Math.round(shopifyRevenue)} | Net $${Math.round(shopifyNet)} | ${shopifyOrders} orders
+  ⚠️ Platform-attributed revenue ($${Math.round(totalAdRevenue)}) vs actual Shopify revenue ($${Math.round(shopifyRevenue)}) — difference is attribution overlap/inflation
+  TACOS: ${shopifyRevenue > 0 ? (totalAdSpend / shopifyRevenue * 100).toFixed(1) : 'N/A'}% (target: <30% at 60% margins)
+  MER: ${totalAdSpend > 0 ? (shopifyRevenue / totalAdSpend).toFixed(2) : 'N/A'}x
   Daily Run Rate: $${(totalAdSpend / shopifyDays).toFixed(0)}/day spend → $${(shopifyRevenue / shopifyDays).toFixed(0)}/day revenue
 
 SHOPIFY FUNNEL METRICS:
@@ -1004,7 +1010,9 @@ Revenue = Traffic × Conversion Rate × AOV × Purchase Frequency
 - Pull each lever independently. Diagnose which lever is broken before prescribing solutions.
 - Contribution Margin: Revenue - COGS - Ad Spend - Shipping - Payment Processing
 - CAC: Total ad spend / new customers. LTV:CAC ratio should be 3:1+ for sustainable growth.
-- For tallow skincare DTC: target 60%+ gross margin, <30% of revenue on ads, CAC payback <60 days.
+- TACOS (Total Ad Cost of Sale): Total Ad Spend / Total Revenue × 100. This is the TRUE efficiency metric.
+- Platform ROAS (Google/Meta reported) overstates actual performance due to attribution overlap. Always caveat.
+- For tallow skincare DTC: target 60%+ gross margin, TACOS <30%, CAC payback <60 days.
 `;
 
   if (hasMeta) {
@@ -1022,7 +1030,7 @@ Creative analysis:
 - Quality/Engagement/Conversion rankings: "Below average" on ANY = creative is penalized → replace
 - Creative fatigue: frequency >3.0 + declining CTR over 7d = fatigue
 - CPM benchmarks for DTC beauty: $8-15 for prospecting, $15-25 for retargeting
-Attribution: Meta 7d click / 1d view over-attributes by 20-40% vs actual Shopify revenue.
+Attribution: Meta 7d click / 1d view over-attributes by 20-40% vs actual Shopify revenue. Always label Meta-reported numbers as "Platform ROAS" — never present them as true business ROAS. A Meta Platform ROAS of 1.5x may only be 0.9-1.2x in actual Shopify revenue.
 `;
   }
 
@@ -1059,12 +1067,14 @@ FRAMEWORK 5: AUDIENCE & DEMOGRAPHIC STRATEGY
   frameworks += `
 FRAMEWORK 6: CROSS-CHANNEL BUDGET ALLOCATION
 For $200-400/day DTC skincare: Meta 55-65%, Google 25-35%, PMax 5-10%.
-Shift budget WEEKLY from lowest true-ROAS channel to highest.
-TRUE north star: Shopify total revenue / total ad spend = real blended ROAS.
-If blended ROAS >2.5x at 60% margins → profitable, scale. 1.5-2.5x → optimize. <1.5x → cut, fix fundamentals.
+Shift budget WEEKLY from lowest-performing channel to highest.
+NORTH STAR METRIC: TACOS (Total Ad Cost of Sale) = Total Ad Spend / Total Shopify Revenue.
+TACOS targets at 60% margins: <20% = highly profitable, scale aggressively. 20-30% = profitable, optimize. 30-40% = marginal, fix fundamentals. >40% = unprofitable, cut spend.
+IMPORTANT: Platform ROAS (reported by Google/Meta) is NOT the same as true efficiency. Platforms double-count conversions and inflate attribution. Always anchor decisions on TACOS using actual Shopify revenue, not platform-reported revenue.
+When reporting per-platform metrics, always label them "Platform ROAS" to distinguish from actual business efficiency.
 
 FRAMEWORK 7: CEO'S WEEKLY OPERATING CADENCE
-Review: Blended ROAS trend, CAC by channel, AOV stability, conversion rate by device, top 3 ads fatigue check, Google search term waste, inventory levels.
+Review: TACOS trend (total ad spend / total revenue), CAC by channel, AOV stability, conversion rate by device, top 3 ads fatigue check, Google search term waste, inventory levels.
 `;
 
   const systemPrompt = `You are a fractional CMO / COO who has scaled 150+ DTC skincare/beauty brands from $500K to $10M+ annually. You operate hands-on — logging into Meta Ads Manager, Google Ads, Shopify Analytics, and Google Search Console personally. You've spent $100M+ across Meta and Google for DTC brands.
@@ -1084,8 +1094,9 @@ You are not an advisor. You are the fractional CMO in the operator seat. Write a
   let sections = `
 ## 📊 EXECUTIVE SUMMARY & P&L HEALTH CHECK
 - Account health grade (A-F) for each platform with data, with justification
-- Total ad spend, Shopify revenue, blended ROAS (Shopify revenue / total ad spend)
-- TRUE MER and sustainability at 60% margins
+- Total ad spend, Shopify revenue, TACOS (total ad spend / Shopify revenue × 100)
+- MER (Shopify revenue / total ad spend) and sustainability at 60% margins
+- CLEARLY DISTINGUISH: Platform ROAS (from Google/Meta attribution) vs TACOS (actual efficiency). Never call platform ROAS "blended ROAS" or conflate it with true business metrics.
 - Revenue equation breakdown: Traffic × Conv Rate × AOV = Revenue. Which lever is broken?
 - Top 3 wins, top 3 problems
 - 1-sentence CEO verdict: "The business is [healthy/at risk/bleeding] because [reason]"
@@ -1168,8 +1179,8 @@ Market share opportunities. Queries to defend. Cross-channel ad impact on Amazon
   if (hasMeta && hasGoogle) {
     sections += `
 ## 📈 CROSS-CHANNEL BUDGET REALLOCATION
-| Channel | Current Spend/Day | ROAS | Recommended Spend/Day | Expected ROAS | $ Change |
-Account for attribution differences. Project improvement.
+| Channel | Current Spend/Day | Platform ROAS | Recommended Spend/Day | Expected Impact | $ Change |
+Account for attribution differences between platforms. Use TACOS as the decision metric, not platform ROAS.
 `;
   }
 
@@ -1196,7 +1207,7 @@ PRODUCT CONTEXT:
 - Shopify DTC site: tallowbourn.com
 - Also selling on Amazon (separate PPC report covers Amazon ads)
 - ~$200-300/day total DTC ad budget (Meta + Google)
-- Target blended ROAS: 2.5x+ (Shopify revenue / total ad spend)
+- Target TACOS: <30% (total ad spend / total Shopify revenue)
 - ~60% gross margins
 - Target CAC: <$15 for lip balm, <$25 for body balm, <$18 for deodorant
 
