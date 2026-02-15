@@ -641,79 +641,77 @@ const UploadView = ({
                 {/* ── Data Status Indicator ── */}
                 {(() => {
                   const d = dtcIntelData || {};
-                  const reports = [
-                    { key: 'googleCampaign', label: 'Google Campaigns', platform: 'google', priority: 'HIGH' },
-                    { key: 'googleSearchTerms', label: 'Google Search Terms', platform: 'google', priority: 'HIGH' },
-                    { key: 'googleKeywords', label: 'Google Keywords', platform: 'google', priority: 'MED' },
-                    { key: 'googleAdGroup', label: 'Google Ad Groups', platform: 'google', priority: 'MED' },
-                    { key: 'googleAssetGroups', label: 'Google PMax Assets', platform: 'google', priority: 'OPT' },
-                    { key: 'metaCampaign', label: 'Meta Campaigns', platform: 'meta', priority: 'HIGH' },
-                    { key: 'metaAds', label: 'Meta Ads', platform: 'meta', priority: 'HIGH' },
-                    { key: 'metaAdSets', label: 'Meta Ad Sets', platform: 'meta', priority: 'MED' },
-                    { key: 'metaAdSetPlacement', label: 'Meta Placement', platform: 'meta', priority: 'OPT' },
-                    { key: 'metaAdSetAge', label: 'Meta Age', platform: 'meta', priority: 'OPT' },
-                    { key: 'metaAdSetGender', label: 'Meta Gender', platform: 'meta', priority: 'OPT' },
-                    { key: 'amazonSearchQuery', label: 'Amazon Search Query', platform: 'amazon', priority: 'MED' },
-                    { key: 'shopifySales', label: 'Shopify Sales', platform: 'shopify', priority: 'MED' },
-                  ];
                   const has = (k) => {
                     const v = d[k];
                     if (!v) return false;
                     if (Array.isArray(v)) return v.length > 0;
-                    if (typeof v === 'object') return v.totalTerms > 0 || v.records?.length > 0 || Object.keys(v).length > 1;
+                    if (typeof v === 'object') return v.totalTerms > 0 || v.records?.length > 0 || Object.keys(v).length > 2;
                     return !!v;
                   };
-                  const loaded = reports.filter(r => has(r.key));
-                  const missing = reports.filter(r => !has(r.key));
-                  const missingHigh = missing.filter(r => r.priority === 'HIGH');
+                  const count = (k) => {
+                    const v = d[k];
+                    if (!v) return 0;
+                    if (Array.isArray(v)) return v.length;
+                    if (v.totalTerms) return v.totalTerms;
+                    return 0;
+                  };
                   
-                  // Count daily data days with Google/Meta spend
+                  // Daily data from allDaysData (Quick Backfill or auto-sync)
                   const dailyKeys = Object.keys(allDaysData || {});
                   const gDays = dailyKeys.filter(k => (allDaysData[k]?.shopify?.googleSpend || allDaysData[k]?.googleSpend || 0) > 0).length;
                   const mDays = dailyKeys.filter(k => (allDaysData[k]?.shopify?.metaSpend || allDaysData[k]?.metaSpend || 0) > 0).length;
                   
-                  const total = reports.length;
-                  const pct = total > 0 ? Math.round((loaded.length / total) * 100) : 0;
-                  const barColor = pct >= 75 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-rose-500';
+                  // Build unified data items: daily sources + campaign reports
+                  const items = [
+                    // Daily data sources (from Quick Backfill or auto-sync)
+                    { label: 'Google Daily Spend', ok: gDays > 0, detail: gDays > 0 ? `${gDays}d` : '', priority: 'HIGH', section: 'daily' },
+                    { label: 'Meta Daily Spend', ok: mDays > 0, detail: mDays > 0 ? `${mDays}d` : '', priority: 'HIGH', section: 'daily' },
+                    // Campaign reports (from Upload Meta / Google Data)
+                    { label: 'Google Campaigns', ok: has('googleCampaign'), detail: count('googleCampaign'), priority: 'HIGH', section: 'google' },
+                    { label: 'Google Search Terms', ok: has('googleSearchTerms'), detail: count('googleSearchTerms'), priority: 'HIGH', section: 'google' },
+                    { label: 'Google Keywords', ok: has('googleKeywords'), detail: count('googleKeywords'), priority: 'MED', section: 'google' },
+                    { label: 'Google Ad Groups', ok: has('googleAdGroup'), detail: count('googleAdGroup'), priority: 'MED', section: 'google' },
+                    { label: 'Google PMax Assets', ok: has('googleAssetGroups'), detail: count('googleAssetGroups'), priority: 'OPT', section: 'google' },
+                    { label: 'Meta Campaigns', ok: has('metaCampaign'), detail: count('metaCampaign'), priority: 'HIGH', section: 'meta' },
+                    { label: 'Meta Ads', ok: has('metaAds'), detail: count('metaAds'), priority: 'HIGH', section: 'meta' },
+                    { label: 'Meta Ad Sets', ok: has('metaAdSets'), detail: count('metaAdSets'), priority: 'MED', section: 'meta' },
+                    { label: 'Meta Placement', ok: has('metaAdSetPlacement'), detail: count('metaAdSetPlacement'), priority: 'OPT', section: 'meta' },
+                    { label: 'Meta Age', ok: has('metaAdSetAge'), detail: count('metaAdSetAge'), priority: 'OPT', section: 'meta' },
+                    { label: 'Meta Gender', ok: has('metaAdSetGender'), detail: count('metaAdSetGender'), priority: 'OPT', section: 'meta' },
+                    { label: 'Amazon Search Query', ok: has('amazonSearchQuery'), detail: count('amazonSearchQuery'), priority: 'MED', section: 'other' },
+                    { label: 'Shopify Sales', ok: has('shopifySales'), detail: count('shopifySales'), priority: 'MED', section: 'other' },
+                  ];
+                  
+                  const loaded = items.filter(i => i.ok).length;
+                  const total = items.length;
+                  const pct = Math.round((loaded / total) * 100);
+                  const barColor = pct >= 60 ? 'bg-emerald-500' : pct >= 30 ? 'bg-amber-500' : pct > 0 ? 'bg-cyan-500' : 'bg-slate-700';
                   
                   return (
                     <div className="bg-slate-900/60 rounded-xl p-3 mb-4 border border-slate-700/40">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs text-slate-300 font-medium">Data Coverage</span>
-                        <span className="text-[10px] text-slate-500">{loaded.length}/{total} reports · {pct}%</span>
+                        <span className="text-[10px] text-slate-500">{loaded}/{total} sources · {pct}%</span>
                       </div>
                       <div className="w-full bg-slate-800 rounded-full h-1.5 mb-3">
-                        <div className={`h-1.5 rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }}/>
+                        <div className={`h-1.5 rounded-full ${barColor}`} style={{ width: `${Math.max(pct, loaded > 0 ? 4 : 0)}%` }}/>
                       </div>
                       
-                      {/* Daily data status */}
-                      <div className="flex gap-2 mb-2.5 text-[11px]">
-                        <span className={`px-2 py-0.5 rounded-md ${gDays > 0 ? 'bg-blue-500/15 text-blue-300' : 'bg-slate-800 text-slate-600'}`}>
-                          {gDays > 0 ? `✓ Google: ${gDays}d` : '✗ Google daily'}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded-md ${mDays > 0 ? 'bg-purple-500/15 text-purple-300' : 'bg-slate-800 text-slate-600'}`}>
-                          {mDays > 0 ? `✓ Meta: ${mDays}d` : '✗ Meta daily'}
-                        </span>
-                      </div>
-                      
-                      {/* Report checklist - compact */}
+                      {/* Checklist */}
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
-                        {reports.map(r => (
-                          <div key={r.key} className={`flex items-center gap-1.5 py-0.5 ${has(r.key) ? 'text-slate-300' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-600'}`}>
-                            <span className={has(r.key) ? 'text-emerald-400' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-700'}>
-                              {has(r.key) ? '✓' : '✗'}
+                        {items.map((r, i) => (
+                          <div key={i} className={`flex items-center gap-1.5 py-0.5 ${r.ok ? 'text-slate-300' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-600'}`}>
+                            <span className={r.ok ? 'text-emerald-400' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-700'}>
+                              {r.ok ? '✓' : '✗'}
                             </span>
                             <span className="truncate">{r.label}</span>
-                            {has(r.key) && <span className="text-slate-600 ml-auto">{Array.isArray(d[r.key]) ? d[r.key].length : d[r.key]?.totalTerms || ''}</span>}
+                            {r.ok && r.detail ? <span className="text-slate-600 ml-auto">{r.detail}</span> : null}
                           </div>
                         ))}
                       </div>
                       
-                      {missingHigh.length > 0 && loaded.length > 0 && (
-                        <p className="text-[10px] text-amber-400/80 mt-2 flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-                          Missing HIGH priority: {missingHigh.map(r => r.label).join(', ')}
-                        </p>
+                      {loaded > 0 && loaded < 6 && (
+                        <p className="text-[10px] text-slate-500 mt-2">Upload campaign reports via the button below for deeper AI insights beyond daily spend.</p>
                       )}
                     </div>
                   );
