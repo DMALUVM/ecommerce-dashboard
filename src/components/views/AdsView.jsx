@@ -561,10 +561,9 @@ const AdsView = ({
             const tacosValues = daysWithSpend.map(d => d.tacos).filter(t => t > 0 && t < 200);
             if (tacosValues.length < 2) return null;
             const minT = Math.min(...tacosValues); const maxT = Math.max(...tacosValues);
-            const range = maxT - minT;
-            const padMin = range > 2 ? minT - range * 0.15 : Math.max(0, minT - 3);
-            const padMax = range > 2 ? maxT + range * 0.1 : maxT + 3;
-            const scaleRange = padMax - padMin || 1;
+            const padMin = 0;
+            const padMax = Math.ceil(maxT * 1.15) || 1;
+            const scaleRange = padMax || 1;
             const last7 = daysWithSpend.slice(-7), prev7 = daysWithSpend.slice(-14, -7);
             const last7T = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
             const prev7T = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
@@ -581,7 +580,7 @@ const AdsView = ({
                 </div>
                 <div className="flex gap-1">
                   <div className="flex flex-col justify-between text-[10px] text-slate-600 pr-1" style={{ minWidth: '30px' }}>
-                    <span>{Math.ceil(padMax)}%</span><span>{Math.round((padMax + padMin) / 2)}%</span><span>{Math.floor(Math.max(padMin, 0))}%</span>
+                    <span>{padMax}%</span><span>{Math.round(padMax / 2)}%</span><span>0%</span>
                   </div>
                   <div className="flex items-end gap-px flex-1 relative" style={{ height: `${chartH}px` }}>
                     <div className="absolute inset-0 flex flex-col justify-between pointer-events-none">
