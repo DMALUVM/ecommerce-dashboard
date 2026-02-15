@@ -9,7 +9,8 @@ const StoreSelectorModal = ({
   activeStoreId,
   switchStore,
   deleteStore,
-  createStore
+  createStore,
+  switchingStore
 }) => {
   if (!showStoreModal || !session) return null;
   
@@ -44,7 +45,7 @@ const StoreSelectorModal = ({
                 <div 
                   key={store.id}
                   className={`flex items-center justify-between p-3 rounded-xl border ${store.id === activeStoreId ? 'bg-violet-900/30 border-violet-500/50' : 'bg-slate-700/30 border-slate-600 hover:bg-slate-700/50'} cursor-pointer`}
-                  onClick={() => { switchStore(store.id); setShowStoreModal(false); }}
+                  onClick={() => { if (!switchingStore) switchStore(store.id); }}
                 >
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${store.id === activeStoreId ? 'bg-violet-600' : 'bg-slate-600'}`}>
@@ -56,9 +57,11 @@ const StoreSelectorModal = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {store.id === activeStoreId && (
+                    {switchingStore === store.id ? (
+                      <span className="px-2 py-0.5 bg-amber-500/80 rounded text-xs text-white animate-pulse">Loading…</span>
+                    ) : store.id === activeStoreId ? (
                       <span className="px-2 py-0.5 bg-violet-500 rounded text-xs text-white">Active</span>
-                    )}
+                    ) : null}
                     <button 
                       onClick={(e) => { 
                         e.preventDefault();

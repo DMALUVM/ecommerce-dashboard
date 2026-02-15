@@ -83,6 +83,7 @@ const DashboardView = ({
   setWeekEnding,
   setWidgetConfig,
   showStoreSelector,
+  switchingStore,
   storeLogo,
   storeName,
   stores,
@@ -784,18 +785,34 @@ const DashboardView = ({
                                 <button
                                   key={store.id}
                                   onClick={() => {
-                                    if (!isActive) {
+                                    if (!isActive && !switchingStore) {
                                       switchStore(store.id);
                                     }
-                                    setShowStoreSelector(false);
                                   }}
-                                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 mb-1 transition-all ${isActive ? 'bg-violet-600/30 text-white border border-violet-500/50' : 'bg-slate-700/30 hover:bg-slate-700/70 text-slate-300'}`}
+                                  disabled={!!switchingStore}
+                                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 mb-1 transition-all ${
+                                    switchingStore === store.id ? 'bg-amber-600/20 text-white border border-amber-500/50' :
+                                    isActive ? 'bg-violet-600/30 text-white border border-violet-500/50' :
+                                    switchingStore ? 'opacity-50 cursor-not-allowed bg-slate-700/30 text-slate-300' :
+                                    'bg-slate-700/30 hover:bg-slate-700/70 text-slate-300'
+                                  }`}
                                 >
-                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isActive ? 'bg-violet-600' : 'bg-slate-600'}`}>
-                                    <Store className="w-4 h-4 text-white" />
+                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                                    switchingStore === store.id ? 'bg-amber-600' :
+                                    isActive ? 'bg-violet-600' : 'bg-slate-600'
+                                  }`}>
+                                    {switchingStore === store.id ? (
+                                      <Loader2 className="w-4 h-4 text-white animate-spin" />
+                                    ) : (
+                                      <Store className="w-4 h-4 text-white" />
+                                    )}
                                   </div>
-                                  <span className={`flex-1 truncate font-medium ${isActive ? 'text-white' : 'text-slate-300'}`}>{store.name}</span>
-                                  {isActive && <Check className="w-5 h-5 text-violet-400" />}
+                                  <span className={`flex-1 truncate font-medium ${isActive || switchingStore === store.id ? 'text-white' : 'text-slate-300'}`}>{store.name}</span>
+                                  {switchingStore === store.id ? (
+                                    <span className="text-xs text-amber-300 animate-pulse">Loading…</span>
+                                  ) : isActive ? (
+                                    <Check className="w-5 h-5 text-violet-400" />
+                                  ) : null}
                                 </button>
                               );
                             })
