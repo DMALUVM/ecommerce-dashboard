@@ -1445,6 +1445,7 @@ const [activeStoreId, setActiveStoreId] = useState(null);
 const [showStoreSelector, setShowStoreSelector] = useState(false); // Header dropdown
 const [showStoreModal, setShowStoreModal] = useState(false); // Full modal for create/manage
 const [newStoreName, setNewStoreName] = useState('');
+const [switchingStore, setSwitchingStore] = useState(false); // Loading state — holds storeId being loaded
 
 // Auto-lock (idle timeout)
 const LOCK_MS = 10 * 60 * 1000; // 10 minutes
@@ -4331,6 +4332,22 @@ const writeToLocal = useCallback((key, value) => {
   lsSet(key, value);
 }, []);
 
+
+// Helper: Save lightweight meta row (stores list + activeStoreId)
+const saveMetaToCloud = useCallback(async (storesArg, activeId) => {
+  if (!supabase || !session?.user?.id) return;
+  try {
+    await supabase.from('app_data').upsert({
+      user_id: session.user.id,
+      store_id: '_meta',
+      data: { stores: storesArg, activeStoreId: activeId },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,store_id' });
+  } catch (err) {
+    devError('Meta save failed:', err);
+  }
+}, [session]);
+
 const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (!supabase || !session?.user?.id) return;
   if (saveInProgressRef.current) {
@@ -4349,16 +4366,17 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   const localPeriodsCount = Object.keys(dataObj.periods || {}).length;
   const localDataSize = localSalesCount + localDailyCount + localPeriodsCount;
   
-  // Check existing cloud data
+  // Check existing cloud data (per-store row)
+  const storeCheckId = activeStoreId || 'default';
   const { data: existingCheck } = await supabase
     .from('app_data')
     .select('data')
     .eq('user_id', session.user.id)
+    .eq('store_id', storeCheckId)
     .maybeSingle();
   
-  if (existingCheck?.data?.storeData) {
-    const targetStoreId = activeStoreId || 'default';
-    const cloudStore = existingCheck.data.storeData[targetStoreId] || {};
+  if (existingCheck?.data) {
+    const cloudStore = existingCheck.data;
     const cloudSalesCount = Object.keys(cloudStore.sales || {}).length;
     const cloudDailyCount = Object.keys(cloudStore.dailySales || {}).length;
     const cloudPeriodsCount = Object.keys(cloudStore.periods || {}).length;
@@ -4386,31 +4404,27 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   const skipConflictCheck = timeSinceLastSave < 10000; // 10s grace period after our own saves
   
   if (!forceOverwrite && loadedCloudVersion && !conflictCheckRef.current && !skipConflictCheck) {
+    const conflictStoreId = activeStoreId || 'default';
     const { data: currentCloud } = await supabase
       .from('app_data')
       .select('updated_at')
       .eq('user_id', session.user.id)
+      .eq('store_id', conflictStoreId)
       .maybeSingle();
     
     if (currentCloud?.updated_at && currentCloud.updated_at > loadedCloudVersion) {
       // Cloud has newer data - potential conflict!
       conflictCheckRef.current = true; // Prevent repeated checks
       
-      // Fetch full data only when conflict is confirmed
+      // Fetch full data only when conflict is confirmed (per-store row)
       const { data: fullCloud } = await supabase
         .from('app_data')
         .select('data')
         .eq('user_id', session.user.id)
+        .eq('store_id', conflictStoreId)
         .maybeSingle();
       
-      // Store conflict info for resolution modal
-      const targetStoreId = activeStoreId || 'default';
-      let cloudStoreData;
-      if (fullCloud?.data?.storeData?.[targetStoreId]) {
-        cloudStoreData = fullCloud.data.storeData[targetStoreId];
-      } else {
-        cloudStoreData = fullCloud?.data || {};
-      }
+      const cloudStoreData = fullCloud?.data || {};
       
       setConflictData({
         cloudData: cloudStoreData,
@@ -4479,39 +4493,21 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
     }
   }
   
+  // Per-store row: save only the active store's data (no nesting, no merge)
+  const storeRowId = activeStoreId || 'default';
   const payload = {
     user_id: session.user.id,
-    data: { 
-      stores: stores,
-      activeStoreId: activeStoreId,
-      storeData: {
-        [activeStoreId || 'default']: cloudDataObj
-      }
-    },
+    store_id: storeRowId,
+    data: cloudDataObj,
     updated_at: new Date().toISOString(),
   };
   
-  // Merge with existing stores data to preserve other stores
-  const { data: existingData } = await supabase
-    .from('app_data')
-    .select('data')
-    .eq('user_id', session.user.id)
-    .maybeSingle();
-  
-  if (existingData?.data?.storeData) {
-    payload.data.storeData = {
-      ...existingData.data.storeData,
-      [activeStoreId || 'default']: cloudDataObj
-    };
-    payload.data.stores = existingData.data.stores || stores;
-  }
-  
-  const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
+  const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id,store_id' });
   if (error) {
     devWarn('Cloud save failed:', error.message || error);
     // Update loadedCloudVersion to current cloud timestamp to prevent conflict loop
     try {
-      const { data: latest } = await supabase.from('app_data').select('updated_at').eq('user_id', session.user.id).maybeSingle();
+      const { data: latest } = await supabase.from('app_data').select('updated_at').eq('user_id', session.user.id).eq('store_id', activeStoreId || 'default').maybeSingle();
       if (latest?.updated_at) setLoadedCloudVersion(latest.updated_at);
     } catch (e) { devError("[error]", e); }
     setCloudStatus('Save failed (retry soon)');
@@ -4654,49 +4650,98 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   setCloudStatus('Loading…');
   
   try {
-    const { data, error } = await supabase
+    // ---- LEGACY MIGRATION: one-time split of nested blob into per-store rows ----
+    const { data: legacyRow } = await supabase
       .from('app_data')
-      .select('data, updated_at')
+      .select('data')
       .eq('user_id', session.user.id)
+      .eq('store_id', '_legacy')
       .maybeSingle();
-
-    if (error) {
-      devError('Cloud load error:', error);
-      setCloudStatus('');
-      return { ok: false, reason: 'error', stores: [] }; // Error - do NOT overwrite
-    }
-    if (!data?.data) {
-      setCloudStatus('');
-      return { ok: false, reason: 'no_data', stores: [] }; // Truly new user - safe to initialize
-    }
-
-    // Store the cloud version timestamp for conflict detection
-    const cloudVersion = data.updated_at || new Date().toISOString();
-    setLoadedCloudVersion(cloudVersion);
-    conflictCheckRef.current = false; // Reset conflict check flag
-
-    const cloudData = data.data || {};
     
-    // Handle multi-store structure
-    const loadedStores = cloudData.stores || [];
+    if (legacyRow?.data?.storeData) {
+      console.log('[Migration] Splitting legacy nested blob into per-store rows…');
+      setCloudStatus('Migrating data…');
+      const legacy = legacyRow.data;
+      const legacyStores = legacy.stores || [];
+      const legacyStoreData = legacy.storeData || {};
+      
+      // Create meta row
+      await supabase.from('app_data').upsert({
+        user_id: session.user.id,
+        store_id: '_meta',
+        data: { stores: legacyStores, activeStoreId: legacy.activeStoreId || 'default' },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id,store_id' });
+      
+      // Create per-store rows
+      for (const [sid, sdata] of Object.entries(legacyStoreData)) {
+        await supabase.from('app_data').upsert({
+          user_id: session.user.id,
+          store_id: sid,
+          data: sdata,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,store_id' });
+      }
+      
+      // Delete legacy row
+      await supabase.from('app_data')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('store_id', '_legacy');
+      
+      console.log('[Migration] Complete — split', Object.keys(legacyStoreData).length, 'stores');
+    }
+    // ---- END MIGRATION ----
+    
+    // Load meta row (stores list + activeStoreId)
+    const { data: metaRow, error: metaError } = await supabase
+      .from('app_data')
+      .select('data')
+      .eq('user_id', session.user.id)
+      .eq('store_id', '_meta')
+      .maybeSingle();
+    
+    if (metaError) {
+      devError('Cloud meta load error:', metaError);
+      setCloudStatus('');
+      return { ok: false, reason: 'error', stores: [] };
+    }
+    
+    const meta = metaRow?.data || {};
+    const loadedStores = meta.stores || [];
     if (loadedStores.length > 0) {
       setStores(loadedStores);
     }
     
     // Determine which store to load
-    const targetStoreId = storeId || cloudData.activeStoreId || (loadedStores[0]?.id) || 'default';
+    const targetStoreId = storeId || meta.activeStoreId || (loadedStores[0]?.id) || 'default';
     setActiveStoreId(targetStoreId);
     
-    // Get store-specific data (support both old and new format)
-    let cloud;
-    if (cloudData.storeData && cloudData.storeData[targetStoreId]) {
-      cloud = cloudData.storeData[targetStoreId];
-    } else if (cloudData.storeData?.default) {
-      cloud = cloudData.storeData.default;
-    } else {
-      // Legacy format - data is directly in cloudData
-      cloud = cloudData;
+    // Load the specific store's row
+    const { data: storeRow, error: storeError } = await supabase
+      .from('app_data')
+      .select('data, updated_at')
+      .eq('user_id', session.user.id)
+      .eq('store_id', targetStoreId)
+      .maybeSingle();
+    
+    if (storeError) {
+      devError('Cloud store load error:', storeError);
+      setCloudStatus('');
+      return { ok: false, reason: 'error', stores: loadedStores };
     }
+    if (!storeRow?.data && !metaRow?.data) {
+      setCloudStatus('');
+      return { ok: false, reason: 'no_data', stores: [] }; // Truly new user
+    }
+    
+    // Store the cloud version timestamp for conflict detection
+    const cloudVersion = storeRow?.updated_at || new Date().toISOString();
+    setLoadedCloudVersion(cloudVersion);
+    conflictCheckRef.current = false;
+    
+    // Store data is directly in the row (not nested)
+    const cloud = storeRow?.data || {};
 
     // Apply cloud data to state
     isLoadingDataRef.current = true;
@@ -4929,12 +4974,23 @@ const loadFromCloud = useCallback(async (storeId = null) => {
 // Store management functions
 const createStore = useCallback(async (name) => {
   if (!name.trim()) return;
+  
+  setSwitchingStore('creating');
+  isLoadingDataRef.current = true; // Block sync effects during store creation
+  
   const newStore = {
     id: `store_${Date.now()}`,
     name: name.trim(),
     createdAt: new Date().toISOString(),
   };
   const updatedStores = [...stores, newStore];
+  
+  // Clear localStorage to prevent stale data merging into new store
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('ecommerce_') && !key.includes('theme') && !key.includes('creds')) {
+      localStorage.removeItem(key);
+    }
+  });
   
   // Clear current data for new store - COMPLETE LIST
   const emptyData = {
@@ -4986,32 +5042,20 @@ const createStore = useCallback(async (name) => {
     amazonCredentials: { clientId: '', clientSecret: '', refreshToken: '', sellerId: '', marketplaceId: 'ATVPDKIKX0DER', connected: false, lastSync: null, adsClientId: '', adsClientSecret: '', adsRefreshToken: '', adsProfileId: '', adsConnected: false, adsLastSync: null },
   };
   
-  // Save to cloud immediately with the new stores list
+  // Save per-store row + meta row (no nested blob)
   if (supabase && session?.user?.id) {
     setCloudStatus('Creating store…');
     try {
-      // Get existing data first
-      const { data: existingData } = await supabase
-        .from('app_data')
-        .select('data')
-        .eq('user_id', session.user.id)
-        .maybeSingle();
-      
-      const payload = {
+      // Create the store's own row with empty data
+      await supabase.from('app_data').upsert({
         user_id: session.user.id,
-        data: {
-          stores: updatedStores,
-          activeStoreId: newStore.id,
-          storeData: {
-            ...(existingData?.data?.storeData || {}),
-            [newStore.id]: emptyData
-          }
-        },
+        store_id: newStore.id,
+        data: emptyData,
         updated_at: new Date().toISOString(),
-      };
+      }, { onConflict: 'user_id,store_id' });
       
-      const { error } = await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
-      if (error) throw error;
+      // Update meta row with new stores list
+      await saveMetaToCloud(updatedStores, newStore.id);
       
       setCloudStatus('Store created');
       setTimeout(() => setCloudStatus(''), 1500);
@@ -5055,6 +5099,12 @@ const createStore = useCallback(async (name) => {
   setToast({ message: `Created store "${name}"`, type: 'success' });
   setShowStoreSelector(false);
   setShowStoreModal(false);
+  
+  // Re-enable sync effects after state is settled
+  setTimeout(() => {
+    isLoadingDataRef.current = false;
+    setSwitchingStore(false);
+  }, 500);
 }, [stores, session, appSettings, goals, theme]);
 
 const switchStore = useCallback(async (storeId) => {
@@ -5064,17 +5114,25 @@ const switchStore = useCallback(async (storeId) => {
     return;
   }
   
-  // Save current store first
-  await pushToCloudNow(combinedData);
-  
-  // Load new store - this will also set activeStoreId and sync storeName
-  await loadFromCloud(storeId);
-  
-  // Get the store name (loadFromCloud will have synced it)
   const store = stores.find(s => s.id === storeId);
-  setToast({ message: `Switched to "${store?.name || storeName || 'store'}"`, type: 'success' });
-  setShowStoreSelector(false);
-  setShowStoreModal(false);
+  setSwitchingStore(storeId);
+  
+  try {
+    // Save current store first
+    await pushToCloudNow(combinedData);
+    
+    // Load new store
+    await loadFromCloud(storeId);
+    
+    setToast({ message: `Switched to "${store?.name || storeName || 'store'}"`, type: 'success' });
+  } catch (err) {
+    console.error('Store switch failed:', err);
+    setToast({ message: 'Failed to switch store', type: 'error' });
+  } finally {
+    setSwitchingStore(false);
+    setShowStoreSelector(false);
+    setShowStoreModal(false);
+  }
 }, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud, storeName]);
 
 const deleteStore = useCallback(async (storeId) => {
@@ -5133,30 +5191,17 @@ const deleteStore = useCallback(async (storeId) => {
     });
   }
   
-  // Save updated stores list to cloud
+  // Delete the store's row and update meta
   if (supabase && session?.user?.id) {
     try {
-      const { data: existingData } = await supabase
-        .from('app_data')
-        .select('data')
+      // Delete the store's own row
+      await supabase.from('app_data')
+        .delete()
         .eq('user_id', session.user.id)
-        .maybeSingle();
+        .eq('store_id', storeId);
       
-      // Remove deleted store's data and update stores list
-      const storeData = { ...(existingData?.data?.storeData || {}) };
-      delete storeData[storeId];
-      
-      const payload = {
-        user_id: session.user.id,
-        data: {
-          stores: updatedStores,
-          activeStoreId: newActiveId,
-          storeData
-        },
-        updated_at: new Date().toISOString(),
-      };
-      
-      await supabase.from('app_data').upsert(payload, { onConflict: 'user_id' });
+      // Update meta row
+      await saveMetaToCloud(updatedStores, newActiveId);
     } catch (err) {
       devError('Failed to delete store from cloud:', err);
       setToast({ message: 'Deleted locally but cloud sync failed', type: 'warning' });
@@ -5387,15 +5432,14 @@ useEffect(() => {
             setStores([defaultStore]);
             setActiveStoreId(defaultStore.id);
             
-            // Push empty state to cloud so they have a record
-            await pushToCloudNow({
-              sales: {},
-              dailySales: {},
-              inventory: {},
-              cogs: { lookup: {}, updatedAt: null },
-              periods: {},
-              storeName: '',
-            });
+            // Push empty state to cloud so they have a record (per-store rows)
+            await supabase.from('app_data').upsert({
+              user_id: session.user.id,
+              store_id: defaultStore.id,
+              data: { sales: {}, dailySales: {}, inventory: {}, cogs: { lookup: {}, updatedAt: null }, periods: {}, storeName: '' },
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'user_id,store_id' });
+            await saveMetaToCloud([defaultStore], defaultStore.id);
           } else {
             // ERROR loading data - do NOT overwrite cloud! Just show error and retry
             devError('Error loading cloud data - NOT overwriting. Reason:', result.reason);
@@ -16635,7 +16679,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DASHBOARD VIEW ====================
 
   // ==================== GLOBAL MODALS (rendered once, not per-view) ====================
-  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatPanelElement}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
+  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatPanelElement}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} switchingStore={switchingStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
 
   if (view === 'dashboard') {
     return wrapView(<DashboardView
@@ -16714,6 +16758,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       stores={stores}
       supabase={supabase}
       switchStore={switchStore}
+      switchingStore={switchingStore}
       threeplLedger={threeplLedger}
       usingDailyData={usingDailyData}
       usingPeriodData={usingPeriodData}
