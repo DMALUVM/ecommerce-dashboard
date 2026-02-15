@@ -5169,6 +5169,13 @@ const createStore = useCallback(async (name) => {
   setAiLearningHistory({ predictions: [], modelUpdates: [] });
   setAiMessages([]);
   setWeeklyReports({});
+  // Reset credentials — new store has no connections
+  setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
+  setPackiyoCredentials({ apiKey: '', warehouseId: '', connected: false, lastSync: null, warehouseName: '' });
+  setAmazonCredentials({ clientId: '', clientSecret: '', refreshToken: '', marketplaceId: '', sellerId: '', connected: false, lastSync: null, adsRefreshToken: '', adsClientId: '', adsClientSecret: '', adsProfileId: '', adsConnected: false, adsLastSync: null });
+  setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
+  // Clear credential localStorage to prevent bleed
+  ['ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1', 'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1'].forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
   
   setToast({ message: `Created store "${name}"`, type: 'success' });
   setShowStoreSelector(false);
