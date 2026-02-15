@@ -80,7 +80,8 @@ const AdsView = ({
   view, save
 }) => {
   const sortedWeeks = Object.keys(allWeeksData).sort();
-  const sortedDays = Object.keys(allDaysData || {}).sort();
+  // Only include valid YYYY-MM-DD keys — excludes Excel serial numbers (e.g. "46048") and other garbage
+  const sortedDays = Object.keys(allDaysData || {}).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
   const hasDailyData = sortedDays.length > 0;
 
   const [uploadStatus, setUploadStatus] = useState(null);

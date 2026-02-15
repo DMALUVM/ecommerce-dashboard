@@ -4123,6 +4123,16 @@ const loadFromLocal = useCallback(() => {
     }
     
     if (dailyData && Object.keys(dailyData).length > 0) {
+      // One-time cleanup: Remove invalid date keys (Excel serial numbers like "46048")
+      const validDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+      const invalidKeys = Object.keys(dailyData).filter(k => !validDatePattern.test(k));
+      if (invalidKeys.length > 0) {
+        console.warn(`[Init] Removing ${invalidKeys.length} invalid date keys from dailyData:`, invalidKeys);
+        invalidKeys.forEach(k => delete dailyData[k]);
+        // Persist cleanup to localStorage
+        try { safeLocalStorageSet('ecommerce_daily_sales_v1', JSON.stringify(dailyData)); } catch (e) { /* ignore */ }
+      }
+      
       const daysWithAmazonSku = Object.keys(dailyData).filter(d => dailyData[d]?.amazon?.skuData?.length > 0);
       const daysWithShopifySku = Object.keys(dailyData).filter(d => {
         const shopifySkuData = dailyData[d]?.shopify?.skuData;
@@ -4689,7 +4699,14 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     isLoadingDataRef.current = true;
     
     setAllWeeksData(cloud.sales || {});
-    setAllDaysData(cloud.dailySales || {}); // Load daily data
+    // Sanitize cloud daily data — remove invalid date keys (Excel serial numbers)
+    const cloudDaily = cloud.dailySales || {};
+    const invalidCloudKeys = Object.keys(cloudDaily).filter(k => !/^\d{4}-\d{2}-\d{2}$/.test(k));
+    if (invalidCloudKeys.length > 0) {
+      console.warn(`[CloudLoad] Removing ${invalidCloudKeys.length} invalid date keys:`, invalidCloudKeys);
+      invalidCloudKeys.forEach(k => delete cloudDaily[k]);
+    }
+    setAllDaysData(cloudDaily); // Load daily data
     const today = new Date();
     // Allow current week: week is visible if it has started
     const w = Object.keys(cloud.sales || {}).filter(wk => {
