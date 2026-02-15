@@ -4949,57 +4949,57 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
     
-    // Load credentials from store_credentials table (separate from app_data)
-    const loadedStoreId = storeId || activeStoreId || 'default';
-    const CRED_SETTER_MAP = {
-      shopify: { setter: setShopifyCredentials, lsKey: 'ecommerce_shopify_creds_v1', stateKey: 'shopifyCredentials' },
-      packiyo: { setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1', stateKey: 'packiyoCredentials' },
-      amazon: { setter: setAmazonCredentials, lsKey: 'ecommerce_amazon_creds_v1', stateKey: 'amazonCredentials' },
-      qbo: { setter: setQboCredentials, lsKey: 'ecommerce_qbo_creds_v1', stateKey: 'qboCredentials' },
-    };
-    const storeCreds = await loadCredentialsFromCloud(supabase, session.user.id, loadedStoreId);
-    let migratedFromAppData = false;
-    if (Object.keys(storeCreds).length > 0) {
-      // Credentials found in new table — apply them
-      for (const [provider, cred] of Object.entries(storeCreds)) {
-        const mapping = CRED_SETTER_MAP[provider];
-        if (mapping && cred) {
-          mapping.setter(cred);
-          try { lsSet(mapping.lsKey, JSON.stringify(cred)); } catch (e) {}
-        }
-      }
-    } else {
-      // One-time migration: check if credentials exist in app_data row (old format)
-      const OLD_CRED_KEYS = [
-        { key: 'shopifyCredentials', provider: 'shopify' },
-        { key: 'packiyoCredentials', provider: 'packiyo' },
-        { key: 'amazonCredentials', provider: 'amazon' },
-        { key: 'qboCredentials', provider: 'qbo' },
-      ];
-      for (const { key, provider } of OLD_CRED_KEYS) {
-        const oldCred = cloud[key];
-        if (!oldCred) continue;
-        let credToMigrate = oldCred;
-        // Decrypt if encrypted
-        if (oldCred._encrypted && session?.user?.id) {
-          const decrypted = await decryptCreds(session.user.id, oldCred);
-          if (decrypted) credToMigrate = decrypted;
-          else continue;
-        }
-        if (credToMigrate.connected || credToMigrate.clientSecret || credToMigrate.apiKey || credToMigrate.refreshToken || credToMigrate.accessToken) {
+    // Load credentials from store_credentials table — wrapped in try/catch to never break data load
+    try {
+      const loadedStoreId = storeId || activeStoreId || 'default';
+      const CRED_SETTER_MAP = {
+        shopify: { setter: setShopifyCredentials, lsKey: 'ecommerce_shopify_creds_v1', stateKey: 'shopifyCredentials' },
+        packiyo: { setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1', stateKey: 'packiyoCredentials' },
+        amazon: { setter: setAmazonCredentials, lsKey: 'ecommerce_amazon_creds_v1', stateKey: 'amazonCredentials' },
+        qbo: { setter: setQboCredentials, lsKey: 'ecommerce_qbo_creds_v1', stateKey: 'qboCredentials' },
+      };
+      const storeCreds = await loadCredentialsFromCloud(supabase, session.user.id, loadedStoreId);
+      let migratedFromAppData = false;
+      if (Object.keys(storeCreds).length > 0) {
+        for (const [provider, cred] of Object.entries(storeCreds)) {
           const mapping = CRED_SETTER_MAP[provider];
-          if (mapping) {
-            mapping.setter(credToMigrate);
-            try { lsSet(mapping.lsKey, JSON.stringify(credToMigrate)); } catch (e) {}
+          if (mapping && cred) {
+            mapping.setter(cred);
+            try { lsSet(mapping.lsKey, JSON.stringify(cred)); } catch (e) {}
           }
-          // Save to new table
-          await saveCredentialToCloud(supabase, session.user.id, loadedStoreId, provider, credToMigrate);
-          migratedFromAppData = true;
+        }
+      } else {
+        const OLD_CRED_KEYS = [
+          { key: 'shopifyCredentials', provider: 'shopify' },
+          { key: 'packiyoCredentials', provider: 'packiyo' },
+          { key: 'amazonCredentials', provider: 'amazon' },
+          { key: 'qboCredentials', provider: 'qbo' },
+        ];
+        for (const { key, provider } of OLD_CRED_KEYS) {
+          const oldCred = cloud[key];
+          if (!oldCred) continue;
+          let credToMigrate = oldCred;
+          if (oldCred._encrypted && session?.user?.id) {
+            const decrypted = await decryptCreds(session.user.id, oldCred);
+            if (decrypted) credToMigrate = decrypted;
+            else continue;
+          }
+          if (credToMigrate.connected || credToMigrate.clientSecret || credToMigrate.apiKey || credToMigrate.refreshToken || credToMigrate.accessToken) {
+            const mapping = CRED_SETTER_MAP[provider];
+            if (mapping) {
+              mapping.setter(credToMigrate);
+              try { lsSet(mapping.lsKey, JSON.stringify(credToMigrate)); } catch (e) {}
+            }
+            await saveCredentialToCloud(supabase, session.user.id, loadedStoreId, provider, credToMigrate);
+            migratedFromAppData = true;
+          }
+        }
+        if (migratedFromAppData) {
+          console.log('[CredMigration] Migrated credentials from app_data to store_credentials table');
         }
       }
-      if (migratedFromAppData) {
-        console.log('[CredMigration] Migrated credentials from app_data to store_credentials table');
-      }
+    } catch (credErr) {
+      console.warn('[LoadCreds] Credential loading failed — data load continues:', credErr.message);
     }
 
     // Also keep localStorage in sync for offline backup
