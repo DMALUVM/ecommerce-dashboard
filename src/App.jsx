@@ -15534,7 +15534,7 @@ Analyze the data and respond with ONLY this JSON:
     forecastCorrections, amazonForecasts, leadTimeSettings,
     storeName, salesTaxConfig, threeplLedger,
     goals, bankingData, aiLearningHistory,
-    getProfit, get3PLForPeriod,
+    getProfit, get3PLForPeriod, unifiedBusinessMetrics,
   });
   
   // Send AI Message - defined at component level, not nested
@@ -15657,6 +15657,7 @@ Analyze the data and respond with ONLY this JSON:
         forecastCorrections, alertsSummary, notesData,
         forecastData, multiSignalForecast,
         forecastAccuracyMetrics, mlTrainingData, pendingForecasts,
+        invoices, upcomingAmazonForecasts, getAmazonForecastComparison,
       });
 
       const rawHistory = aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content }));

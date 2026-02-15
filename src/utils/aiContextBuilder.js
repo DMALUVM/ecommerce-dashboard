@@ -17,7 +17,7 @@ export const prepareDataContext = (deps) => {
     forecastCorrections, amazonForecasts, leadTimeSettings,
     storeName, salesTaxConfig, threeplLedger,
     goals, bankingData, aiLearningHistory,
-    getProfit, get3PLForPeriod,
+    getProfit, get3PLForPeriod, unifiedBusinessMetrics,
   } = deps;
 
   // Helper: run a computation, return fallback on error instead of crashing

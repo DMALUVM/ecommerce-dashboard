@@ -19,6 +19,7 @@ export const buildChatSystemPrompt = (ctx, deps) => {
     forecastCorrections, alertsSummary, notesData,
     forecastData, multiSignalForecast,
     forecastAccuracyMetrics, mlTrainingData, pendingForecasts,
+    invoices, upcomingAmazonForecasts, getAmazonForecastComparison,
   } = deps;
 
   // Helper: safely evaluate template sections
@@ -36,6 +37,9 @@ export const buildChatSystemPrompt = (ctx, deps) => {
   if (!ctx.insights) ctx.insights = {};
   if (!ctx.insights.recentVsPrior) ctx.insights.recentVsPrior = {};
   if (!ctx.dataRange) ctx.dataRange = {};
+  if (!ctx.unifiedMetrics) ctx.unifiedMetrics = {};
+  if (!ctx.unifiedMetrics.averages) ctx.unifiedMetrics.averages = {};
+  if (!ctx.unifiedMetrics.allTime) ctx.unifiedMetrics.allTime = {};
 
   return `
 You are an expert e-commerce analyst and business advisor for "${ctx.storeName}". You have access to ALL uploaded sales data and can answer questions about any aspect of the business.
@@ -207,7 +211,7 @@ ${forecastAccuracy.records.length > 0 ? JSON.stringify(forecastAccuracy.records.
 ${ctx.goals.weeklyRevenue > 0 && ctx.weeklyData.length > 0 ? `- Last Week vs Goal: ${ctx.weeklyData[ctx.weeklyData.length-1]?.totalRevenue >= ctx.goals.weeklyRevenue ? 'MET' : 'MISSED'}` : ''}
 
 === ALERTS ===
-${alertsSummary.length > 0 ? alertsSummary.join('\n') : 'No active alerts'}
+${(alertsSummary || []).length > 0 ? (alertsSummary || []).join('\n') : 'No active alerts'}
 
 === PRODUCT CATALOG (SKU ↔ Product Name mapping) ===
 Use this to translate between product names and SKUs:
@@ -476,7 +480,7 @@ Typical healthy range: 70-85% for Amazon, 95-98% for Shopify
 ` : 'Data triangulation not available'}
 
 === WEEK NOTES (user annotations) ===
-${notesData.length > 0 ? JSON.stringify(notesData) : 'No notes added'}
+${(notesData || []).length > 0 ? JSON.stringify(notesData) : 'No notes added'}
 
 === ⛔⛔⛔ ALL-TIME SKU DATA BELOW - DO NOT USE FOR TIMEFRAME QUESTIONS ⛔⛔⛔ ===
 The data below is ALL-TIME totals. For "last week", "last month" etc. use the PRE-COMPUTED TIMEFRAME DATA sections above!
@@ -591,7 +595,7 @@ Total sales tax paid all-time: $${f(ctx.salesTax?.totalPaidAllTime, 2)}
 
 === UPCOMING BILLS & INVOICES ===
 ${safe(() => {
-  const unpaid = invoices.filter(i => !i.paid);
+  const unpaid = (invoices || []).filter(i => !i.paid);
   if (unpaid.length === 0) return 'No upcoming bills';
   const total = unpaid.reduce((s, i) => s + i.amount, 0);
   return `Upcoming bills (${unpaid.length} total, $${f(total, 2)}):
@@ -599,14 +603,14 @@ ${JSON.stringify(unpaid.map(i => ({ vendor: i.vendor, amount: i.amount, dueDate:
 })}
 
 === AMAZON FORECASTS (from Amazon's projections) ===
-${upcomingAmazonForecasts.length > 0 ? `
+${(upcomingAmazonForecasts || []).length > 0 ? `
 Upcoming Amazon projections:
 ${JSON.stringify(upcomingAmazonForecasts.map(f => ({ weekEnding: f.weekEnding, projectedRevenue: f.totals?.sales || f.totalSales || 0, projectedUnits: f.totals?.units || f.totalUnits || 0, projectedProfit: f.totals?.proceeds || f.totalProceeds || 0, skuCount: f.skuCount || 0 })))}
 ` : 'No upcoming Amazon forecasts uploaded'}
 
-${getAmazonForecastComparison.length > 0 ? `
-Forecast vs Actual Accuracy (Amazon) - ${getAmazonForecastComparison.length} weeks tracked:
-${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({ 
+${(getAmazonForecastComparison || []).length > 0 ? `
+Forecast vs Actual Accuracy (Amazon) - ${(getAmazonForecastComparison || []).length} weeks tracked:
+${JSON.stringify((getAmazonForecastComparison || []).slice(0, 8).map(c => ({ 
   week: c.weekEnding, 
   forecastRev: c.forecast.revenue, 
   actualRev: c.actual.revenue, 
@@ -660,9 +664,9 @@ ${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${f((pf.forecast.totals?.
 ` : ''}
 
 === PRODUCTION PIPELINE (incoming inventory) ===
-${productionPipeline.length > 0 ? `
-${productionPipeline.length} production orders in pipeline (${formatNumber(productionPipeline.reduce((s, p) => s + (p.quantity || 0), 0))} total units):
-${JSON.stringify(productionPipeline.map(p => ({ 
+${(productionPipeline || []).length > 0 ? `
+${(productionPipeline || []).length} production orders in pipeline (${f((productionPipeline || []).reduce((s, p) => s + (p.quantity || 0), 0), 0)} total units):
+${JSON.stringify((productionPipeline || []).map(p => ({ 
   sku: p.sku, 
   product: p.productName, 
   quantity: p.quantity, 
@@ -779,7 +783,7 @@ ${safe(() => {
 })}
 
 === AMAZON PPC CAMPAIGNS ===
-${amazonCampaigns.campaigns?.length > 0 ? `
+${amazonCampaigns?.campaigns?.length > 0 ? `
 Last Updated: ${amazonCampaigns.lastUpdated ? new Date(amazonCampaigns.lastUpdated).toLocaleDateString() : 'N/A'}
 Total Campaigns: ${amazonCampaigns.summary?.totalCampaigns || 0} (${amazonCampaigns.summary?.enabledCount || 0} enabled, ${amazonCampaigns.summary?.pausedCount || 0} paused)
 
