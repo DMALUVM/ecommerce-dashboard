@@ -4783,6 +4783,11 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setConfirmedRecurring([]);
     setWidgetConfig({});
     setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
+    // Reset API credentials — these are store-specific
+    setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
+    setPackiyoCredentials({ apiKey: '', warehouseId: '', connected: false, lastSync: null, warehouseName: '' });
+    setAmazonCredentials({ clientId: '', clientSecret: '', refreshToken: '', marketplaceId: '', sellerId: '', connected: false, lastSync: null, adsRefreshToken: '', adsClientId: '', adsClientSecret: '', adsProfileId: '', adsConnected: false, adsLastSync: null });
+    setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
     
     // Now apply the new store's data (overwriting the cleared defaults)
     // Also clear localStorage to prevent stale data from previous store
@@ -4794,6 +4799,8 @@ const loadFromCloud = useCallback(async (storeId = null) => {
         'ecommerce_ai_learning_v1', 'ecommerce_unified_ai_v1',
         'ecommerce_production_v1', 'ecommerce_banking_v1',
         'ecommerce_recurring_v1', 'ecommerce_widget_config_v1',
+        'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
+        'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
       ];
       lsKeysToClear.forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
     } catch (e) {}
