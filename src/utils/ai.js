@@ -1,6 +1,7 @@
 // AI utility functions — single source of truth
 // Handles API calls to Claude AI via /api/chat streaming endpoint
 import { AI_DEFAULT_MODEL } from './config';
+import { getAuthToken } from './supabaseClient';
 
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
 // Model string imported from config.js — edit ONLY there when models update
@@ -60,9 +61,15 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
     };
   }
   
+  // Get auth token (non-blocking, won't fail if not authenticated)
+  const authToken = await getAuthToken();
+  
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken && { 'Authorization': `Bearer ${authToken}` }),
+    },
     body: JSON.stringify(requestBody),
   });
   
@@ -85,7 +92,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
       
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      buffer = lines.pop() || ''; // Keep incomplete last line in buffer
       
       for (const line of lines) {
         if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
@@ -96,7 +103,9 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
             else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
             else if (data.type === 'done' && data.fullText) fullText = data.fullText;
             else if (data.type === 'error') throw new Error(data.error);
-          } catch (e) { /* Skip parse errors for incomplete JSON */ }
+          } catch (e) {
+            if (e.message && !e.message.includes('JSON')) throw e; // Re-throw non-parse errors
+          }
         }
       }
     }
