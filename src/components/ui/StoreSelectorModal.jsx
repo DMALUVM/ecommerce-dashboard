@@ -99,15 +99,19 @@ const StoreSelectorModal = ({
             <button
               onClick={() => {
                 const input = document.getElementById('modal-new-store-name');
-                if (input?.value?.trim()) {
+                if (input?.value?.trim() && !switchingStore) {
                   createStore(input.value.trim());
                   input.value = '';
                 }
               }}
-              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-sm flex items-center gap-1"
+              disabled={!!switchingStore}
+              className={`px-4 py-2 rounded-lg text-white text-sm flex items-center gap-1 ${switchingStore ? 'bg-slate-600 cursor-not-allowed' : 'bg-violet-600 hover:bg-violet-500'}`}
             >
-              <Plus className="w-4 h-4" />
-              Create
+              {switchingStore === 'creating' ? (
+                <><span className="animate-spin">⟳</span> Creating…</>
+              ) : (
+                <><Plus className="w-4 h-4" /> Create</>
+              )}
             </button>
           </div>
         </div>
