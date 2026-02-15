@@ -500,7 +500,7 @@ const AdsView = ({
               <div className="grid grid-cols-3 gap-2 text-xs">
                 <div><span className="text-slate-500">Revenue</span><p className="text-emerald-400 font-medium">{formatCurrency(cur.amzRev)}</p></div>
                 <div><span className="text-slate-500">TACOS</span><p className={`font-medium ${tacosColor(cur.amzTacos)}`}>{cur.amzTacos > 0 ? cur.amzTacos.toFixed(1) + '%' : '—'}</p></div>
-                <div><span className="text-slate-500">ROAS</span><p className={`font-medium ${roasColor(cur.amzRoas)}`}>{cur.amzRoas > 0 ? cur.amzRoas.toFixed(1) + 'x' : '—'}</p></div>
+                <div><span className="text-slate-500">ACOS</span><p className={`font-medium ${acosColor(cur.amzAcos)}`}>{cur.amzAcos > 0 ? cur.amzAcos.toFixed(1) + '%' : '—'}</p></div>
               </div>
               <Sparkline data={periodData.aTrend} color="bg-orange-500" h={24} />
             </div>
@@ -510,7 +510,7 @@ const AdsView = ({
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <div><span className="text-slate-500">Clicks</span><p className="text-white font-medium">{formatNumber(cur.gClicks)}</p></div>
                   <div><span className="text-slate-500">Conv</span><p className="text-emerald-400 font-medium">{cur.gConv}</p></div>
-                  <div><span className="text-slate-500">CPC</span><p className={`font-medium ${cur.gCpc <= 1 ? 'text-emerald-400' : cur.gCpc <= 2 ? 'text-amber-400' : 'text-rose-400'}`}>{cur.gCpc > 0 ? formatCurrency(cur.gCpc) : '—'}</p></div>
+                  <div><span className="text-slate-500">CPA</span><p className={`font-medium ${cur.gConv > 0 ? ((cur.gSpend / cur.gConv) <= 15 ? 'text-emerald-400' : (cur.gSpend / cur.gConv) <= 30 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-500'}`}>{cur.gConv > 0 ? formatCurrency(cur.gSpend / cur.gConv) : '—'}</p></div>
                 </div>
                 <Sparkline data={periodData.gTrend} color="bg-red-500" h={24} />
               </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={() => setAdsViewMode('upload')} className="text-red-400 hover:underline">upload CSV</button></p>}
