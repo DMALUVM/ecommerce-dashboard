@@ -888,7 +888,7 @@ Prediction History:
 
 ${ctx.aiLearning.recentPredictions.length > 0 ? `Recent Predictions vs Actuals:
 ${ctx.aiLearning.recentPredictions.map(p => 
-  `- ${p.type} (${p.period}): Predicted $${f(p.predicted?, 0) || 'N/A'}, Actual $${f(p.actual?, 0) || 'pending'}, Error: ${p.error ? f(p.error, 1) + '%' : 'awaiting actual'}`
+  `- ${p.type} (${p.period}): Predicted $${f(p.predicted, 0) || 'N/A'}, Actual $${f(p.actual, 0) || 'pending'}, Error: ${p.error ? f(p.error, 1) + '%' : 'awaiting actual'}`
 ).join('\n')}` : 'No predictions tracked yet'}
 
 USE THIS LEARNING: When forecasting, apply the correction factors if confidence > 30%. This helps adjust for systematic biases in predictions.
