@@ -115,24 +115,7 @@ const YoYView = ({
     const currentYearData = currentYear ? getYearData(currentYear) : null;
     const previousYearData = previousYear ? getYearData(previousYear) : null;
     
-    // Comparable previous year: only include months where current year has data (for fair YoY)
-    // Uses the same monthly data as the breakdown table for consistency
-    const previousYearComparable = useMemo(() => {
-      if (!previousYear || !currentYear) return null;
-      const currMonthKeys = Object.keys(currentMonths);
-      const prevMonthKeys = Object.keys(previousMonths);
-      if (currMonthKeys.length === 0 || currMonthKeys.length >= 12) return null;
-      // Filter previous year to only months that exist in current year
-      const matchingMonths = currMonthKeys.filter(m => previousMonths[m]);
-      if (matchingMonths.length === 0) return null;
-      const agg = { revenue: 0, profit: 0, units: 0 };
-      matchingMonths.forEach(m => {
-        agg.revenue += previousMonths[m].revenue || 0;
-        agg.profit += previousMonths[m].profit || 0;
-        agg.units += previousMonths[m].units || 0;
-      });
-      return { ...agg, months: matchingMonths.length, source: 'monthly' };
-    }, [currentYear, previousYear, currentMonths, previousMonths]);
+    // previousYearComparable moved below after currentMonths/previousMonths are defined
     
     // Month-over-month YoY comparison - use EXACT same logic as Trends getMonthlyTrends
     // First build ALL monthly data same as Trends, then filter by year
@@ -229,6 +212,23 @@ const YoYView = ({
     
     const currentMonths = currentYear ? getMonthlyByYear(currentYear) : {};
     const previousMonths = previousYear ? getMonthlyByYear(previousYear) : {};
+    
+    // Comparable previous year: only include months where current year has data (for fair YoY)
+    // Uses the same monthly data as the breakdown table for consistency
+    const previousYearComparable = (() => {
+      if (!previousYear || !currentYear) return null;
+      const currMonthKeys = Object.keys(currentMonths);
+      if (currMonthKeys.length === 0 || currMonthKeys.length >= 12) return null;
+      const matchingMonths = currMonthKeys.filter(m => previousMonths[m]);
+      if (matchingMonths.length === 0) return null;
+      const agg = { revenue: 0, profit: 0, units: 0 };
+      matchingMonths.forEach(m => {
+        agg.revenue += previousMonths[m].revenue || 0;
+        agg.profit += previousMonths[m].profit || 0;
+        agg.units += previousMonths[m].units || 0;
+      });
+      return { ...agg, months: matchingMonths.length, source: 'monthly' };
+    })();
     const allMonths = ['01','02','03','04','05','06','07','08','09','10','11','12'];
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     
