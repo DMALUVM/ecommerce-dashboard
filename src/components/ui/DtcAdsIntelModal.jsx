@@ -77,19 +77,21 @@ const parseXlsxSmart = async (file) => {
     }
   }
   
-  // Find the header row — look for known column names
+  // Find the header row — look for known column names (require 3+ matches to avoid title rows like "Search terms report")
   const knownHeaders = ['campaign', 'search term', 'keyword', 'ad group', 'ad set name', 'ad name', 
     'campaign name', 'search query', 'day', 'date', 'landing page type', 'asset group status', 'reporting starts',
     'keyword status', 'ad group status', 'campaign state', 'reporting starts', 'amount spent', 'impressions', 'clicks', 'cost'];
   
   let headerIdx = 0;
-  for (let i = 0; i < Math.min(5, allRows.length); i++) {
+  let bestScore = 0;
+  for (let i = 0; i < Math.min(10, allRows.length); i++) {
     const row = allRows[i];
-    if (!row) continue;
+    if (!row || row.length < 3) continue;
     const lower = row.map(c => String(c || '').toLowerCase().trim());
-    if (lower.some(h => knownHeaders.some(kh => h.includes(kh)))) {
+    const score = lower.filter(h => knownHeaders.some(kh => h === kh || (h.length > 3 && h.includes(kh)))).length;
+    if (score > bestScore) {
+      bestScore = score;
       headerIdx = i;
-      break;
     }
   }
   
@@ -98,6 +100,8 @@ const parseXlsxSmart = async (file) => {
   for (let i = headerIdx + 1; i < allRows.length; i++) {
     const vals = allRows[i];
     if (!vals || vals.every(v => v === null || v === '' || v === undefined)) continue;
+    // Skip Google Ads "Total:" footer rows (e.g. "Total: Shopping", "Total: Account")
+    if (vals[0] && String(vals[0]).startsWith('Total:')) continue;
     const row = {};
     headers.forEach((h, idx) => { row[h] = vals[idx] !== undefined ? vals[idx] : null; });
     rows.push(row);
