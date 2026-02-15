@@ -89,6 +89,22 @@ export default async function handler(req, res) {
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
     if (!response.ok) {
       const errText = await response.text();
+      // 429 = throttled — retry with exponential backoff
+      if (response.status === 429) {
+        const retryAfter = parseInt(response.headers.get('Retry-After')) || 0;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const wait = retryAfter ? retryAfter * 1000 : Math.min(2000 * Math.pow(2, attempt), 15000);
+          console.log(`[AdsSync] 429 throttled on ${endpoint}, retry ${attempt}/3 in ${Math.round(wait/1000)}s...`);
+          await new Promise(r => setTimeout(r, wait));
+          const retryRes = await fetch(`${ADS_BASE}${endpoint}`, opts);
+          if (retryRes.ok) return retryRes.json();
+          if (retryRes.status !== 429) {
+            const retryErr = await retryRes.text();
+            throw new Error(`Ads API ${retryRes.status}: ${retryErr.slice(0, 2000)}`);
+          }
+        }
+        throw new Error(`Ads API 429: Throttled after 3 retries on ${endpoint}`);
+      }
       // 425 = duplicate report already exists — extract reportId and treat as success
       if (response.status === 425) {
         const dupMatch = errText.match(/duplicate of\s*:\s*([a-f0-9-]+)/i);
@@ -351,7 +367,7 @@ export default async function handler(req, res) {
             status: created.status || 'PROCESSING',
           });
           console.log(`[AdsSync] ${spec.label} report created: ${created.reportId}`);
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise(r => setTimeout(r, 1500)); // Throttle to stay under Amazon rate limits
         } catch (err) {
           const msg = err.message || '';
           // Non-fatal: account may not have SB, SD, etc.
@@ -395,6 +411,7 @@ export default async function handler(req, res) {
       for (let i = pending.length - 1; i >= 0; i--) {
         const rpt = pending[i];
         try {
+          if (i < pending.length - 1) await new Promise(r => setTimeout(r, 500)); // Stagger status checks
           const status = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
           if (status.status === 'COMPLETED') {
             rpt.status = 'COMPLETED';
