@@ -219,11 +219,19 @@ const YoYView = ({
     }), { revenue: 0, profit: 0, units: 0 });
     const currentMonthlyTotal = sumMonths(currentMonths);
     const previousMonthlyTotal = sumMonths(previousMonths);
+    // For fair YoY: only sum prior year months where current year has data
+    const monthsWithCurrentData = allMonths.filter(m => (currentMonths[m]?.revenue || 0) > 0);
+    const previousComparableTotal = monthsWithCurrentData.reduce((acc, m) => ({
+      revenue: acc.revenue + (previousMonths[m]?.revenue || 0),
+      profit: acc.profit + (previousMonths[m]?.profit || 0),
+      units: acc.units + (previousMonths[m]?.units || 0),
+    }), { revenue: 0, profit: 0, units: 0 });
     
     const hasMonthlyData = Object.keys(currentMonths).length > 0 || Object.keys(previousMonths).length > 0;
     
     const calcYoYChange = (current, previous) => {
       if (!previous || previous === 0) return null;
+      if (current === 0) return null; // No data yet (future month or missing)
       return ((current - previous) / previous) * 100;
     };
     
@@ -434,7 +442,7 @@ const YoYView = ({
                     <td className="py-2 text-white">Total</td>
                     <td className="py-2 text-right text-white">{formatCurrency(currentMonthlyTotal.revenue)}</td>
                     {previousYear && <td className="py-2 text-right text-slate-400">{formatCurrency(previousMonthlyTotal.revenue)}</td>}
-                    {previousYear && <td className="py-2 text-right"><YoYBadge change={calcYoYChange(currentMonthlyTotal.revenue, previousMonthlyTotal.revenue)} /></td>}
+                    {previousYear && <td className="py-2 text-right"><YoYBadge change={calcYoYChange(currentMonthlyTotal.revenue, previousComparableTotal.revenue)} /></td>}
                     <td className={`py-2 text-right ${currentMonthlyTotal.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(currentMonthlyTotal.profit)}</td>
                     {previousYear && <td className={`py-2 text-right ${previousMonthlyTotal.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(previousMonthlyTotal.profit)}</td>}
                   </tr>
