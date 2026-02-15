@@ -80,8 +80,7 @@ const AdsView = ({
   view, save
 }) => {
   const sortedWeeks = Object.keys(allWeeksData).sort();
-  // Only include valid YYYY-MM-DD keys — excludes Excel serial numbers (e.g. "46048") and other garbage
-  const sortedDays = Object.keys(allDaysData || {}).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  const sortedDays = Object.keys(allDaysData || {}).sort();
   const hasDailyData = sortedDays.length > 0;
 
   const [uploadStatus, setUploadStatus] = useState(null);
@@ -131,13 +130,12 @@ const AdsView = ({
           gConv = 0, mPurch = 0, amzConv = 0, mPurchVal = 0;
       dayList.forEach(d => {
         const day = allDaysData[d]; if (!day) return;
-        // Use ?? (nullish coalescing) so legitimate $0 API values don't fall through to stale CSV data
-        const aS = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
-        const gS = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
-        const mS = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
+        const aS = day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend ?? 0;
+        const gS = day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds ?? 0;
+        const mS = day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
         const aR = day.amazon?.revenue || 0;
         const sR = day.shopify?.revenue || 0;
-        const aAR = (day.amazon?.adRevenue ?? day.amazonAdsMetrics?.totalRevenue) ?? 0;
+        const aAR = day.amazon?.adRevenue || day.amazonAdsMetrics?.totalRevenue || 0;
         const am = day.shopify?.adsMetrics || {};
         const amzM = day.amazonAdsMetrics || {};
         amzSpend += aS; gSpend += gS; mSpend += mS;
@@ -179,32 +177,12 @@ const AdsView = ({
     const cur = aggregate(days);
     const prior = aggregate(priorDays);
 
-    // ── DIAGNOSTIC: Show per-day ad spend sources (remove after debugging) ──
-    if (days.length > 0 && days.length <= 90) {
-      const diag = days.map(d => {
-        const day = allDaysData[d]; if (!day) return null;
-        return {
-          date: d,
-          'amz.adSpend': day.amazon?.adSpend,
-          'amz.source': day.amazon?.source,
-          'adsMetrics.spend': day.amazonAdsMetrics?.spend,
-          'google': day.shopify?.googleSpend ?? day.googleSpend,
-          'meta': day.shopify?.metaSpend ?? day.metaSpend,
-          'used': ((day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0),
-        };
-      }).filter(Boolean);
-      const totalUsed = diag.reduce((s, d) => s + d.used, 0);
-      console.group(`[AdsView DIAG] ${dateRange}d range — ${days.length} days — Total Ad Spend: $${totalUsed.toFixed(2)}`);
-      console.table(diag);
-      console.groupEnd();
-    }
-
     // Trend data for charts
     const trend = days.map(d => {
       const day = allDaysData[d]; if (!day) return null;
-      const aS = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
-      const gS = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
-      const mS = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
+      const aS = day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend ?? 0;
+      const gS = day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds ?? 0;
+      const mS = day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
       const s = aS + gS + mS;
       const aR = day.amazon?.revenue || 0; const sR = day.shopify?.revenue || 0; const r = aR + sR;
       return { date: d, spend: s, rev: r, amzSpend: aS, gSpend: gS, mSpend: mS,
@@ -216,9 +194,9 @@ const AdsView = ({
     days.forEach(d => {
       const day = allDaysData[d]; if (!day) return;
       const dayOfWeek = new Date(d + 'T12:00:00').getDay(); if (isNaN(dayOfWeek)) return;
-      const aS = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
-      const gS = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
-      const mS = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
+      const aS = day.amazon?.adSpend ?? 0;
+      const gS = day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds ?? 0;
+      const mS = day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
       const r = (day.amazon?.revenue || 0) + (day.shopify?.revenue || 0);
       dowBuckets[dayOfWeek].spend += aS + gS + mS; dowBuckets[dayOfWeek].rev += r; dowBuckets[dayOfWeek].count++;
     });
@@ -230,16 +208,16 @@ const AdsView = ({
     const budgetSplit = budgetTotal > 0 ? { amazon: (cur.amzSpend / budgetTotal) * 100, google: (cur.gSpend / budgetTotal) * 100, meta: (cur.mSpend / budgetTotal) * 100 } : { amazon: 0, google: 0, meta: 0 };
 
     // Platform sparklines
-    const aTrend = days.map(d => (allDaysData[d]?.amazon?.adSpend ?? allDaysData[d]?.amazonAdsMetrics?.spend) ?? 0);
-    const gTrend = days.map(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? allDaysData[d]?.googleAds) ?? 0);
-    const mTrend = days.map(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? allDaysData[d]?.metaAds) ?? 0);
+    const aTrend = days.map(d => allDaysData[d]?.amazon?.adSpend ?? allDaysData[d]?.amazonAdsMetrics?.spend ?? 0);
+    const gTrend = days.map(d => allDaysData[d]?.shopify?.googleSpend || allDaysData[d]?.googleSpend || allDaysData[d]?.googleAds || 0);
+    const mTrend = days.map(d => allDaysData[d]?.shopify?.metaSpend || allDaysData[d]?.metaSpend || allDaysData[d]?.metaAds || 0);
 
     // Daily table rows
     const tableRows = days.map(d => {
       const day = allDaysData[d]; if (!day) return null;
-      const aAds = (day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend) ?? 0;
-      const gAds = (day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds) ?? 0;
-      const mAds = (day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds) ?? 0;
+      const aAds = day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend ?? 0;
+      const gAds = day.shopify?.googleSpend ?? day.googleSpend ?? day.googleAds ?? 0;
+      const mAds = day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
       const aR = day.amazon?.revenue || 0; const sR = day.shopify?.revenue || 0;
       const totalAds = aAds + gAds + mAds; const totalRev = aR + sR;
       return { date: d, amazonAds: aAds, googleAds: gAds, metaAds: mAds, totalAds, amazonRev: aR, shopifyRev: sR, totalRev, tacos: totalRev > 0 ? (totalAds / totalRev) * 100 : 0 };
@@ -286,11 +264,11 @@ const AdsView = ({
     // ACTIONABLE: Zero-sale days & ACOS spikes (last 14d of selected range)
     periodData.days.slice(-14).forEach(d => {
       const day = allDaysData[d]; if (!day) return;
-      const spend = (day?.amazon?.adSpend ?? day?.amazonAdsMetrics?.spend) ?? 0;
-      const rev = (day?.amazon?.adRevenue ?? day?.amazon?.revenue) ?? 0;
+      const spend = day?.amazon?.adSpend ?? 0;
+      const rev = day?.amazon?.adRevenue || day?.amazon?.revenue || 0;
       if (spend > 5 && rev === 0) intel.zeroSaleDays.push({ date: d, spend, platform: 'Amazon' });
-      const gS = (day?.shopify?.googleSpend ?? day?.googleSpend) ?? 0;
-      const mS = (day?.shopify?.metaSpend ?? day?.metaSpend) ?? 0;
+      const gS = day?.shopify?.googleSpend ?? day?.googleSpend ?? 0;
+      const mS = day?.shopify?.metaSpend ?? day?.metaSpend ?? 0;
       const sR = day?.shopify?.revenue || 0;
       if (gS > 5 && sR === 0) intel.zeroSaleDays.push({ date: d, spend: gS, platform: 'Google' });
       if (mS > 5 && sR === 0) intel.zeroSaleDays.push({ date: d, spend: mS, platform: 'Meta' });
@@ -795,17 +773,18 @@ const AdsView = ({
                 )}
 
                 {/* Day of Week */}
-                {dowData.some(d => d.count > 0) && (
+                {dowData.some(d => d.count > 0) && (() => {
+                  const maxRev = Math.max(...dowData.map(x => x.avgRev), 0.01);
+                  return (
                   <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4">
                     <h3 className="text-white font-semibold text-sm mb-3">Day of Week Performance</h3>
-                    <div className="flex items-end gap-1" style={{ height: '56px' }}>
+                    <div className="flex items-end gap-1" style={{ height: '72px' }}>
                       {dowData.map((d, i) => {
-                        const maxRev = Math.max(...dowData.map(x => x.avgRev), 0.01);
-                        const h = (d.avgRev / maxRev) * 100;
+                        const barH = Math.max((d.avgRev / maxRev) * 52, 3);
                         return (
-                          <div key={i} className="flex-1 flex flex-col items-center group relative">
-                            <div className="w-full bg-cyan-500 rounded-t transition-opacity" style={{ height: `${Math.max(h, 4)}%`, opacity: 0.6 }}/>
-                            <span className="text-[9px] text-slate-600 mt-1">{d.day}</span>
+                          <div key={i} className="flex-1 flex flex-col items-center justify-end group relative" style={{ height: '72px' }}>
+                            <div className="w-full bg-cyan-500 rounded-t" style={{ height: `${barH}px`, opacity: d.count > 0 ? 0.7 : 0.2 }}/>
+                            <span className="text-[9px] text-slate-600 mt-1 leading-none">{d.day}</span>
                             <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
                               <div className="bg-slate-900 border border-slate-600 rounded p-1.5 text-[10px] whitespace-nowrap shadow-xl">
                                 <p className="text-white">${d.avgRev.toFixed(0)} avg rev</p>
@@ -818,7 +797,8 @@ const AdsView = ({
                       })}
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -999,7 +979,7 @@ const AdsView = ({
                   <div key={i} className={`${msg.role === 'user' ? 'bg-orange-900/15 border border-orange-500/15' : 'bg-slate-900/40'} rounded-xl p-4 group relative`}>
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-[10px] text-slate-600 mb-1">{msg.role === 'user' ? 'Prompt' : 'AI Report'}</p>
-                      <button onClick={() => { if (msg.role === 'user') setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i + 1)); else setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i - 1)); }}
+                      <button onClick={() => { if (msg.role === 'user') setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i + 1)); else setAdsAiMessages(prev => prev.filter((_, j) => j !== i)); }}
                         className="hidden group-hover:block p-1 rounded hover:bg-rose-900/30 text-slate-700 hover:text-rose-400"><X className="w-3 h-3"/></button>
                     </div>
                     <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{msg.content}</p>
@@ -1140,7 +1120,7 @@ const AdsView = ({
                 {adsAiMessages.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group`}>
                     <div className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 relative ${msg.role === 'user' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
-                      <button onClick={() => { if (msg.role === 'user') setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i + 1)); else setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i - 1)); }}
+                      <button onClick={() => { if (msg.role === 'user') setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i + 1)); else setAdsAiMessages(prev => prev.filter((_, j) => j !== i)); }}
                         className={`absolute -top-1.5 -right-1.5 hidden group-hover:flex w-4 h-4 items-center justify-center rounded-full text-white shadow ${msg.role === 'user' ? 'bg-rose-500' : 'bg-slate-500 hover:bg-rose-500'}`}>
                         <X className="w-2.5 h-2.5"/>
                       </button>
