@@ -1,17 +1,6 @@
-// Shared Supabase client singleton
-// Used by ai.js for auth headers, and available for any module that needs auth state.
-// App.jsx has its OWN client (unchanged) — this is a separate instance that shares
-// the same localStorage session, so auth state stays in sync automatically.
-
-import { createClient } from '@supabase/supabase-js';
-
-const url = import.meta.env.VITE_SUPABASE_URL;
-const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-// Only create if env vars are configured (matches App.jsx behavior)
-export const supabase = (url && key)
-  ? createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true } })
-  : null;
+// Shared auth token helper
+// Reads the Supabase session from localStorage (same session App.jsx manages).
+// Does NOT create a second GoTrueClient — avoids the "Multiple GoTrueClient" warning.
 
 /**
  * Get the current user's JWT access token, or null if not authenticated.
@@ -19,9 +8,18 @@ export const supabase = (url && key)
  */
 export async function getAuthToken() {
   try {
-    if (!supabase) return null;
-    const { data } = await supabase.auth.getSession();
-    return data?.session?.access_token || null;
+    // Supabase stores the session under sb-<projectRef>-auth-token in localStorage.
+    // Derive the project ref from the env URL: https://<ref>.supabase.co
+    const url = import.meta.env.VITE_SUPABASE_URL || '';
+    const match = url.match(/\/\/([^.]+)\./);
+    if (!match) return null;
+
+    const key = `sb-${match[1]}-auth-token`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+
+    const session = JSON.parse(raw);
+    return session?.access_token || null;
   } catch {
     return null;
   }
