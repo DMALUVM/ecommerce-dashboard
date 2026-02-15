@@ -15655,6 +15655,8 @@ Analyze the data and respond with ONLY this JSON:
         threeplLedger, goals, bankingData,
         productionPipeline, forecastAccuracy,
         forecastCorrections, alertsSummary, notesData,
+        forecastData, multiSignalForecast,
+        forecastAccuracyMetrics, mlTrainingData, pendingForecasts,
       });
 
       const rawHistory = aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content }));

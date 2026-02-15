@@ -3,6 +3,7 @@
 // Each section is try/catch guarded so partial data failures don't kill chat
 
 import { hasDailySalesData } from './date';
+import { US_STATES_TAX_INFO } from './taxData';
 
 /**
  * Build comprehensive data context for AI chat.

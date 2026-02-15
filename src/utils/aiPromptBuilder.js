@@ -17,6 +17,8 @@ export const buildChatSystemPrompt = (ctx, deps) => {
     threeplLedger, goals, bankingData,
     productionPipeline, forecastAccuracy,
     forecastCorrections, alertsSummary, notesData,
+    forecastData, multiSignalForecast,
+    forecastAccuracyMetrics, mlTrainingData, pendingForecasts,
   } = deps;
 
   // Helper: safely evaluate template sections
@@ -49,20 +51,20 @@ ${ctx.dataAvailability?.amazon?.hasDailyGaps ? `  ⚠️ GAPS COVERED BY: ${ctx.
 
 **UNIFIED ALL-TIME TOTALS (USE THESE - includes period data):**
 ${ctx.unifiedMetrics ? `
-- Amazon Revenue: $${ctx.unifiedMetrics.allTime?.amazon?.revenue?.toFixed(2) || 0}
-- Shopify Revenue: $${ctx.unifiedMetrics.allTime?.shopify?.revenue?.toFixed(2) || 0}
-- TOTAL Revenue: $${ctx.unifiedMetrics.allTime?.total?.revenue?.toFixed(2) || 0}
-- TOTAL Profit: $${ctx.unifiedMetrics.allTime?.total?.profit?.toFixed(2) || 0}
+- Amazon Revenue: $${f(ctx.unifiedMetrics.allTime?.amazon?.revenue, 2)}
+- Shopify Revenue: $${f(ctx.unifiedMetrics.allTime?.shopify?.revenue, 2)}
+- TOTAL Revenue: $${f(ctx.unifiedMetrics.allTime?.total?.revenue, 2)}
+- TOTAL Profit: $${f(ctx.unifiedMetrics.allTime?.total?.profit, 2)}
 
 By Year:
 ${Object.entries(ctx.unifiedMetrics.byYear || {}).map(([year, data]) => 
-  `  ${year}: Amazon $${data.amazon?.revenue?.toFixed(0) || 0} | Shopify $${data.shopify?.revenue?.toFixed(0) || 0} | Total $${data.total?.revenue?.toFixed(0) || 0}`
+  `  ${year}: Amazon $${f(data.amazon?.revenue, 0)} | Shopify $${f(data.shopify?.revenue, 0)} | Total $${f(data.total?.revenue, 0)}`
 ).join('\n')}
 
 Proper Averages (only from days WITH data):
-- Daily Avg Revenue: $${ctx.unifiedMetrics.averages?.dailyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.dailyRevenue?.daysUsed || 0} days with actual data)
-- Weekly Avg Revenue: $${ctx.unifiedMetrics.averages?.weeklyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.weeklyRevenue?.weeksUsed || 0} weeks)
-- Monthly Avg Revenue: $${ctx.unifiedMetrics.averages?.monthlyRevenue?.total?.toFixed(2) || 0} (from ${ctx.unifiedMetrics.averages?.monthlyRevenue?.monthsUsed || 0} months)
+- Daily Avg Revenue: $${f(ctx.unifiedMetrics.averages?.dailyRevenue?.total, 2)} (from ${ctx.unifiedMetrics.averages?.dailyRevenue?.daysUsed || 0} days with actual data)
+- Weekly Avg Revenue: $${f(ctx.unifiedMetrics.averages?.weeklyRevenue?.total, 2)} (from ${ctx.unifiedMetrics.averages?.weeklyRevenue?.weeksUsed || 0} weeks)
+- Monthly Avg Revenue: $${f(ctx.unifiedMetrics.averages?.monthlyRevenue?.total, 2)} (from ${ctx.unifiedMetrics.averages?.monthlyRevenue?.monthsUsed || 0} months)
 ` : 'Unified metrics not available'}
 
 🚨🚨🚨 TIMEFRAME QUERIES - USE PRE-COMPUTED DATA 🚨🚨🚨
@@ -154,8 +156,8 @@ ${multiSignalForecast ? `
 This is the most accurate forecast - it's the same one shown on the dashboard widget.
 
 **NEXT WEEK PREDICTION:**
-- Revenue: $${multiSignalForecast.nextWeek?.predictedRevenue?.toFixed(2) || 0}
-- Profit: $${multiSignalForecast.nextWeek?.predictedProfit?.toFixed(2) || 0}
+- Revenue: $${f(multiSignalForecast.nextWeek?.predictedRevenue)}
+- Profit: $${f(multiSignalForecast.nextWeek?.predictedProfit)}
 - Units: ${multiSignalForecast.nextWeek?.predictedUnits || 0}
 - Confidence: ${multiSignalForecast.nextWeek?.confidence || 'N/A'}
 
@@ -163,9 +165,9 @@ This is the most accurate forecast - it's the same one shown on the dashboard wi
 ${JSON.stringify(multiSignalForecast.next4Weeks)}
 
 **SIGNALS USED:**
-- Daily Average (7 days): $${multiSignalForecast.signals.dailyAvg7?.toFixed(2) || 0}/day
-- Momentum (7d vs prior 7d): ${multiSignalForecast.signals.momentum?.toFixed(1) || 0}%
-- Profit Margin: ${((multiSignalForecast.signals.avgProfitMargin || 0) * 100).toFixed(1)}%
+- Daily Average (7 days): $${f(multiSignalForecast.signals?.dailyAvg7)}/day
+- Momentum (7d vs prior 7d): ${f(multiSignalForecast.signals?.momentum, 1)}%
+- Profit Margin: ${f(((multiSignalForecast.signals?.avgProfitMargin || 0) * 100), 1)}%
 
 **DATA SOURCES:**
 - Daily data points: ${multiSignalForecast.dataPoints.dailyDays || multiSignalForecast.dataPoints.daysAnalyzed || 0} days
@@ -222,7 +224,7 @@ IMPORTANT: This is the authoritative SKU-level data. Use SKUs as the primary ide
 
 **TOP 20 SKUs BY REVENUE (all-time across periods + weeks):**
 ${ctx.skuMasterData?.slice(0, 20).map(s => 
-  `${s.sku}: "${s.name}" [${s.category}] - $${s.totalRevenue.toFixed(0)} rev, ${s.totalUnits} units`
+  `${s.sku}: "${s.name}" [${s.category}] - $${f(s.totalRevenue, 0)} rev, ${s.totalUnits} units`
 ).join('\n') || 'No SKU data'}
 
 **SKU BREAKDOWN BY 2025 MONTH:**
@@ -240,7 +242,7 @@ ${safe(() => {
     .slice(0, 6)
     .map(([period, skus]) => {
       const top3 = skus.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
-      return `${period}: ${top3.map(s => `${s.sku}=$${s.revenue.toFixed(0)}`).join(', ')}`;
+      return `${period}: ${top3.map(s => `${s.sku}=$${f(s.revenue, 0)}`).join(', ')}`;
     }).join('\n') || 'No period data';
 })}
 
@@ -255,7 +257,7 @@ ${safe(() => {
   });
   return Object.entries(cats)
     .sort(([,a], [,b]) => b.revenue - a.revenue)
-    .map(([cat, d]) => `${cat}: $${d.revenue.toFixed(0)} revenue, ${d.units} units (${d.skuCount} SKUs)`)
+    .map(([cat, d]) => `${cat}: $${f(d.revenue, 0)} revenue, ${d.units} units (${d.skuCount} SKUs)`)
     .join('\n') || 'No category data';
 })}
 
@@ -271,8 +273,8 @@ ${safe(() => {
 **LAST WEEK (${ctx.lastWeekByCategory?.weekLabel || 'No data'}):** ← USE THIS FOR "last week" questions
 ${ctx.lastWeekByCategory ? `
 Week: ${ctx.lastWeekByCategory.weekEnding}
-Total Revenue: $${ctx.lastWeekByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.lastWeekByCategory.totalProfit.toFixed(2)}
+Total Revenue: $${f(ctx.lastWeekByCategory.totalRevenue, 2)}
+Total Profit: $${f(ctx.lastWeekByCategory.totalProfit, 2)}
 Total Units: ${ctx.lastWeekByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.lastWeekByCategory.byCategory)}
 ` : 'No data'}
@@ -280,8 +282,8 @@ BY CATEGORY: ${JSON.stringify(ctx.lastWeekByCategory.byCategory)}
 **LAST 2 WEEKS (${ctx.last2WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last 2 weeks" questions
 ${ctx.last2WeeksByCategory ? `
 Weeks included: ${ctx.last2WeeksByCategory.weeks?.join(', ')}
-Total Revenue: $${ctx.last2WeeksByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.last2WeeksByCategory.totalProfit.toFixed(2)}
+Total Revenue: $${f(ctx.last2WeeksByCategory.totalRevenue, 2)}
+Total Profit: $${f(ctx.last2WeeksByCategory.totalProfit, 2)}
 Total Units: ${ctx.last2WeeksByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.last2WeeksByCategory.byCategory)}
 ` : 'No data'}
@@ -289,8 +291,8 @@ BY CATEGORY: ${JSON.stringify(ctx.last2WeeksByCategory.byCategory)}
 **LAST 4 WEEKS / LAST MONTH (${ctx.last4WeeksByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "last month" questions
 ${ctx.last4WeeksByCategory ? `
 Weeks included: ${ctx.last4WeeksByCategory.weeks?.join(', ')}
-Total Revenue: $${ctx.last4WeeksByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.last4WeeksByCategory.totalProfit.toFixed(2)}
+Total Revenue: $${f(ctx.last4WeeksByCategory.totalRevenue, 2)}
+Total Profit: $${f(ctx.last4WeeksByCategory.totalProfit, 2)}
 Total Units: ${ctx.last4WeeksByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
 ` : 'No data'}
@@ -298,9 +300,9 @@ BY CATEGORY: ${JSON.stringify(ctx.last4WeeksByCategory.byCategory)}
 **🆕 CURRENT MONTH MTD (${ctx.currentMonthByCategory?.dateRange || 'No data'}):** ← USE THIS FOR "this month", "January", "MTD" questions
 ${ctx.currentMonthByCategory ? `
 Data Source: ${ctx.currentMonthByCategory.dataSource} (${ctx.currentMonthByCategory.daysOrWeeksIncluded})
-AMAZON: $${ctx.currentMonthByCategory.amazonRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.amazonUnits || 0} units
-SHOPIFY: $${ctx.currentMonthByCategory.shopifyRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.shopifyUnits || 0} units
-TOTAL: $${ctx.currentMonthByCategory.totalRevenue?.toFixed(2) || 0} revenue, ${ctx.currentMonthByCategory.totalUnits || 0} units
+AMAZON: $${f(ctx.currentMonthByCategory.amazonRevenue, 2)} revenue, ${ctx.currentMonthByCategory.amazonUnits || 0} units
+SHOPIFY: $${f(ctx.currentMonthByCategory.shopifyRevenue, 2)} revenue, ${ctx.currentMonthByCategory.shopifyUnits || 0} units
+TOTAL: $${f(ctx.currentMonthByCategory.totalRevenue, 2)} revenue, ${ctx.currentMonthByCategory.totalUnits || 0} units
 BY CATEGORY (units): ${JSON.stringify(Object.fromEntries(Object.entries(ctx.currentMonthByCategory.byCategory || {}).map(([cat, data]) => [cat, { total: data.units, amazon: data.amazonUnits, shopify: data.shopifyUnits }])))}
 TOP SKUs BY UNITS: ${JSON.stringify((ctx.currentMonthByCategory.bySku || []).slice(0, 15).map(s => ({ sku: s.sku, name: s.name, channel: s.channel, units: s.units })))}
 ` : 'No daily or weekly data for current month - User should upload Amazon/Shopify reports via Upload tab'}
@@ -364,8 +366,8 @@ ${topSkus.map(([sku, d]) => `  ${sku} (${d.name?.substring(0, 40) || sku}): Amaz
 
 **ALL TIME (${ctx.allTimeByCategory?.weeks || 0} weeks):** ← USE THIS FOR "all time/total" questions
 ${ctx.allTimeByCategory ? `
-Total Revenue: $${ctx.allTimeByCategory.totalRevenue.toFixed(2)}
-Total Profit: $${ctx.allTimeByCategory.totalProfit.toFixed(2)}
+Total Revenue: $${f(ctx.allTimeByCategory.totalRevenue, 2)}
+Total Profit: $${f(ctx.allTimeByCategory.totalProfit, 2)}
 Total Units: ${ctx.allTimeByCategory.totalUnits}
 BY CATEGORY: ${JSON.stringify(ctx.allTimeByCategory.byCategory)}
 ` : 'No data'}
@@ -405,12 +407,12 @@ ${ctx.periodData.length > 0 ? `Total periods tracked: ${ctx.periodData.filter(p 
 
 📅 2025 MONTHLY TOTALS:
 ${ctx.periodData.filter(p => (p.period.includes('2025') || p.period.includes('-2025')) && p.type === 'monthly' && p.totalRevenue > 0).map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units, ${p.margin.toFixed(1)}% margin`
+  `${p.period}: $${f(p.totalRevenue, 0)} rev, ${p.totalUnits} units, ${f(p.margin, 1)}% margin`
 ).join('\n') || 'No 2025 monthly periods'}
 
 📅 2024 QUARTERLY TOTALS:
 ${ctx.periodData.filter(p => (p.period.includes('2024') || p.period.includes('-2024')) && p.type === 'quarterly' && p.totalRevenue > 0).map(p => 
-  `${p.period}: $${p.totalRevenue.toFixed(0)} rev, ${p.totalUnits} units`
+  `${p.period}: $${f(p.totalRevenue, 0)} rev, ${p.totalUnits} units`
 ).join('\n') || 'No 2024 quarterly periods'}
 
 NOTE: For SKU-level breakdown by period, use the SKU MASTER DATA section above.
@@ -430,17 +432,17 @@ ${ctx.periodData.length > 0 ? (() => {
   const best = sorted[0];
   const worst = sorted[sorted.length - 1];
   const avgRev = months.reduce((s, m) => s + m.totalRevenue, 0) / months.length;
-  return 'Best Month: ' + best.label + ' ($' + best.totalRevenue.toFixed(0) + ')\n' +
-         'Worst Month: ' + worst.label + ' ($' + worst.totalRevenue.toFixed(0) + ')\n' +
-         'Avg Monthly Revenue: $' + avgRev.toFixed(0) + '\n' +
-         'Peak vs Avg: ' + ((best.totalRevenue / avgRev - 1) * 100).toFixed(0) + '% above average';
+  return 'Best Month: ' + best.label + ' ($' + f(best.totalRevenue, 0) + ')\n' +
+         'Worst Month: ' + worst.label + ' ($' + f(worst.totalRevenue, 0) + ')\n' +
+         'Avg Monthly Revenue: $' + f(avgRev, 0) + '\n' +
+         'Peak vs Avg: ' + f((best.totalRevenue / avgRev - 1) * 100, 0) + '% above average';
 }) : 'No seasonality data'}
 
 === SEASONAL PATTERNS (AI Learning) ===
 ${ctx.seasonalPatterns ? `
 Monthly Performance Patterns (for forecasting):
 ${JSON.stringify(ctx.seasonalPatterns.byMonth)}
-Overall Monthly Average: $${ctx.seasonalPatterns.overallMonthlyAvg?.toFixed(0) || 0}
+Overall Monthly Average: $${f(ctx.seasonalPatterns.overallMonthlyAvg, 0)}
 Strong Months (>10% above avg): ${ctx.seasonalPatterns.strongMonths?.join(', ') || 'None identified yet'}
 Weak Months (<10% below avg): ${ctx.seasonalPatterns.weakMonths?.join(', ') || 'None identified yet'}
 
@@ -465,7 +467,7 @@ Multiple Data Sources: ${ctx.dataTriangulation.hasMultipleSources ? 'YES - Can c
 ${ctx.dataTriangulation.hasMultipleSources && Object.keys(ctx.dataTriangulation.salesVsBanking || {}).length > 0 ? `
 Sales vs Banking Comparison (cross-validation):
 ${Object.entries(ctx.dataTriangulation.salesVsBanking).slice(-6).map(([month, data]) => 
-  `- ${month}: Sales $${data.salesRevenue?.toFixed(0) || 0} → Bank Deposits $${data.bankDeposits?.toFixed(0) || 0} (${(data.depositRatio * 100).toFixed(0)}% deposit ratio)`
+  `- ${month}: Sales $${f(data.salesRevenue, 0)} → Bank Deposits $${f(data.bankDeposits, 0)} (${f((data.depositRatio * 100), 0)}% deposit ratio)`
 ).join('\n')}
 
 Note: Deposit ratio < 100% is normal (marketplace fees taken before payout)
@@ -501,17 +503,17 @@ HEALTH BREAKDOWN:
 
 === 🚨 URGENT REORDER (Past reorder date!) ===
 ${ctx.inventory?.urgentReorder?.length > 0 ? ctx.inventory.urgentReorder.map(i => 
-  `- ${i.sku}: ${i.daysOverdue} days overdue! Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Suggested Order: ${i.suggestedOrderQty} units`
+  `- ${i.sku}: ${i.daysOverdue} days overdue! Stockout: ${i.stockoutDate}, Velocity: ${f(i.weeklyVelocity, 1)}/wk, Suggested Order: ${i.suggestedOrderQty} units`
 ).join('\n') : 'None - all items are on schedule'}
 
 === ⚠️ NEEDS REORDER SOON (within 14 days) ===
 ${ctx.inventory?.needsReorderSoon?.length > 0 ? ctx.inventory.needsReorderSoon.map(i =>
-  `- ${i.sku}: Order in ${i.daysUntilMustOrder} days, Current: ${i.currentQty}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk, Lead Time: ${i.leadTimeDays}d, Suggested: ${i.suggestedOrderQty} units`
+  `- ${i.sku}: Order in ${i.daysUntilMustOrder} days, Current: ${i.currentQty}, Velocity: ${f(i.weeklyVelocity, 1)}/wk, Lead Time: ${i.leadTimeDays}d, Suggested: ${i.suggestedOrderQty} units`
 ).join('\n') : 'None - no immediate reorders needed'}
 
 === 🔴 CRITICAL STOCK (will run out soon) ===
 ${ctx.inventory?.criticalItems?.length > 0 ? ctx.inventory.criticalItems.map(i =>
-  `- ${i.sku} (${i.name?.slice(0,40)}...): ${i.totalQty} units, ${i.daysOfSupply} days supply, Stockout: ${i.stockoutDate}, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
+  `- ${i.sku} (${i.name?.slice(0,40)}...): ${i.totalQty} units, ${i.daysOfSupply} days supply, Stockout: ${i.stockoutDate}, Velocity: ${f(i.weeklyVelocity, 1)}/wk`
 ).join('\n') : 'None'}
 
 === 🟡 LOW STOCK ===
@@ -521,32 +523,32 @@ ${ctx.inventory?.lowStockItems?.length > 0 ? ctx.inventory.lowStockItems.slice(0
 
 === 📈 TOP MOVERS (Highest Velocity) ===
 ${ctx.inventory?.topMovers?.length > 0 ? ctx.inventory.topMovers.map(i =>
-  `- ${i.sku}: ${i.weeklyVelocity?.toFixed(1)} units/wk (AMZ: ${i.amazonVelocity?.toFixed(1)}, Shop: ${i.shopifyVelocity?.toFixed(1)}), ${i.daysOfSupply} days supply, Stock: ${i.totalQty}`
+  `- ${i.sku}: ${f(i.weeklyVelocity, 1)} units/wk (AMZ: ${f(i.amazonVelocity, 1)}, Shop: ${f(i.shopifyVelocity, 1)}), ${i.daysOfSupply} days supply, Stock: ${i.totalQty}`
 ).join('\n') : 'No velocity data'}
 
 === 📦 OVERSTOCK (excess inventory tying up capital) ===
 ${ctx.inventory?.overstockItems?.length > 0 ? ctx.inventory.overstockItems.slice(0, 5).map(i =>
-  `- ${i.sku}: ${i.daysOfSupply} days supply (${(i.daysOfSupply/30).toFixed(1)} months!), ${i.totalQty} units, $${i.totalValue?.toFixed(0)} tied up, Velocity: ${i.weeklyVelocity?.toFixed(1)}/wk`
+  `- ${i.sku}: ${i.daysOfSupply} days supply (${f((i.daysOfSupply/30), 1)} months!), ${i.totalQty} units, $${f(i.totalValue, 0)} tied up, Velocity: ${f(i.weeklyVelocity, 1)}/wk`
 ).join('\n') : 'None identified'}
 
 === VELOCITY BY CHANNEL ===
 ${ctx.inventory?.velocityByChannel ? `
-- Amazon: ${ctx.inventory.velocityByChannel.amazonTotal?.toFixed(0)} units/week
-- Shopify: ${ctx.inventory.velocityByChannel.shopifyTotal?.toFixed(0)} units/week
-- Total: ${(ctx.inventory.velocityByChannel.amazonTotal + ctx.inventory.velocityByChannel.shopifyTotal)?.toFixed(0)} units/week
+- Amazon: ${f(ctx.inventory.velocityByChannel.amazonTotal, 0)} units/week
+- Shopify: ${f(ctx.inventory.velocityByChannel.shopifyTotal, 0)} units/week
+- Total: ${f((ctx.inventory.velocityByChannel.amazonTotal + ctx.inventory.velocityByChannel.shopifyTotal), 0)} units/week
 ` : 'No velocity data'}
 
 === 📊 VELOCITY TRENDS (Last 2 weeks vs Prior 2 weeks) ===
 ${ctx.inventory?.velocityTrends?.accelerating?.length > 0 ? `
 🚀 ACCELERATING (velocity increasing >15%):
 ${ctx.inventory.velocityTrends.accelerating.map(v => 
-  `- ${v.sku}: ${v.trendPercent} increase (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
+  `- ${v.sku}: ${v.trendPercent} increase (was ${f(v.priorAvgWeekly, 1)}/wk → now ${f(v.recentAvgWeekly, 1)}/wk)`
 ).join('\n')}
 ` : ''}
 ${ctx.inventory?.velocityTrends?.declining?.length > 0 ? `
 📉 DECLINING (velocity decreasing >15%):
 ${ctx.inventory.velocityTrends.declining.map(v => 
-  `- ${v.sku}: ${v.trendPercent} decrease (was ${v.priorAvgWeekly?.toFixed(1)}/wk → now ${v.recentAvgWeekly?.toFixed(1)}/wk)`
+  `- ${v.sku}: ${v.trendPercent} decrease (was ${f(v.priorAvgWeekly, 1)}/wk → now ${f(v.recentAvgWeekly, 1)}/wk)`
 ).join('\n')}
 ` : ''}
 ${!ctx.inventory?.velocityTrends?.accelerating?.length && !ctx.inventory?.velocityTrends?.declining?.length ? 'All SKUs have stable velocity (±15%)' : ''}
@@ -578,21 +580,21 @@ ${safe(() => {
     .sort((a, b) => b.avgPerWeek - a.avgPerWeek)
     .slice(0, 10);
   
-  return 'Avg Weekly Unit Velocity: ' + avgWeeklyVelocity.toFixed(0) + ' units/week\n' +
+  return 'Avg Weekly Unit Velocity: ' + f(avgWeeklyVelocity, 0) + ' units/week\n' +
     'Top SKUs by Velocity: ' + JSON.stringify(topVelocity.slice(0, 5)) + '\n' +
     'Use this to calculate: Days of Supply = Current Inventory / (Weekly Velocity / 7)';
 })}
 
 === SALES TAX ===
 ${ctx.salesTax?.nexusStates?.length > 0 ? `Nexus states: ${JSON.stringify(ctx.salesTax.nexusStates)}` : 'No nexus states configured'}
-Total sales tax paid all-time: $${ctx.salesTax?.totalPaidAllTime?.toFixed(2) || 0}
+Total sales tax paid all-time: $${f(ctx.salesTax?.totalPaidAllTime, 2)}
 
 === UPCOMING BILLS & INVOICES ===
 ${safe(() => {
   const unpaid = invoices.filter(i => !i.paid);
   if (unpaid.length === 0) return 'No upcoming bills';
   const total = unpaid.reduce((s, i) => s + i.amount, 0);
-  return `Upcoming bills (${unpaid.length} total, $${total.toFixed(2)}):
+  return `Upcoming bills (${unpaid.length} total, $${f(total, 2)}):
 ${JSON.stringify(unpaid.map(i => ({ vendor: i.vendor, amount: i.amount, dueDate: i.dueDate, category: i.category, daysUntilDue: Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) })))}`;
 })}
 
@@ -608,53 +610,53 @@ ${JSON.stringify(getAmazonForecastComparison.slice(0, 8).map(c => ({
   week: c.weekEnding, 
   forecastRev: c.forecast.revenue, 
   actualRev: c.actual.revenue, 
-  variance: c.variance.revenuePercent.toFixed(1) + '%',
-  accuracy: c.accuracy.toFixed(1) + '%',
+  variance: f(c.variance.revenuePercent, 1) + '%',
+  accuracy: f(c.accuracy, 1) + '%',
   status: c.status 
 })))}
 ` : ''}
 
 ${forecastAccuracyMetrics ? `
 FORECAST ACCURACY INSIGHTS:
-- Overall Accuracy: ${forecastAccuracyMetrics.avgAccuracy.toFixed(1)}% (based on ${forecastAccuracyMetrics.totalWeeks} weeks)
-- Beat forecast ${forecastAccuracyMetrics.beatCount} times, Missed ${forecastAccuracyMetrics.missedCount} times
-- Average Revenue Variance: ${forecastAccuracyMetrics.avgRevenueVariance > 0 ? '+' : ''}${forecastAccuracyMetrics.avgRevenueVariance.toFixed(1)}%
-- Forecast Bias: ${forecastAccuracyMetrics.biasDescription}
-- Recent 4-week Accuracy: ${forecastAccuracyMetrics.recentAccuracy.toFixed(1)}%
-- Accuracy Trend: ${forecastAccuracyMetrics.accuracyTrend > 0 ? 'Improving' : forecastAccuracyMetrics.accuracyTrend < 0 ? 'Declining' : 'Stable'} (${forecastAccuracyMetrics.accuracyTrend > 0 ? '+' : ''}${forecastAccuracyMetrics.accuracyTrend.toFixed(1)}%)
-${forecastAccuracyMetrics.bestWeek ? `- Best Predicted Week: ${forecastAccuracyMetrics.bestWeek.weekEnding} (${forecastAccuracyMetrics.bestWeek.accuracy.toFixed(1)}% accurate)` : ''}
-${forecastAccuracyMetrics.worstWeek ? `- Worst Predicted Week: ${forecastAccuracyMetrics.worstWeek.weekEnding} (${forecastAccuracyMetrics.worstWeek.accuracy.toFixed(1)}% accurate)` : ''}
+- Overall Accuracy: ${f(forecastAccuracyMetrics.avgAccuracy, 1)}% (based on ${forecastAccuracyMetrics.totalWeeks || 0} weeks)
+- Beat forecast ${forecastAccuracyMetrics.beatCount || 0} times, Missed ${forecastAccuracyMetrics.missedCount || 0} times
+- Average Revenue Variance: ${(forecastAccuracyMetrics.avgRevenueVariance || 0) > 0 ? '+' : ''}${f(forecastAccuracyMetrics.avgRevenueVariance, 1)}%
+- Forecast Bias: ${forecastAccuracyMetrics.biasDescription || 'N/A'}
+- Recent 4-week Accuracy: ${f(forecastAccuracyMetrics.recentAccuracy, 1)}%
+- Accuracy Trend: ${(forecastAccuracyMetrics.accuracyTrend || 0) > 0 ? 'Improving' : (forecastAccuracyMetrics.accuracyTrend || 0) < 0 ? 'Declining' : 'Stable'} (${(forecastAccuracyMetrics.accuracyTrend || 0) > 0 ? '+' : ''}${f(forecastAccuracyMetrics.accuracyTrend, 1)}%)
+${forecastAccuracyMetrics.bestWeek ? `- Best Predicted Week: ${forecastAccuracyMetrics.bestWeek.weekEnding} (${f(forecastAccuracyMetrics.bestWeek.accuracy, 1)}% accurate)` : ''}
+${forecastAccuracyMetrics.worstWeek ? `- Worst Predicted Week: ${forecastAccuracyMetrics.worstWeek.weekEnding} (${f(forecastAccuracyMetrics.worstWeek.accuracy, 1)}% accurate)` : ''}
 ` : ''}
 
 ${mlTrainingData ? `
-ML CORRECTION MODEL (based on ${mlTrainingData.summary.totalSamples} samples):
-- Amazon Bias: ${mlTrainingData.summary.bias > 0 ? 'Under-forecasts' : 'Over-forecasts'} by ${Math.abs(mlTrainingData.summary.bias).toFixed(1)}% on average
-- Correction Factor: ${mlTrainingData.summary.correctionFactor.toFixed(3)}x (multiply Amazon forecast by this)
-- Prediction Variance: ±${mlTrainingData.summary.stdDev.toFixed(1)}%
-- When user asks about expected revenue, apply correction: Amazon Forecast × ${mlTrainingData.summary.correctionFactor.toFixed(3)} = Adjusted Forecast
+ML CORRECTION MODEL (based on ${mlTrainingData.summary?.totalSamples || 0} samples):
+- Amazon Bias: ${(mlTrainingData.summary?.bias || 0) > 0 ? 'Under-forecasts' : 'Over-forecasts'} by ${f(Math.abs(mlTrainingData.summary?.bias || 0), 1)}% on average
+- Correction Factor: ${f(mlTrainingData.summary?.correctionFactor, 3)}x (multiply Amazon forecast by this)
+- Prediction Variance: ±${f(mlTrainingData.summary?.stdDev, 1)}%
+- When user asks about expected revenue, apply correction: Amazon Forecast × ${f(mlTrainingData.summary?.correctionFactor, 3)} = Adjusted Forecast
 ` : ''}
 
-${forecastCorrections.samplesUsed >= 2 ? `
+${forecastCorrections?.samplesUsed >= 2 ? `
 SELF-LEARNING FORECAST SYSTEM:
-- Learning Status: ${forecastCorrections.confidence >= 30 ? 'ACTIVE' : 'TRAINING'} (${forecastCorrections.confidence.toFixed(0)}% confidence)
-- Samples Used: ${forecastCorrections.samplesUsed} weeks of forecast-vs-actual comparisons
-- Revenue Correction Factor: ${forecastCorrections.overall.revenue.toFixed(3)}x
-- Units Correction Factor: ${forecastCorrections.overall.units.toFixed(3)}x  
-- Profit Correction Factor: ${forecastCorrections.overall.profit.toFixed(3)}x
-- SKUs with Custom Corrections: ${Object.keys(forecastCorrections.bySku).length}
-- Last Updated: ${forecastCorrections.lastUpdated || 'Never'}
+- Learning Status: ${forecastCorrections?.confidence >= 30 ? 'ACTIVE' : 'TRAINING'} (${f(forecastCorrections?.confidence, 0)}% confidence)
+- Samples Used: ${forecastCorrections?.samplesUsed} weeks of forecast-vs-actual comparisons
+- Revenue Correction Factor: ${f(forecastCorrections?.overall?.revenue, 3)}x
+- Units Correction Factor: ${f(forecastCorrections?.overall?.units, 3)}x  
+- Profit Correction Factor: ${f(forecastCorrections?.overall?.profit, 3)}x
+- SKUs with Custom Corrections: ${Object.keys(forecastCorrections?.bySku || {}).length}
+- Last Updated: ${forecastCorrections?.lastUpdated || 'Never'}
 - Note: When confidence >= 30%, forecasts are auto-adjusted using learned corrections
 ` : `
 SELF-LEARNING FORECAST SYSTEM:
 - Status: COLLECTING DATA (need more samples)
-- Current Samples: ${forecastCorrections.samplesUsed}
+- Current Samples: ${forecastCorrections?.samplesUsed}
 - Required: At least 2 weeks of forecast-vs-actual comparisons
 - To enable: Upload Amazon forecasts BEFORE week ends, then upload actual sales AFTER week ends
 `}
 
-${pendingForecasts.length > 0 ? `
+${(pendingForecasts || []).length > 0 ? `
 PENDING FORECASTS (awaiting actual data):
-${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${(pf.forecast.totals?.sales || pf.forecast.totalSales || 0).toFixed(0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
+${pendingForecasts.map(pf => `- Week ${pf.weekEnding}: ${f((pf.forecast.totals?.sales || pf.forecast.totalSales || 0), 0)} forecasted (${pf.isPast ? 'PAST - needs actuals uploaded' : pf.daysUntil + ' days until week ends'})`).join('\n')}
 ` : ''}
 
 === PRODUCTION PIPELINE (incoming inventory) ===
@@ -709,8 +711,8 @@ ${safe(() => {
   
   return '3PL Summary (from bulk uploads):\n' +
     '- Total Orders Tracked: ' + totalOrders + '\n' +
-    '- Total 3PL Cost: $' + totalCost.toFixed(2) + '\n' +
-    '- Avg Cost Per Order: $' + avgCostPerOrder.toFixed(2) + '\n' +
+    '- Total 3PL Cost: $' + f(totalCost, 2) + '\n' +
+    '- Avg Cost Per Order: $' + f(avgCostPerOrder, 2) + '\n' +
     '- Total Units Shipped: ' + totalUnits + '\n' +
     '- Weeks with Data: ' + allWeeks.length + ' (' + (allWeeks[0] || 'N/A') + ' to ' + (allWeeks[allWeeks.length-1] || 'N/A') + ')\n\n' +
     'Recent Weekly 3PL Costs:\n' + JSON.stringify(weeklyTotals) + '\n\n' +
@@ -741,7 +743,7 @@ ${safe(() => {
     const amazonProjected = forecast.totals?.sales || 0;
     const divergence = ourAvg > 0 ? ((amazonProjected - ourAvg) / ourAvg * 100) : 0;
     const direction = divergence > 10 ? '📈 ABOVE' : divergence < -10 ? '📉 BELOW' : '≈ ALIGNED';
-    analysis += `Week ${weekKey}: Amazon=$${amazonProjected.toFixed(0)} vs Our Avg=$${ourAvg.toFixed(0)} → ${direction} (${divergence > 0 ? '+' : ''}${divergence.toFixed(0)}%)\n`;
+    analysis += `Week ${weekKey}: Amazon=$${f(amazonProjected, 0)} vs Our Avg=$${f(ourAvg, 0)} → ${direction} (${divergence > 0 ? '+' : ''}${f(divergence, 0)}%)\n`;
   });
   
   // Add recommendation
@@ -782,32 +784,32 @@ Last Updated: ${amazonCampaigns.lastUpdated ? new Date(amazonCampaigns.lastUpdat
 Total Campaigns: ${amazonCampaigns.summary?.totalCampaigns || 0} (${amazonCampaigns.summary?.enabledCount || 0} enabled, ${amazonCampaigns.summary?.pausedCount || 0} paused)
 
 CAMPAIGN PERFORMANCE SUMMARY:
-- Total Spend: $${(amazonCampaigns.summary?.totalSpend || 0).toFixed(2)}
-- Total Sales: $${(amazonCampaigns.summary?.totalSales || 0).toFixed(2)}
+- Total Spend: $${f((amazonCampaigns.summary?.totalSpend || 0), 2)}
+- Total Sales: $${f((amazonCampaigns.summary?.totalSales || 0), 2)}
 - Total Orders: ${amazonCampaigns.summary?.totalOrders || 0}
-- ROAS: ${(amazonCampaigns.summary?.roas || 0).toFixed(2)}x
-- ACOS: ${(amazonCampaigns.summary?.acos || 0).toFixed(1)}%
-- Avg CPC: $${(amazonCampaigns.summary?.avgCpc || 0).toFixed(2)}
-- Conversion Rate: ${(amazonCampaigns.summary?.convRate || 0).toFixed(2)}%
+- ROAS: ${f((amazonCampaigns.summary?.roas || 0), 2)}x
+- ACOS: ${f((amazonCampaigns.summary?.acos || 0), 1)}%
+- Avg CPC: $${f((amazonCampaigns.summary?.avgCpc || 0), 2)}
+- Conversion Rate: ${f((amazonCampaigns.summary?.convRate || 0), 2)}%
 
 BY CAMPAIGN TYPE:
-- Sponsored Products (SP): ${Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
-- Sponsored Brands (SB): ${Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
-- Sponsored Display (SD): ${Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.length : 0} campaigns, $${(Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.reduce((s,c) => s + (c.spend || 0), 0) : 0).toFixed(0)} spend
+- Sponsored Products (SP): ${Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.length : 0} campaigns, $${f((Array.isArray(amazonCampaigns.summary?.byType?.SP) ? amazonCampaigns.summary.byType.SP.reduce((s,c) => s + (c.spend || 0), 0) : 0), 0)} spend
+- Sponsored Brands (SB): ${Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.length : 0} campaigns, $${f((Array.isArray(amazonCampaigns.summary?.byType?.SB) ? amazonCampaigns.summary.byType.SB.reduce((s,c) => s + (c.spend || 0), 0) : 0), 0)} spend
+- Sponsored Display (SD): ${Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.length : 0} campaigns, $${f((Array.isArray(amazonCampaigns.summary?.byType?.SD) ? amazonCampaigns.summary.byType.SD.reduce((s,c) => s + (c.spend || 0), 0) : 0), 0)} spend
 
 TOP 10 CAMPAIGNS BY SPEND:
 ${amazonCampaigns.campaigns?.slice().sort((a,b) => (b.spend || 0) - (a.spend || 0)).slice(0,10).map(c => 
-  `- ${(c.name || 'Unknown').substring(0,50)}${(c.name || '').length > 50 ? '...' : ''}: $${(c.spend || 0).toFixed(0)} spend, $${(c.sales || 0).toFixed(0)} sales, ${(c.roas || 0).toFixed(2)}x ROAS, ${(c.acos || 0).toFixed(0)}% ACOS`
+  `- ${(c.name || 'Unknown').substring(0,50)}${(c.name || '').length > 50 ? '...' : ''}: $${f((c.spend || 0), 0)} spend, $${f((c.sales || 0), 0)} sales, ${f((c.roas || 0), 2)}x ROAS, ${f((c.acos || 0), 0)}% ACOS`
 ).join('\n')}
 
 TOP 5 CAMPAIGNS BY ROAS (>$100 spend):
 ${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.state === 'ENABLED').sort((a,b) => b.roas - a.roas).slice(0,5).map(c => 
-  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, $${c.spend.toFixed(0)} spend`
+  `- ${c.name.substring(0,40)}...: ${f(c.roas, 2)}x ROAS, $${f(c.spend, 0)} spend`
 ).join('\n') || 'No qualifying campaigns'}
 
 CAMPAIGNS NEEDING ATTENTION (Low ROAS, >$100 spend):
 ${amazonCampaigns.campaigns?.filter(c => c.spend > 100 && c.roas < 2 && c.state === 'ENABLED').sort((a,b) => a.roas - b.roas).slice(0,5).map(c => 
-  `- ${c.name.substring(0,40)}...: ${c.roas.toFixed(2)}x ROAS, ${c.acos.toFixed(0)}% ACOS - consider pausing or optimizing`
+  `- ${c.name.substring(0,40)}...: ${f(c.roas, 2)}x ROAS, ${f(c.acos, 0)}% ACOS - consider pausing or optimizing`
 ).join('\n') || 'All campaigns performing adequately'}
 
 ${amazonCampaigns.history?.length > 1 ? `
@@ -819,20 +821,20 @@ ${safe(() => {
   const spendChange = prior.totalSpend > 0 ? ((current.totalSpend - prior.totalSpend) / prior.totalSpend * 100) : 0;
   const salesChange = prior.totalSales > 0 ? ((current.totalSales - prior.totalSales) / prior.totalSales * 100) : 0;
   const roasChange = current.roas - prior.roas;
-  return `Spend: $${current.totalSpend.toFixed(0)} (${spendChange >= 0 ? '+' : ''}${spendChange.toFixed(1)}% WoW)
-Sales: $${current.totalSales.toFixed(0)} (${salesChange >= 0 ? '+' : ''}${salesChange.toFixed(1)}% WoW)
-ROAS: ${current.roas.toFixed(2)}x (${roasChange >= 0 ? '+' : ''}${roasChange.toFixed(2)} WoW)`;
+  return `Spend: $${f(current.totalSpend, 0)} (${spendChange >= 0 ? '+' : ''}${f(spendChange, 1)}% WoW)
+Sales: $${f(current.totalSales, 0)} (${salesChange >= 0 ? '+' : ''}${f(salesChange, 1)}% WoW)
+ROAS: ${f(current.roas, 2)}x (${roasChange >= 0 ? '+' : ''}${f(roasChange, 2)} WoW)`;
 })}
 ` : ''}
 
 ${amazonCampaigns.analytics?.dayOfWeekInsights?.length > 0 ? `
 📅 DAY-OF-WEEK PERFORMANCE (Amazon Ads):
 ${amazonCampaigns.analytics.dayOfWeekInsights.map(d => 
-  `- ${d.day}: ROAS ${d.avgRoas?.toFixed(2)}x, ACOS ${d.avgAcos?.toFixed(1)}%, Avg Spend $${d.avgSpend?.toFixed(0)}, Avg Orders ${d.avgConversions?.toFixed(1)} (${d.sampleSize} samples)`
+  `- ${d.day}: ROAS ${f(d.avgRoas, 2)}x, ACOS ${f(d.avgAcos, 1)}%, Avg Spend $${f(d.avgSpend, 0)}, Avg Orders ${f(d.avgConversions, 1)} (${d.sampleSize} samples)`
 ).join('\n')}
 
-🏆 Best Day: ${amazonCampaigns.analytics.bestPerformingDay?.day} (${amazonCampaigns.analytics.bestPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
-📉 Worst Day: ${amazonCampaigns.analytics.worstPerformingDay?.day} (${amazonCampaigns.analytics.worstPerformingDay?.avgRoas?.toFixed(2)}x ROAS)
+🏆 Best Day: ${amazonCampaigns.analytics.bestPerformingDay?.day} (${f(amazonCampaigns.analytics.bestPerformingDay?.avgRoas, 2)}x ROAS)
+📉 Worst Day: ${amazonCampaigns.analytics.worstPerformingDay?.day} (${f(amazonCampaigns.analytics.worstPerformingDay?.avgRoas, 2)}x ROAS)
 
 💡 OPTIMIZATION INSIGHT: Consider increasing ad spend on ${amazonCampaigns.analytics.bestPerformingDay?.day}s and reducing on ${amazonCampaigns.analytics.worstPerformingDay?.day}s to improve overall ROAS.
 ` : ''}
@@ -840,7 +842,7 @@ ${amazonCampaigns.analytics.dayOfWeekInsights.map(d =>
 ${amazonCampaigns.analytics?.monthlyTrends?.length > 0 ? `
 📈 MONTHLY AD TRENDS:
 ${amazonCampaigns.analytics.monthlyTrends.slice(-6).map(m => 
-  `- ${m.month}: $${m.spend?.toFixed(0)} spend → $${m.revenue?.toFixed(0)} ad rev, ${m.roas?.toFixed(2)}x ROAS, ${m.acos?.toFixed(1)}% ACOS`
+  `- ${m.month}: $${f(m.spend, 0)} spend → $${f(m.revenue, 0)} ad rev, ${f(m.roas, 2)}x ROAS, ${f(m.acos, 1)}% ACOS`
 ).join('\n')}
 ` : ''}
 ` : 'No Amazon campaign data uploaded yet. User can upload Amazon Ads campaign report CSV.'}
@@ -848,24 +850,24 @@ ${amazonCampaigns.analytics.monthlyTrends.slice(-6).map(m =>
 === DTC ADVERTISING (Meta + Google) ===
 ${ctx.dailyAdsData ? `
 **LAST 7 DAYS:**
-- Meta Spend: $${ctx.dailyAdsData.last7Days.metaSpend?.toFixed(2) || 0}
-- Google Spend: $${ctx.dailyAdsData.last7Days.googleSpend?.toFixed(2) || 0}
-- Total DTC Ads: $${ctx.dailyAdsData.last7Days.totalSpend?.toFixed(2) || 0}
-- Avg Daily Spend: $${ctx.dailyAdsData.last7Days.avgDailySpend?.toFixed(2) || 0}
+- Meta Spend: $${f(ctx.dailyAdsData.last7Days.metaSpend, 2)}
+- Google Spend: $${f(ctx.dailyAdsData.last7Days.googleSpend, 2)}
+- Total DTC Ads: $${f(ctx.dailyAdsData.last7Days.totalSpend, 2)}
+- Avg Daily Spend: $${f(ctx.dailyAdsData.last7Days.avgDailySpend, 2)}
 - Days with Data: ${ctx.dailyAdsData.last7Days.daysWithData || 0}
 
 **LAST 30 DAYS:**
-- Meta Spend: $${ctx.dailyAdsData.last30Days.metaSpend?.toFixed(2) || 0}
-- Google Spend: $${ctx.dailyAdsData.last30Days.googleSpend?.toFixed(2) || 0}
-- Total DTC Ads: $${ctx.dailyAdsData.last30Days.totalSpend?.toFixed(2) || 0}
-- Avg Daily Spend: $${ctx.dailyAdsData.last30Days.avgDailySpend?.toFixed(2) || 0}
+- Meta Spend: $${f(ctx.dailyAdsData.last30Days.metaSpend, 2)}
+- Google Spend: $${f(ctx.dailyAdsData.last30Days.googleSpend, 2)}
+- Total DTC Ads: $${f(ctx.dailyAdsData.last30Days.totalSpend, 2)}
+- Avg Daily Spend: $${f(ctx.dailyAdsData.last30Days.avgDailySpend, 2)}
 - Days with Data: ${ctx.dailyAdsData.last30Days.daysWithData || 0}
 ${ctx.dailyAdsData.last30Days.ctr > 0 ? `- CTR: ${ctx.dailyAdsData.last30Days.ctr}%
 - Avg CPC: $${ctx.dailyAdsData.last30Days.cpc}` : ''}
 
 **WEEKLY BREAKDOWN:**
 ${ctx.dailyAdsData.byWeek?.length > 0 ? ctx.dailyAdsData.byWeek.map(w => 
-  `- ${w.week}: Meta $${w.metaSpend?.toFixed(0)}, Google $${w.googleSpend?.toFixed(0)}, Total $${w.totalSpend?.toFixed(0)}`
+  `- ${w.week}: Meta $${f(w.metaSpend, 0)}, Google $${f(w.googleSpend, 0)}, Total $${f(w.totalSpend, 0)}`
 ).join('\n') : 'No weekly ad data available'}
 
 💡 NOTE: DTC ads data comes from daily uploads. If a week shows missing ads in alerts, it means no ads CSV was uploaded for those days.
@@ -874,19 +876,19 @@ ${ctx.dailyAdsData.byWeek?.length > 0 ? ctx.dailyAdsData.byWeek.map(w =>
 === AI LEARNING STATUS ===
 ${ctx.aiLearning ? `
 Forecast Correction Factors (learned from comparing predictions to actuals):
-- Revenue Multiplier: ${ctx.aiLearning.forecastCorrections.revenueMultiplier.toFixed(3)}x
-- Units Multiplier: ${ctx.aiLearning.forecastCorrections.unitsMultiplier.toFixed(3)}x
-- Learning Confidence: ${ctx.aiLearning.forecastCorrections.confidence.toFixed(0)}%
-- Samples Used: ${ctx.aiLearning.forecastCorrections.samplesUsed}
+- Revenue Multiplier: ${f(ctx.aiLearning.forecastCorrections.revenueMultiplier, 3)}x
+- Units Multiplier: ${f(ctx.aiLearning.forecastCorrections.unitsMultiplier, 3)}x
+- Learning Confidence: ${f(ctx.aiLearning.forecastCorrections?.confidence, 0)}%
+- Samples Used: ${ctx.aiLearning.forecastCorrections?.samplesUsed}
 
 Prediction History:
 - Total Predictions Made: ${ctx.aiLearning.predictionHistory.totalPredictions}
 - Verified with Actuals: ${ctx.aiLearning.predictionHistory.verifiedPredictions}
-- Recent Accuracy: ${ctx.aiLearning.predictionHistory.recentAccuracy ? ctx.aiLearning.predictionHistory.recentAccuracy.toFixed(1) + '%' : 'Still learning'}
+- Recent Accuracy: ${ctx.aiLearning.predictionHistory.recentAccuracy ? f(ctx.aiLearning.predictionHistory.recentAccuracy, 1) + '%' : 'Still learning'}
 
 ${ctx.aiLearning.recentPredictions.length > 0 ? `Recent Predictions vs Actuals:
 ${ctx.aiLearning.recentPredictions.map(p => 
-  `- ${p.type} (${p.period}): Predicted $${p.predicted?.toFixed(0) || 'N/A'}, Actual $${p.actual?.toFixed(0) || 'pending'}, Error: ${p.error ? p.error.toFixed(1) + '%' : 'awaiting actual'}`
+  `- ${p.type} (${p.period}): Predicted $${f(p.predicted?, 0) || 'N/A'}, Actual $${f(p.actual?, 0) || 'pending'}, Error: ${p.error ? f(p.error, 1) + '%' : 'awaiting actual'}`
 ).join('\n')}` : 'No predictions tracked yet'}
 
 USE THIS LEARNING: When forecasting, apply the correction factors if confidence > 30%. This helps adjust for systematic biases in predictions.
@@ -958,22 +960,22 @@ ${Object.entries(bankingData.profitAndLoss.details || {})
 
 MONTHLY CASH FLOW (last 12 months):
 ${ctx.banking.monthlySnapshots.map(m => 
-  `- ${m.month}: Income $${m.income?.toFixed(0) || 0}, Expenses $${m.expenses?.toFixed(0) || 0}, Net $${m.net?.toFixed(0) || 0}`
+  `- ${m.month}: Income $${f(m.income, 0)}, Expenses $${f(m.expenses, 0)}, Net $${f(m.net, 0)}`
 ).join('\n')}
 
 TOP EXPENSE CATEGORIES:
 ${ctx.banking.topExpenseCategories.map((c, i) => 
-  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
+  `${i + 1}. ${c.name}: $${f(c.total, 0)} (${c.count} transactions)`
 ).join('\n')}
 
 TOP INCOME SOURCES:
 ${ctx.banking.topIncomeCategories.map((c, i) => 
-  `${i + 1}. ${c.name}: $${c.total?.toFixed(0) || 0} (${c.count} transactions)`
+  `${i + 1}. ${c.name}: $${f(c.total, 0)} (${c.count} transactions)`
 ).join('\n')}
 
 ACCOUNTS:
 ${ctx.banking.accounts.map(a => 
-  `- ${a.name}: ${a.transactions} txns, In: $${a.totalIn?.toFixed(0) || 0}, Out: $${a.totalOut?.toFixed(0) || 0}`
+  `- ${a.name}: ${a.transactions} txns, In: $${f(a.totalIn, 0)}, Out: $${f(a.totalOut, 0)}`
 ).join('\n')}
 
 You can help with:
