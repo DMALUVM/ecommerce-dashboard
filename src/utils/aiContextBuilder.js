@@ -2,7 +2,7 @@
 // Builds the data context object for AI chat system prompts
 // Each section is try/catch guarded so partial data failures don't kill chat
 
-import { hasDailySalesData } from './date';
+import { hasDailySalesData, formatDateKey } from './date';
 import { US_STATES_TAX_INFO } from './taxData';
 
 /**
