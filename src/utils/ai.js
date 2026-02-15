@@ -1,7 +1,6 @@
 // AI utility functions — single source of truth
 // Handles API calls to Claude AI via /api/chat streaming endpoint
 import { AI_DEFAULT_MODEL } from './config';
-import { getAuthToken } from './supabaseClient';
 
 // ============ UNIFIED AI CONFIGURATION (Pro Plan) ============
 // Model string imported from config.js — edit ONLY there when models update
@@ -39,9 +38,17 @@ const AI_CONFIG = {
 //   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
 const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, maxTokensOverride = null) => {
   // Model priority: explicit override > window global (report selector) > AI_CONFIG default
-  const selectedModel = modelOverride || (typeof window !== 'undefined' && window.__aiModelOverride) || AI_CONFIG.model;
+  // Guard: ensure model is always a string (window.__aiModelOverride could theoretically be corrupted)
+  const rawModel = modelOverride || (typeof window !== 'undefined' && typeof window.__aiModelOverride === 'string' && window.__aiModelOverride) || AI_CONFIG.model;
+  const selectedModel = typeof rawModel === 'string' ? rawModel : AI_CONFIG.model;
   const tokenLimit = maxTokensOverride || AI_CONFIG.maxTokens;
   let requestBody;
+  
+  // Sanitize messages to ensure all content is plain strings (prevents circular refs from window/DOM leaking in)
+  const sanitizeMessages = (msgs) => (msgs || []).map(m => ({
+    role: String(m.role || 'user'),
+    content: typeof m.content === 'string' ? m.content : (m.content != null ? String(m.content) : ''),
+  }));
   
   if (typeof promptOrOptions === 'string') {
     // Simple prompt string
@@ -54,22 +61,16 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
   } else {
     // Options object with messages array (supports complex content like PDFs)
     requestBody = {
-      system: promptOrOptions.system || 'You are a helpful e-commerce analytics AI.',
-      messages: promptOrOptions.messages || [],
+      system: typeof promptOrOptions.system === 'string' ? promptOrOptions.system : 'You are a helpful e-commerce analytics AI.',
+      messages: sanitizeMessages(promptOrOptions.messages),
       model: selectedModel,
       max_tokens: tokenLimit,
     };
   }
   
-  // Get auth token (non-blocking, won't fail if not authenticated)
-  const authToken = await getAuthToken();
-  
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(authToken && { 'Authorization': `Bearer ${authToken}` }),
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody),
   });
   
@@ -92,7 +93,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
       
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete last line in buffer
+      buffer = lines.pop() || '';
       
       for (const line of lines) {
         if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
@@ -103,9 +104,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
             else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
             else if (data.type === 'done' && data.fullText) fullText = data.fullText;
             else if (data.type === 'error') throw new Error(data.error);
-          } catch (e) {
-            if (e.message && !e.message.includes('JSON')) throw e; // Re-throw non-parse errors
-          }
+          } catch (e) { /* Skip parse errors for incomplete JSON */ }
         }
       }
     }

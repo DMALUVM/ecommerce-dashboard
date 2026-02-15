@@ -1994,16 +1994,17 @@ const handleLogout = async () => {
   useEffect(() => {
     if (aiMessages.length > 0) {
       // Keep last 100 messages to avoid localStorage bloat
-      const messagesToSave = aiMessages.slice(-100);
-      safeLocalStorageSet('ecommerce_ai_chat_history_v1', JSON.stringify(messagesToSave));
+      // Sanitize: ensure all content is plain strings (prevents circular ref from window/DOM leaking in)
+      const messagesToSave = aiMessages.slice(-100).map(m => ({ role: String(m.role || 'user'), content: typeof m.content === 'string' ? m.content : String(m.content || '') }));
+      try { safeLocalStorageSet('ecommerce_ai_chat_history_v1', JSON.stringify(messagesToSave)); } catch (e) { devWarn('[ChatPersist] Failed to save general chat:', e.message); }
     }
   }, [aiMessages]);
   
   // Persist Ads AI conversation across sessions
   useEffect(() => {
     if (adsAiMessages.length > 0) {
-      const messagesToSave = adsAiMessages.slice(-60); // Keep last 60 messages
-      safeLocalStorageSet('ecommerce_ads_ai_chat_v1', JSON.stringify(messagesToSave));
+      const messagesToSave = adsAiMessages.slice(-60).map(m => ({ role: String(m.role || 'user'), content: typeof m.content === 'string' ? m.content : String(m.content || '') }));
+      try { safeLocalStorageSet('ecommerce_ads_ai_chat_v1', JSON.stringify(messagesToSave)); } catch (e) { devWarn('[ChatPersist] Failed to save ads chat:', e.message); }
     }
   }, [adsAiMessages]);
   
@@ -3473,7 +3474,7 @@ allWeekKeys.forEach((weekKey) => {
   
   // Sync AI model selection to window global so outer-scope callAI can read it
   useEffect(() => {
-    if (appSettings.aiModel) window.__aiModelOverride = appSettings.aiModel;
+    if (typeof appSettings.aiModel === 'string' && appSettings.aiModel) window.__aiModelOverride = appSettings.aiModel;
   }, [appSettings.aiModel]);
   
   const clearPeriod3PLFiles = useCallback(() => {

@@ -1285,7 +1285,7 @@ const DtcAdsIntelModal = ({
   const [actionReport, setActionReport] = useState(null);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState(null);
-  const [selectedModel, setSelectedModel] = useState(window.__aiModelOverride || AI_DEFAULT_MODEL);
+  const [selectedModel, setSelectedModel] = useState((typeof window !== 'undefined' && typeof window.__aiModelOverride === 'string' && window.__aiModelOverride) || AI_DEFAULT_MODEL);
 
   if (!show) return null;
 
