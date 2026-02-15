@@ -568,7 +568,7 @@ const AdsView = ({
             const last7T = (() => { const s = last7.reduce((a, d) => a + d.spend, 0); const r = last7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
             const prev7T = (() => { const s = prev7.reduce((a, d) => a + d.spend, 0); const r = prev7.reduce((a, d) => a + d.rev, 0); return r > 0 ? (s / r) * 100 : 0; })();
             const d7 = prev7T > 0 ? last7T - prev7T : 0;
-            const chartH = daysWithSpend.length > 60 ? 100 : 90;
+            const chartH = daysWithSpend.length > 60 ? 120 : 100;
             return (
               <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
                 <div className="flex items-center justify-between mb-3">
@@ -588,11 +588,11 @@ const AdsView = ({
                     </div>
                     {daysWithSpend.map((d, i) => {
                       const t = d.tacos;
-                      const h = Math.min(Math.max(((t - padMin) / scaleRange) * 100, 8), 100);
+                      const barPx = Math.max(((t - padMin) / scaleRange) * chartH, 3);
                       const color = t <= 10 ? 'bg-emerald-500' : t <= 20 ? 'bg-amber-500' : 'bg-rose-500';
                       return (
-                        <div key={i} className="flex-1 flex flex-col items-center justify-end group relative" style={{ minWidth: '4px' }}>
-                          <div className={`w-full rounded-t ${color} transition-opacity cursor-default`} style={{ height: `${h}%`, opacity: 0.85, minHeight: '3px' }}/>
+                        <div key={i} className="flex-1 flex flex-col items-center justify-end group relative" style={{ minWidth: '4px', height: `${chartH}px` }}>
+                          <div className={`w-full rounded-t ${color} cursor-default`} style={{ height: `${barPx}px`, opacity: 0.85 }}/>
                           <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
                             <div className="bg-slate-900 border border-slate-600 rounded-lg p-2 text-xs whitespace-nowrap shadow-xl">
                               <p className="text-slate-400">{fmtDate(d.date)}</p>
