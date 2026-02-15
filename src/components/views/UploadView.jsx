@@ -645,18 +645,24 @@ const UploadView = ({
                     { key: 'googleCampaign', label: 'Google Campaigns', platform: 'google', priority: 'HIGH' },
                     { key: 'googleSearchTerms', label: 'Google Search Terms', platform: 'google', priority: 'HIGH' },
                     { key: 'googleKeywords', label: 'Google Keywords', platform: 'google', priority: 'MED' },
-                    { key: 'googleAdGroups', label: 'Google Ad Groups', platform: 'google', priority: 'MED' },
+                    { key: 'googleAdGroup', label: 'Google Ad Groups', platform: 'google', priority: 'MED' },
                     { key: 'googleAssetGroups', label: 'Google PMax Assets', platform: 'google', priority: 'OPT' },
                     { key: 'metaCampaign', label: 'Meta Campaigns', platform: 'meta', priority: 'HIGH' },
                     { key: 'metaAds', label: 'Meta Ads', platform: 'meta', priority: 'HIGH' },
                     { key: 'metaAdSets', label: 'Meta Ad Sets', platform: 'meta', priority: 'MED' },
-                    { key: 'metaPlacement', label: 'Meta Placement', platform: 'meta', priority: 'OPT' },
-                    { key: 'metaAge', label: 'Meta Age', platform: 'meta', priority: 'OPT' },
-                    { key: 'metaGender', label: 'Meta Gender', platform: 'meta', priority: 'OPT' },
+                    { key: 'metaAdSetPlacement', label: 'Meta Placement', platform: 'meta', priority: 'OPT' },
+                    { key: 'metaAdSetAge', label: 'Meta Age', platform: 'meta', priority: 'OPT' },
+                    { key: 'metaAdSetGender', label: 'Meta Gender', platform: 'meta', priority: 'OPT' },
                     { key: 'amazonSearchQuery', label: 'Amazon Search Query', platform: 'amazon', priority: 'MED' },
                     { key: 'shopifySales', label: 'Shopify Sales', platform: 'shopify', priority: 'MED' },
                   ];
-                  const has = (k) => d[k] && (Array.isArray(d[k]) ? d[k].length > 0 : (d[k].totalTerms > 0 || d[k].records?.length > 0));
+                  const has = (k) => {
+                    const v = d[k];
+                    if (!v) return false;
+                    if (Array.isArray(v)) return v.length > 0;
+                    if (typeof v === 'object') return v.totalTerms > 0 || v.records?.length > 0 || Object.keys(v).length > 1;
+                    return !!v;
+                  };
                   const loaded = reports.filter(r => has(r.key));
                   const missing = reports.filter(r => !has(r.key));
                   const missingHigh = missing.filter(r => r.priority === 'HIGH');
@@ -698,7 +704,7 @@ const UploadView = ({
                               {has(r.key) ? '✓' : '✗'}
                             </span>
                             <span className="truncate">{r.label}</span>
-                            {has(r.key) && Array.isArray(d[r.key]) && <span className="text-slate-600 ml-auto">{d[r.key].length}</span>}
+                            {has(r.key) && <span className="text-slate-600 ml-auto">{Array.isArray(d[r.key]) ? d[r.key].length : d[r.key]?.totalTerms || ''}</span>}
                           </div>
                         ))}
                       </div>
