@@ -466,6 +466,49 @@ const UploadView = ({
                   </p>
                 </div>
                 
+                {/* ── Amazon Data Status ── */}
+                {(() => {
+                  const ad = adsIntelData || {};
+                  const amzReports = [
+                    { key: 'spSearchTerms', label: 'SP Search Terms', priority: 'HIGH', count: ad.spSearchTerms?.totalTerms || ad._apiSpSearchTerms?.length },
+                    { key: 'spTargeting', label: 'SP Targeting', priority: 'HIGH', count: ad.spTargeting?.length || ad._apiSpTargeting?.length },
+                    { key: 'spAdvertised', label: 'SP Advertised Product', priority: 'HIGH', count: ad.spAdvertised?.length || ad._apiSpAdvertised?.length },
+                    { key: 'spPlacement', label: 'SP Placement', priority: 'MED', count: ad.spPlacement?.placements?.length || ad._apiSpPlacement?.length },
+                    { key: 'sbSearchTerms', label: 'SB Search Terms', priority: 'MED', count: ad.sbSearchTerms?.length || ad._apiSbSearchTerms?.length },
+                    { key: 'sdCampaign', label: 'SD Campaigns', priority: 'OPT', count: ad.sdCampaign?.length || ad._apiSdCampaign?.length },
+                    { key: 'searchQueryPerf', label: 'Search Query Perf', priority: 'OPT', count: ad.searchQueryPerf?.length },
+                    { key: 'businessReport', label: 'Business Report', priority: 'OPT', count: ad.businessReport?.length },
+                  ];
+                  const hasR = (r) => (r.count || 0) > 0;
+                  const loaded = amzReports.filter(hasR);
+                  const hasApi = ad.source === 'amazon-ads-api' || ad._apiSpSearchTerms?.length > 0;
+                  const pct = amzReports.length > 0 ? Math.round((loaded.length / amzReports.length) * 100) : 0;
+                  const barColor = pct >= 75 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-rose-500';
+                  
+                  return (
+                    <div className="bg-slate-900/60 rounded-xl p-3 mb-4 border border-slate-700/40">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-slate-300 font-medium">Data Coverage {hasApi && <span className="text-emerald-400 ml-1">(API synced)</span>}</span>
+                        <span className="text-[10px] text-slate-500">{loaded.length}/{amzReports.length} reports · {pct}%</span>
+                      </div>
+                      <div className="w-full bg-slate-800 rounded-full h-1.5 mb-2.5">
+                        <div className={`h-1.5 rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }}/>
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
+                        {amzReports.map(r => (
+                          <div key={r.key} className={`flex items-center gap-1.5 py-0.5 ${hasR(r) ? 'text-slate-300' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-600'}`}>
+                            <span className={hasR(r) ? 'text-emerald-400' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-700'}>
+                              {hasR(r) ? '✓' : '✗'}
+                            </span>
+                            <span className="truncate">{r.label}</span>
+                            {hasR(r) && <span className="text-slate-600 ml-auto">{r.count}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+                
                 <div className="flex gap-2">
                   <button onClick={() => setShowAdsIntelUpload(true)} className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20">
                     <Upload className="w-4 h-4" />Upload Amazon PPC Data
@@ -595,15 +638,88 @@ const UploadView = ({
                   </p>
                 </div>
                 
+                {/* ── Data Status Indicator ── */}
+                {(() => {
+                  const d = dtcIntelData || {};
+                  const reports = [
+                    { key: 'googleCampaign', label: 'Google Campaigns', platform: 'google', priority: 'HIGH' },
+                    { key: 'googleSearchTerms', label: 'Google Search Terms', platform: 'google', priority: 'HIGH' },
+                    { key: 'googleKeywords', label: 'Google Keywords', platform: 'google', priority: 'MED' },
+                    { key: 'googleAdGroups', label: 'Google Ad Groups', platform: 'google', priority: 'MED' },
+                    { key: 'googleAssetGroups', label: 'Google PMax Assets', platform: 'google', priority: 'OPT' },
+                    { key: 'metaCampaign', label: 'Meta Campaigns', platform: 'meta', priority: 'HIGH' },
+                    { key: 'metaAds', label: 'Meta Ads', platform: 'meta', priority: 'HIGH' },
+                    { key: 'metaAdSets', label: 'Meta Ad Sets', platform: 'meta', priority: 'MED' },
+                    { key: 'metaPlacement', label: 'Meta Placement', platform: 'meta', priority: 'OPT' },
+                    { key: 'metaAge', label: 'Meta Age', platform: 'meta', priority: 'OPT' },
+                    { key: 'metaGender', label: 'Meta Gender', platform: 'meta', priority: 'OPT' },
+                    { key: 'amazonSearchQuery', label: 'Amazon Search Query', platform: 'amazon', priority: 'MED' },
+                    { key: 'shopifySales', label: 'Shopify Sales', platform: 'shopify', priority: 'MED' },
+                  ];
+                  const has = (k) => d[k] && (Array.isArray(d[k]) ? d[k].length > 0 : (d[k].totalTerms > 0 || d[k].records?.length > 0));
+                  const loaded = reports.filter(r => has(r.key));
+                  const missing = reports.filter(r => !has(r.key));
+                  const missingHigh = missing.filter(r => r.priority === 'HIGH');
+                  
+                  // Count daily data days with Google/Meta spend
+                  const dailyKeys = Object.keys(allDaysData || {});
+                  const gDays = dailyKeys.filter(k => (allDaysData[k]?.shopify?.googleSpend || allDaysData[k]?.googleSpend || 0) > 0).length;
+                  const mDays = dailyKeys.filter(k => (allDaysData[k]?.shopify?.metaSpend || allDaysData[k]?.metaSpend || 0) > 0).length;
+                  
+                  const total = reports.length;
+                  const pct = total > 0 ? Math.round((loaded.length / total) * 100) : 0;
+                  const barColor = pct >= 75 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-rose-500';
+                  
+                  return (
+                    <div className="bg-slate-900/60 rounded-xl p-3 mb-4 border border-slate-700/40">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-slate-300 font-medium">Data Coverage</span>
+                        <span className="text-[10px] text-slate-500">{loaded.length}/{total} reports · {pct}%</span>
+                      </div>
+                      <div className="w-full bg-slate-800 rounded-full h-1.5 mb-3">
+                        <div className={`h-1.5 rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }}/>
+                      </div>
+                      
+                      {/* Daily data status */}
+                      <div className="flex gap-2 mb-2.5 text-[11px]">
+                        <span className={`px-2 py-0.5 rounded-md ${gDays > 0 ? 'bg-blue-500/15 text-blue-300' : 'bg-slate-800 text-slate-600'}`}>
+                          {gDays > 0 ? `✓ Google: ${gDays}d` : '✗ Google daily'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-md ${mDays > 0 ? 'bg-purple-500/15 text-purple-300' : 'bg-slate-800 text-slate-600'}`}>
+                          {mDays > 0 ? `✓ Meta: ${mDays}d` : '✗ Meta daily'}
+                        </span>
+                      </div>
+                      
+                      {/* Report checklist - compact */}
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
+                        {reports.map(r => (
+                          <div key={r.key} className={`flex items-center gap-1.5 py-0.5 ${has(r.key) ? 'text-slate-300' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-600'}`}>
+                            <span className={has(r.key) ? 'text-emerald-400' : r.priority === 'HIGH' ? 'text-rose-400/70' : 'text-slate-700'}>
+                              {has(r.key) ? '✓' : '✗'}
+                            </span>
+                            <span className="truncate">{r.label}</span>
+                            {has(r.key) && Array.isArray(d[r.key]) && <span className="text-slate-600 ml-auto">{d[r.key].length}</span>}
+                          </div>
+                        ))}
+                      </div>
+                      
+                      {missingHigh.length > 0 && loaded.length > 0 && (
+                        <p className="text-[10px] text-amber-400/80 mt-2 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                          Missing HIGH priority: {missingHigh.map(r => r.label).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+                
                 <div className="flex gap-2">
                   <button onClick={() => setShowDtcIntelUpload(true)} className="flex-1 px-4 py-3 bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20">
                     <Upload className="w-4 h-4" />Upload Meta / Google Data
                   </button>
-                  {dtcIntelData?.lastUpdated && (
-                    <button onClick={() => setShowDtcIntelUpload(true)} className="px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-medium flex items-center justify-center gap-2">
-                      <Brain className="w-4 h-4" />AI Report
-                    </button>
-                  )}
+                  <button onClick={() => setShowDtcIntelUpload(true)} className={`px-4 py-3 rounded-xl text-white font-medium flex items-center justify-center gap-2 ${dtcIntelData?.lastUpdated ? 'bg-slate-700 hover:bg-slate-600' : 'bg-slate-800 text-slate-600 cursor-not-allowed'}`} disabled={!dtcIntelData?.lastUpdated} title={dtcIntelData?.lastUpdated ? 'Generate AI report from uploaded data' : 'Upload data first to enable AI Report'}>
+                    <Brain className="w-4 h-4" />AI Report
+                  </button>
                 </div>
               </div>
               
