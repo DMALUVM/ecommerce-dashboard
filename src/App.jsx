@@ -1210,6 +1210,60 @@ async function decryptCreds(userId, encObj) {
   }
 }
 
+// ── Store Credentials Table Helpers ──────────────────────────────────────
+// Credentials now live in store_credentials table, not in app_data rows
+const CRED_PROVIDERS = ['shopify', 'packiyo', 'amazon', 'qbo'];
+const CRED_PROVIDER_MAP = {
+  shopifyCredentials: 'shopify',
+  packiyoCredentials: 'packiyo',
+  amazonCredentials: 'amazon',
+  qboCredentials: 'qbo',
+};
+
+async function saveCredentialToCloud(supabase, userId, storeId, provider, credObj) {
+  if (!supabase || !userId || !storeId || !provider) return false;
+  try {
+    const encrypted = await encryptCreds(userId, credObj);
+    if (!encrypted) return false;
+    const { error } = await supabase.from('store_credentials').upsert({
+      user_id: userId,
+      store_id: storeId,
+      provider,
+      encrypted_data: encrypted,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,store_id,provider' });
+    if (error) { console.error(`[SaveCred] ${provider}:`, error.message); return false; }
+    return true;
+  } catch (e) { console.error(`[SaveCred] ${provider}:`, e.message); return false; }
+}
+
+async function loadCredentialsFromCloud(supabase, userId, storeId) {
+  if (!supabase || !userId || !storeId) return {};
+  try {
+    const { data, error } = await supabase.from('store_credentials')
+      .select('provider, encrypted_data')
+      .eq('user_id', userId)
+      .eq('store_id', storeId);
+    if (error) { console.error('[LoadCreds]', error.message); return {}; }
+    const result = {};
+    for (const row of (data || [])) {
+      const decrypted = await decryptCreds(userId, row.encrypted_data);
+      if (decrypted) result[row.provider] = decrypted;
+    }
+    return result;
+  } catch (e) { console.error('[LoadCreds]', e.message); return {}; }
+}
+
+async function deleteCredentialsForStore(supabase, userId, storeId) {
+  if (!supabase || !userId || !storeId) return;
+  try {
+    await supabase.from('store_credentials')
+      .delete()
+      .eq('user_id', userId)
+      .eq('store_id', storeId);
+  } catch (e) { console.error('[DeleteCreds]', e.message); }
+}
+
 export default function Dashboard() {
   const [view, setView] = useState('dashboard'); // Start with dashboard
   const [weekEnding, setWeekEnding] = useState('');
@@ -4056,15 +4110,8 @@ const combinedData = useMemo(() => ({
   bankingData,
   // Recurring expenses
   confirmedRecurring,
-  // Shopify Integration credentials
-  shopifyCredentials,
-  // Packiyo 3PL Integration credentials
-  packiyoCredentials,
-  // Amazon SP-API Integration credentials
-  amazonCredentials,
-  // QuickBooks Online Integration credentials
-  qboCredentials,
-}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials]);
+  // Note: API credentials now stored in separate store_credentials table, not in app_data
+}), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring]);
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -4446,49 +4493,19 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   if (cloudDataObj.adsIntelData) cloudDataObj.adsIntelData = trimIntelData(cloudDataObj.adsIntelData, 150);
   if (cloudDataObj.dtcIntelData) cloudDataObj.dtcIntelData = trimIntelData(cloudDataObj.dtcIntelData, 150);
   
-  // SEC-003v2: Encrypt integration credentials before cloud save
-  // Credentials are AES-GCM encrypted with user's ID — readable only by the same user
+  // Credentials now stored in separate store_credentials table
+  // Save each credential to its own row, then strip from app_data payload
   const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials'];
-  if (session?.user?.id) {
+  if (session?.user?.id && activeStoreId) {
     for (const key of CREDENTIAL_KEYS) {
-      if (cloudDataObj[key]) {
-        const cred = cloudDataObj[key];
-        // Only encrypt if there are actual secrets to protect
+      const cred = cloudDataObj[key];
+      if (cred) {
+        const provider = CRED_PROVIDER_MAP[key];
         const hasSecrets = cred.clientSecret || cred.apiKey || cred.refreshToken || cred.accessToken || cred.adsRefreshToken || cred.adsClientSecret;
-        if (hasSecrets) {
-          const encrypted = await encryptCreds(session.user.id, cred);
-          if (encrypted) {
-            cloudDataObj[key] = encrypted;
-          } else {
-            // Fallback: strip secrets if encryption fails
-            cloudDataObj[key] = {
-              connected: cred.connected || false,
-              lastSync: cred.lastSync || null,
-              ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
-              ...(cred.realmId && { realmId: cred.realmId }),
-              ...(cred.customerId && { customerId: cred.customerId }),
-              ...(cred.sellerId && { sellerId: cred.sellerId }),
-              ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
-              ...(cred.adsConnected !== undefined && { adsConnected: cred.adsConnected }),
-              ...(cred.adsLastSync && { adsLastSync: cred.adsLastSync }),
-              ...(cred.adsProfileId && { adsProfileId: cred.adsProfileId }),
-            };
-          }
-        } else {
-          // No secrets — save metadata as-is (e.g. connected: false state)
-          cloudDataObj[key] = {
-            connected: cred.connected || false,
-            lastSync: cred.lastSync || null,
-            ...(cred.storeUrl && { storeUrl: cred.storeUrl }),
-            ...(cred.realmId && { realmId: cred.realmId }),
-            ...(cred.customerId && { customerId: cred.customerId }),
-            ...(cred.sellerId && { sellerId: cred.sellerId }),
-            ...(cred.marketplaceId && { marketplaceId: cred.marketplaceId }),
-            ...(cred.adsConnected !== undefined && { adsConnected: cred.adsConnected }),
-            ...(cred.adsLastSync && { adsLastSync: cred.adsLastSync }),
-            ...(cred.adsProfileId && { adsProfileId: cred.adsProfileId }),
-          };
+        if (hasSecrets && provider) {
+          saveCredentialToCloud(supabase, session.user.id, activeStoreId, provider, cred);
         }
+        delete cloudDataObj[key]; // Never store credentials in app_data
       }
     }
   }
@@ -4571,7 +4588,7 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, shopifyCredentials, packiyoCredentials, amazonCredentials, qboCredentials, leadTimeSettings, appSettings, widgetConfig, salesTaxConfig, storeName, forecastCorrections]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, leadTimeSettings, appSettings, widgetConfig, salesTaxConfig, storeName, forecastCorrections]);
 
 // ── Process ads file uploads (Tier 1 daily KPIs + Tier 2 deep analysis) ──
 const processAdsUpload = useCallback(async (fileList) => {
@@ -4593,7 +4610,7 @@ const processAdsUpload = useCallback(async (fileList) => {
   return result;
 }, [queueCloudSave]);
 
-// Persist Shopify credentials to localStorage for offline backup
+// Persist Shopify credentials to localStorage + store_credentials table
 useEffect(() => {
   if (shopifyCredentials.storeUrl || shopifyCredentials.connected) {
     try {
@@ -4602,45 +4619,54 @@ useEffect(() => {
         return;
       }
       lsSet('ecommerce_shopify_creds_v1', JSON.stringify(shopifyCredentials));
+      if (session?.user?.id && activeStoreId && !isLoadingDataRef.current) {
+        saveCredentialToCloud(supabase, session.user.id, activeStoreId, 'shopify', shopifyCredentials);
+      }
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [shopifyCredentials]);
 
-// Persist Packiyo credentials to localStorage for offline backup
+// Persist Packiyo credentials to localStorage + store_credentials table
 useEffect(() => {
   if (packiyoCredentials.apiKey || packiyoCredentials.connected) {
     try {
-      // SEC-003 guard: Don't save stripped credentials
       if (packiyoCredentials.connected && !packiyoCredentials.apiKey) {
         return;
       }
       lsSet('ecommerce_packiyo_creds_v1', JSON.stringify(packiyoCredentials));
+      if (session?.user?.id && activeStoreId && !isLoadingDataRef.current) {
+        saveCredentialToCloud(supabase, session.user.id, activeStoreId, 'packiyo', packiyoCredentials);
+      }
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [packiyoCredentials]);
 
-// Persist Amazon credentials to localStorage for offline backup
+// Persist Amazon credentials to localStorage + store_credentials table
 useEffect(() => {
   if (amazonCredentials.refreshToken || amazonCredentials.connected || amazonCredentials.adsRefreshToken || amazonCredentials.adsConnected) {
     try {
-      // SEC-003 guard: Never save stripped credentials back to localStorage
       if (amazonCredentials.connected && !amazonCredentials.refreshToken && !amazonCredentials.clientId) {
-        if (!amazonCredentials.adsRefreshToken) return; // Skip — would overwrite real credentials with stripped data
+        if (!amazonCredentials.adsRefreshToken) return;
       }
       lsSet('ecommerce_amazon_creds_v1', JSON.stringify(amazonCredentials));
+      if (session?.user?.id && activeStoreId && !isLoadingDataRef.current) {
+        saveCredentialToCloud(supabase, session.user.id, activeStoreId, 'amazon', amazonCredentials);
+      }
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [amazonCredentials]);
 
-// Persist QBO credentials to localStorage for offline backup
+// Persist QBO credentials to localStorage + store_credentials table
 useEffect(() => {
   if (qboCredentials.accessToken || qboCredentials.connected || qboCredentials.clientId) {
     try {
-      // SEC-003 guard: Don't save stripped credentials
       if (qboCredentials.connected && !qboCredentials.accessToken && !qboCredentials.clientId) {
         return;
       }
       lsSet('ecommerce_qbo_creds_v1', JSON.stringify(qboCredentials));
+      if (session?.user?.id && activeStoreId && !isLoadingDataRef.current) {
+        saveCredentialToCloud(supabase, session.user.id, activeStoreId, 'qbo', qboCredentials);
+      }
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [qboCredentials]);
@@ -4922,41 +4948,57 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages) setAiMessages(cloud.aiMessages);
     if (cloud.bankingData) setBankingData(cloud.bankingData);
     if (cloud.confirmedRecurring) setConfirmedRecurring(cloud.confirmedRecurring);
-    // Load credentials from cloud - SEC-003: cloud saves no longer contain secrets
-    // SEC-003v2: Decrypt integration credentials from cloud
-    // If encrypted, decrypt full credentials and restore to state + localStorage
-    const CRED_RESTORE_MAP = [
-      { key: 'shopifyCredentials', setter: setShopifyCredentials, lsKey: 'ecommerce_shopify_creds_v1' },
-      { key: 'packiyoCredentials', setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1' },
-      { key: 'amazonCredentials', setter: setAmazonCredentials, lsKey: 'ecommerce_amazon_creds_v1' },
-      { key: 'qboCredentials', setter: setQboCredentials, lsKey: 'ecommerce_qbo_creds_v1' },
-    ];
-    for (const { key, setter, lsKey } of CRED_RESTORE_MAP) {
-      const cloudCred = cloud[key];
-      if (!cloudCred) continue;
-      if (cloudCred._encrypted && session?.user?.id) {
-        // Decrypt full credentials from cloud
-        const decrypted = await decryptCreds(session.user.id, cloudCred);
-        if (decrypted) {
-          setter(prev => ({ ...prev, ...decrypted }));
-          try { lsSet(lsKey, JSON.stringify(decrypted)); } catch (e) {}
-          continue;
+    
+    // Load credentials from store_credentials table (separate from app_data)
+    const loadedStoreId = storeId || activeStoreId || 'default';
+    const CRED_SETTER_MAP = {
+      shopify: { setter: setShopifyCredentials, lsKey: 'ecommerce_shopify_creds_v1', stateKey: 'shopifyCredentials' },
+      packiyo: { setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1', stateKey: 'packiyoCredentials' },
+      amazon: { setter: setAmazonCredentials, lsKey: 'ecommerce_amazon_creds_v1', stateKey: 'amazonCredentials' },
+      qbo: { setter: setQboCredentials, lsKey: 'ecommerce_qbo_creds_v1', stateKey: 'qboCredentials' },
+    };
+    const storeCreds = await loadCredentialsFromCloud(supabase, session.user.id, loadedStoreId);
+    let migratedFromAppData = false;
+    if (Object.keys(storeCreds).length > 0) {
+      // Credentials found in new table — apply them
+      for (const [provider, cred] of Object.entries(storeCreds)) {
+        const mapping = CRED_SETTER_MAP[provider];
+        if (mapping && cred) {
+          mapping.setter(cred);
+          try { lsSet(mapping.lsKey, JSON.stringify(cred)); } catch (e) {}
         }
       }
-      // Fallback: merge metadata only (old stripped format or decryption failed)
-      if (cloudCred.connected) {
-        setter(prev => ({
-          ...prev,
-          connected: cloudCred.connected,
-          lastSync: cloudCred.lastSync || prev.lastSync,
-          ...(cloudCred.storeUrl && { storeUrl: cloudCred.storeUrl }),
-          ...(cloudCred.sellerId && { sellerId: cloudCred.sellerId }),
-          ...(cloudCred.marketplaceId && { marketplaceId: cloudCred.marketplaceId }),
-          ...(cloudCred.realmId && { realmId: cloudCred.realmId }),
-          ...(cloudCred.adsConnected !== undefined && { adsConnected: cloudCred.adsConnected }),
-          ...(cloudCred.adsLastSync && { adsLastSync: cloudCred.adsLastSync }),
-          ...(cloudCred.adsProfileId && { adsProfileId: cloudCred.adsProfileId }),
-        }));
+    } else {
+      // One-time migration: check if credentials exist in app_data row (old format)
+      const OLD_CRED_KEYS = [
+        { key: 'shopifyCredentials', provider: 'shopify' },
+        { key: 'packiyoCredentials', provider: 'packiyo' },
+        { key: 'amazonCredentials', provider: 'amazon' },
+        { key: 'qboCredentials', provider: 'qbo' },
+      ];
+      for (const { key, provider } of OLD_CRED_KEYS) {
+        const oldCred = cloud[key];
+        if (!oldCred) continue;
+        let credToMigrate = oldCred;
+        // Decrypt if encrypted
+        if (oldCred._encrypted && session?.user?.id) {
+          const decrypted = await decryptCreds(session.user.id, oldCred);
+          if (decrypted) credToMigrate = decrypted;
+          else continue;
+        }
+        if (credToMigrate.connected || credToMigrate.clientSecret || credToMigrate.apiKey || credToMigrate.refreshToken || credToMigrate.accessToken) {
+          const mapping = CRED_SETTER_MAP[provider];
+          if (mapping) {
+            mapping.setter(credToMigrate);
+            try { lsSet(mapping.lsKey, JSON.stringify(credToMigrate)); } catch (e) {}
+          }
+          // Save to new table
+          await saveCredentialToCloud(supabase, session.user.id, loadedStoreId, provider, credToMigrate);
+          migratedFromAppData = true;
+        }
+      }
+      if (migratedFromAppData) {
+        console.log('[CredMigration] Migrated credentials from app_data to store_credentials table');
       }
     }
 
@@ -4994,29 +5036,8 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (cloud.aiMessages && cloud.aiMessages.length > 0) writeToLocal('ecommerce_ai_chat_history_v1', JSON.stringify(cloud.aiMessages));
     if (cloud.bankingData) writeToLocal('ecommerce_banking_v1', JSON.stringify(cloud.bankingData));
     if (cloud.confirmedRecurring) writeToLocal('ecommerce_recurring_v1', JSON.stringify(cloud.confirmedRecurring));
-    // SEC-003v2: Decrypt credentials on fresh device and write to localStorage
-    const CRED_FRESH_MAP = [
-      { key: 'shopifyCredentials', lsKey: 'ecommerce_shopify_creds_v1' },
-      { key: 'packiyoCredentials', lsKey: 'ecommerce_packiyo_creds_v1' },
-      { key: 'amazonCredentials', lsKey: 'ecommerce_amazon_creds_v1' },
-      { key: 'qboCredentials', lsKey: 'ecommerce_qbo_creds_v1' },
-    ];
-    for (const { key, lsKey } of CRED_FRESH_MAP) {
-      const cloudCred = cloud[key];
-      if (!cloudCred) continue;
-      if (cloudCred._encrypted && session?.user?.id) {
-        const decrypted = await decryptCreds(session.user.id, cloudCred);
-        if (decrypted) {
-          writeToLocal(lsKey, JSON.stringify(decrypted));
-          continue;
-        }
-      }
-      // Fallback: old stripped format — write metadata only
-      if (cloudCred.connected) {
-        const local = JSON.parse(lsGet(lsKey) || '{}');
-        writeToLocal(lsKey, JSON.stringify({ ...local, connected: cloudCred.connected, lastSync: cloudCred.lastSync }));
-      }
-    }
+    // Credentials are now loaded from store_credentials table above
+    // No need for CRED_FRESH_MAP — localStorage is populated during credential restore
 
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
@@ -5092,12 +5113,7 @@ const createStore = useCallback(async (name) => {
       categoryOverrides: {},
       settings: {},
     },
-    // Shopify credentials for new store
-    shopifyCredentials: { storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null },
-    // Packiyo 3PL credentials for new store
-    packiyoCredentials: { apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' },
-    // Amazon SP-API credentials for new store
-    amazonCredentials: { clientId: '', clientSecret: '', refreshToken: '', sellerId: '', marketplaceId: 'ATVPDKIKX0DER', connected: false, lastSync: null, adsClientId: '', adsClientSecret: '', adsRefreshToken: '', adsProfileId: '', adsConnected: false, adsLastSync: null },
+    // Note: API credentials stored in store_credentials table, not here
   };
   
   // Save per-store row + meta row (no nested blob)
@@ -5257,6 +5273,9 @@ const deleteStore = useCallback(async (storeId) => {
         .delete()
         .eq('user_id', session.user.id)
         .eq('store_id', storeId);
+      
+      // Delete the store's credentials
+      await deleteCredentialsForStore(supabase, session.user.id, storeId);
       
       // Update meta row
       await saveMetaToCloud(updatedStores, newActiveId);
