@@ -623,7 +623,10 @@ export default async function handler(req, res) {
       const daysBack = Math.min(parseInt(req.body.daysBack) || 7, 30);
       const existingReportId = req.body.reportId; // For 2-step polling
       
-      const endDateObj = endDate ? new Date(endDate) : new Date();
+      // Amazon day finalizes at 3AM EST (midnight PST). Today's data is always partial.
+      // Default to yesterday so we only sync complete days.
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const endDateObj = endDate ? new Date(endDate) : yesterday;
       const startDateObj = startDate ? new Date(startDate) : new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
       
       console.log('[Sales] Report range:', startDateObj.toISOString().split('T')[0], 'to', endDateObj.toISOString().split('T')[0]);
