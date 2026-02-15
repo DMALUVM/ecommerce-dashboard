@@ -307,9 +307,9 @@ const YoYView = ({
             <p className="text-slate-400">{previousYear && currentYear ? `Comparing ${currentYear} vs ${previousYear}` : (currentYear ? `${currentYear} data (add previous year data to compare)` : 'No data available - upload periods labeled as years (e.g., "2024", "2025")')}</p>
             {hasMonthlyData && (
               <p className="text-slate-500 text-xs mt-2">
-                {Object.keys(currentMonths).length > 0 && `${currentYear}: ${Object.keys(currentMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
+                {Object.keys(currentMonths).length > 0 && `${currentYear}: ${Object.keys(currentMonths).sort((a,b) => parseInt(a)-parseInt(b)).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
                 {Object.keys(currentMonths).length > 0 && Object.keys(previousMonths).length > 0 && ' • '}
-                {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
+                {Object.keys(previousMonths).length > 0 && `${previousYear}: ${Object.keys(previousMonths).sort((a,b) => parseInt(a)-parseInt(b)).map(m => monthNames[parseInt(m)-1]).join(', ')}`}
               </p>
             )}
           </div>
@@ -355,7 +355,7 @@ const YoYView = ({
                   </p>
                 </div>
               </div>
-              <p className="text-slate-500 text-sm mt-3">{currentYearData.source === 'period' ? currentYearData.label : `${currentYearData.weeks} weeks of data`}</p>
+              <p className="text-slate-500 text-sm mt-3">{currentYearData.source === 'period' ? currentYearData.label : currentYearData.source === 'daily' ? currentYearData.label : `${currentYearData.weeks} weeks of data`}</p>
             </div>
             
             {/* Previous Year */}
@@ -391,7 +391,7 @@ const YoYView = ({
                     </p>
                   </div>
                 </div>
-                <p className="text-slate-500 text-sm mt-3">{previousYearComparable ? `${previousYearComparable.months} months (YTD comparable)` : `${previousYearData.weeks} weeks of data`}</p>
+                <p className="text-slate-500 text-sm mt-3">{previousYearComparable ? `${previousYearComparable.months} months (YTD comparable)` : previousYearData.source === 'daily' ? previousYearData.label : `${previousYearData.weeks} weeks of data`}</p>
               </div>
             ) : (
               <div className="bg-slate-800/30 rounded-xl border border-dashed border-slate-600 p-5 flex items-center justify-center">
