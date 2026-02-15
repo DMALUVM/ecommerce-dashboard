@@ -4785,6 +4785,18 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
     
     // Now apply the new store's data (overwriting the cleared defaults)
+    // Also clear localStorage to prevent stale data from previous store
+    try {
+      const lsKeysToClear = [
+        'ecommerce_ads_intel_v1', 'ecommerce_dtc_intel_v1',
+        'ecommerce_amazon_campaigns_v1', 'ecommerce_ai_chat_history_v1',
+        'ecommerce_return_rates_v1', 'ecommerce_ai_forecasts_v1',
+        'ecommerce_ai_learning_v1', 'ecommerce_unified_ai_v1',
+        'ecommerce_production_v1', 'ecommerce_banking_v1',
+        'ecommerce_recurring_v1', 'ecommerce_widget_config_v1',
+      ];
+      lsKeysToClear.forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
+    } catch (e) {}
     setAllWeeksData(cloud.sales || {});
     // Sanitize cloud daily data — remove invalid date keys (Excel serial numbers)
     const cloudDaily = cloud.dailySales || {};

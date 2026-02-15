@@ -108,17 +108,17 @@ const DashboardView = ({
     // Inventory alerts are handled by NotificationCenter with proper logic
     
     // Check upcoming invoices/bills
-    const upcomingBills = invoices.filter(i => !i.paid);
+    const upcomingBills = invoices.filter(i => i.status !== 'paid' && !i.paid);
     const overdueBills = upcomingBills.filter(i => new Date(i.dueDate) < new Date());
     const dueSoonBills = upcomingBills.filter(i => {
       const daysUntil = Math.ceil((new Date(i.dueDate) - new Date()) / (1000 * 60 * 60 * 24));
       return daysUntil >= 0 && daysUntil <= 7;
     });
     if (overdueBills.length > 0) {
-      const total = overdueBills.reduce((s, i) => s + i.amount, 0);
+      const total = overdueBills.reduce((s, i) => s + (i.total || i.amount || 0), 0);
       alerts.push({ type: 'critical', text: `${overdueBills.length} overdue bills totaling ${formatCurrency(total)}`, link: 'invoices' });
     } else if (dueSoonBills.length > 0) {
-      const total = dueSoonBills.reduce((s, i) => s + i.amount, 0);
+      const total = dueSoonBills.reduce((s, i) => s + (i.total || i.amount || 0), 0);
       alerts.push({ type: 'warning', text: `${dueSoonBills.length} bills due within 7 days (${formatCurrency(total)})`, link: 'invoices' });
     }
     
@@ -557,7 +557,11 @@ const DashboardView = ({
       const newWidgets = widgets.map(w => 
         w.id === widgetId ? { ...w, enabled: false } : { ...w }
       );
-      setWidgetConfig({ widgets: newWidgets, layout: 'auto' });
+      const newConfig = { widgets: newWidgets, layout: 'auto' };
+      setWidgetConfig(newConfig);
+      // Persist immediately
+      try { localStorage.setItem('ecommerce_widget_config_v1', JSON.stringify(newConfig)); } catch (e) {}
+      if (setToast) setToast({ message: 'Card hidden — restore in Customize', type: 'info' });
     };
     
     // Dashboard drag handlers with stacking support

@@ -781,7 +781,7 @@ const ProfitabilityView = ({
               </div>
               <div className="h-48 flex items-end gap-2">
                 {marginTrends.map((t, i) => {
-                  const maxMargin = Math.max(...marginTrends.map(m => Math.abs(m.margin)), 50);
+                  const maxMargin = Math.max(...marginTrends.map(m => Math.abs(m.margin)), 1) * 1.15;
                   const height = Math.abs(t.margin) / maxMargin * 100;
                   const isPositive = t.margin >= 0;
                   const isLast = i === marginTrends.length - 1;
