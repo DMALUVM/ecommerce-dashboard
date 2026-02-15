@@ -4746,6 +4746,45 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Apply cloud data to state
     isLoadingDataRef.current = true;
     
+    // CRITICAL: Reset ALL store-specific state before applying new store's data
+    // Without this, switching stores leaves stale data from previous store
+    setAllWeeksData({});
+    setAllDaysData({});
+    setInvHistory({});
+    setAllPeriodsData({});
+    setSavedCogs({});
+    setCogsLastUpdated(null);
+    setStoreName('');
+    setStoreLogo('');
+    setInvoices([]);
+    setAmazonForecasts({});
+    setForecastMeta({ lastUploads: {}, history: [] });
+    setWeekNotes({});
+    setGoals({ weeklyRevenue: 0, monthlyRevenue: 0, weeklyProfit: 0, monthlyProfit: 0 });
+    setSavedProductNames({});
+    setProductionPipeline([]);
+    setThreeplLedger({ orders: [], importedFiles: [], summaryCharges: {} });
+    setAmazonCampaigns({ campaigns: [], history: [], lastUpdated: null });
+    setAdsIntelData({});
+    setDtcIntelData({});
+    setReportHistory({});
+    setActionItems({});
+    setForecastAccuracyHistory({ records: [], lastUpdated: null, modelVersion: '1.0' });
+    setForecastCorrections({ overall: { revenue: 1, units: 1, profit: 1 }, bySku: {}, byMonth: {}, byQuarter: {}, confidence: 0, samplesUsed: 0 });
+    setReturnRates({});
+    setAiForecasts({});
+    setLeadTimeSettings({});
+    setAiForecastModule(null);
+    setAiLearningHistory({ predictions: [], modelUpdates: [] });
+    setUnifiedAIModel(null);
+    setWeeklyReports({});
+    setAiMessages([]);
+    setBankingData({ transactions: [], accounts: {}, categories: {}, monthlySnapshots: {} });
+    setConfirmedRecurring([]);
+    setWidgetConfig({});
+    setSalesTaxConfig({ nexusStates: {}, filingHistory: {}, hiddenStates: [] });
+    
+    // Now apply the new store's data (overwriting the cleared defaults)
     setAllWeeksData(cloud.sales || {});
     // Sanitize cloud daily data — remove invalid date keys (Excel serial numbers)
     const cloudDaily = cloud.dailySales || {};
