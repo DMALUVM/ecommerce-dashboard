@@ -11647,7 +11647,7 @@ const savePeriods = async (d) => {
               
               let adsData = null;
               let adsRetries = 0;
-              const maxAdsRetries = 3;
+              const maxAdsRetries = 6;
               
               while (adsRetries < maxAdsRetries) {
                 const adsRes = await fetch('/api/amazon/ads-sync', {
@@ -11658,10 +11658,10 @@ const savePeriods = async (d) => {
                 adsData = await adsRes.json();
                 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  console.log(`[AutoSync] Amazon Ads reports pending, retry ${adsRetries + 1}/${maxAdsRetries}...`);
+                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 20s...`);
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
-                  await new Promise(r => setTimeout(r, 10000));
+                  await new Promise(r => setTimeout(r, 20000));
                   continue;
                 }
                 break;
