@@ -187,7 +187,14 @@ const DashboardView = ({
     const currentYear = today.getFullYear();
     
     const recentWeeks = Object.entries(allWeeksData)
-      .filter(([key]) => key.startsWith(`${currentYear}-`) && key <= todayKey) // Only PAST weeks in current year
+      .filter(([key]) => {
+        if (!key.startsWith(`${currentYear}-`) || key > todayKey) return false;
+        // 3PL/Ads data arrives Tuesday after the week ends.
+        // Don't alert until 3 days after week-end date (Tuesday buffer).
+        const weekEnd = new Date(key + 'T12:00:00');
+        const daysSinceWeekEnd = Math.floor((today - weekEnd) / (24 * 60 * 60 * 1000));
+        return daysSinceWeekEnd >= 3;
+      })
       .sort((a, b) => b[0].localeCompare(a[0]))
       .slice(0, 4); // Last 4 past weeks of current year
     
