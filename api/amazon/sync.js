@@ -686,12 +686,12 @@ export default async function handler(req, res) {
 
           const qty = parseInt(row.quantity || row.item_quantity || 1) || 1;
           const price = parseFloat(row.item_price || row.price || 0) || 0;
-          // Capture additional revenue components the orders report includes but we previously ignored
+          // Also capture shipping and gift-wrap if present (some report variants include these)
           const shipping = parseFloat(row.shipping_price || row.shipping_amount || 0) || 0;
           const giftWrap = parseFloat(row.gift_wrap_price || 0) || 0;
-          const promoDiscount = parseFloat(row.item_promotion_discount || row.promotion_discount || 0) || 0;
-          // Total line item revenue: item price + shipping + gift wrap - promo discounts
-          const lineTotal = price + shipping + giftWrap - Math.abs(promoDiscount);
+          // Use item_price as floor — additional components can only add to it, never reduce it
+          // (promotion discounts are excluded since they'd make the total less accurate vs Seller Central)
+          const lineTotal = price + shipping + giftWrap;
           const status = (row.order_status || row.item_status || '').toLowerCase();
 
           // Skip cancelled orders

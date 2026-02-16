@@ -12046,9 +12046,6 @@ const savePeriods = async (d) => {
                   });
                   
                   console.log(`[AutoSync] Amazon Ads: ${adsDaysUpdated} days updated, $${adsData.summary?.totalSpend?.toFixed(2)} total spend, ${adsData.summary?.skuCount || 0} SKUs`);
-                  // DIAGNOSTIC: Log per-day spend from API response (remove after debugging)
-                  const apiDailySpend = Object.entries(adsData.dailyData).sort(([a],[b]) => a.localeCompare(b)).slice(-14).map(([d, v]) => `${d}:$${(v.spend || 0).toFixed(0)}`);
-                  console.log(`[AutoSync DIAG] API daily spend (last 14d):`, apiDailySpend.join(', '));
                   try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
                   return updated;
                 });

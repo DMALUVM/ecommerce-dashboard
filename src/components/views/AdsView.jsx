@@ -332,7 +332,7 @@ const AdsView = ({
           const cm = {};
           rows.forEach(r => {
             const n = r['Campaign Name'] || r['campaignName'] || ''; if (!n) return;
-            if (!cm[n]) cm[n] = { name: n, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
+            if (!cm[n]) cm[n] = { name: n, type: r['Campaign Type'] || r['campaignType'] || r['type'] || 'SP', spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 };
             cm[n].spend += Number(r['Spend'] || r['cost'] || r['spend'] || 0);
             cm[n].sales += Number(r['Sales'] || r['7 Day Total Sales'] || r['sales'] || r['sales7d'] || 0);
             cm[n].clicks += Number(r['Clicks'] || r['clicks'] || 0);
@@ -405,13 +405,13 @@ const AdsView = ({
     const gDays = sortedDays.filter(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? 0) > 0).length;
     const hasGoogleCamp = adsIntelData?.google && Object.keys(adsIntelData.google).some(k => adsIntelData.google[k]?.records?.length > 0);
     checks.push({ platform: 'Google', type: 'Daily Spend', status: gDays >= 7 ? 'complete' : gDays > 0 ? 'partial' : 'missing', detail: gDays > 0 ? `${gDays}d tracked` : 'No Google data', weight: 10 });
-    checks.push({ platform: 'Google', type: 'Campaign Details', status: hasGoogleCamp ? 'complete' : (gDays > 0 ? 'missing' : 'missing'), detail: hasGoogleCamp ? `${Object.values(adsIntelData.google).reduce((s, d) => s + (d?.records?.length || 0), 0)} rows` : (gDays > 0 ? 'Upload Google Ads CSV' : 'N/A'), weight: 15 });
+    checks.push({ platform: 'Google', type: 'Campaign Details', status: hasGoogleCamp ? 'complete' : 'missing', detail: hasGoogleCamp ? `${Object.values(adsIntelData.google).reduce((s, d) => s + (d?.records?.length || 0), 0)} rows` : (gDays > 0 ? 'Upload Google Ads CSV' : 'N/A'), weight: 15 });
 
     // Meta checks
     const mDays = sortedDays.filter(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? 0) > 0).length;
     const hasMetaCamp = adsIntelData?.meta && Object.keys(adsIntelData.meta).some(k => adsIntelData.meta[k]?.records?.length > 0);
     checks.push({ platform: 'Meta', type: 'Daily Spend', status: mDays >= 7 ? 'complete' : mDays > 0 ? 'partial' : 'missing', detail: mDays > 0 ? `${mDays}d tracked` : 'No Meta data', weight: 10 });
-    checks.push({ platform: 'Meta', type: 'Campaign/Creative', status: hasMetaCamp ? 'complete' : (mDays > 0 ? 'missing' : 'missing'), detail: hasMetaCamp ? `${Object.values(adsIntelData.meta).reduce((s, d) => s + (d?.records?.length || 0), 0)} rows` : (mDays > 0 ? 'Upload Meta Ads CSV' : 'N/A'), weight: 15 });
+    checks.push({ platform: 'Meta', type: 'Campaign/Creative', status: hasMetaCamp ? 'complete' : 'missing', detail: hasMetaCamp ? `${Object.values(adsIntelData.meta).reduce((s, d) => s + (d?.records?.length || 0), 0)} rows` : (mDays > 0 ? 'Upload Meta Ads CSV' : 'N/A'), weight: 15 });
 
     // Score
     const maxScore = checks.reduce((s, c) => s + c.weight, 0);
@@ -883,7 +883,7 @@ const AdsView = ({
                         <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-rose-500'}`}/>
                           <span className="text-white flex-1 truncate">{c.name}</span>
-                          <span className="text-slate-500 w-8 text-right">{c.type}</span>
+                          <span className="text-slate-500 w-8 text-right">{c.type || 'SP'}</span>
                           <span className="text-slate-300 w-16 text-right">{formatCurrency(c.spend)}</span>
                           <span className={`font-semibold w-12 text-right ${roasColor(c.roas)}`}>{c.roas > 0 ? c.roas.toFixed(1) + 'x' : '—'}</span>
                         </div>
@@ -1266,7 +1266,7 @@ const AdsView = ({
             <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-slate-400 font-medium text-xs flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/>History ({adsAiReportHistory.length})</h3>
-                <button onClick={() => { if (window.confirm('Clear report history?')) setAdsAiReportHistory([]); }} className="text-[10px] text-slate-600 hover:text-rose-400">Clear</button>
+                <button onClick={() => setAdsAiReportHistory([])} className="text-[10px] text-slate-600 hover:text-rose-400">Clear</button>
               </div>
               <div className="space-y-1">
                 {adsAiReportHistory.slice(-5).reverse().map((r, i) => (
