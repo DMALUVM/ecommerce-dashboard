@@ -664,6 +664,15 @@ export default async function handler(req, res) {
         if (lines.length < 2) return [];
 
         const headers = lines[0].split('\t').map(h => h.trim().toLowerCase().replace(/[- ]/g, '_'));
+        // Log available columns so we can verify which revenue fields exist
+        const revenueFields = headers.filter(h => /price|shipping|tax|gift|promo|discount|amount/.test(h));
+        console.log('[Sales] Report columns:', headers.length, 'total. Revenue-related:', revenueFields.join(', ') || 'NONE');
+        if (lines.length > 1) {
+          const sampleRow = {};
+          const vals = lines[1].split('\t');
+          headers.forEach((h, i) => { sampleRow[h] = vals[i]?.trim() || ''; });
+          console.log('[Sales] Sample row prices:', JSON.stringify({ item_price: sampleRow.item_price, shipping_price: sampleRow.shipping_price, gift_wrap_price: sampleRow.gift_wrap_price, item_promotion_discount: sampleRow.item_promotion_discount, quantity: sampleRow.quantity }));
+        }
         return lines.slice(1).map(line => {
           const values = line.split('\t');
           const row = {};
@@ -904,7 +913,11 @@ export default async function handler(req, res) {
       const [ordersCreate, stCreate] = await Promise.all([
         spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', ordersReportSpec),
         spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', salesTrafficSpec)
-          .catch(err => { console.warn('[Sales] S&T report request failed (non-fatal):', err.message); return null; }),
+          .catch(err => {
+            const is403 = err.message?.includes('403');
+            console.warn(`[Sales] S&T report unavailable${is403 ? ' (SP-API app needs Analytics role — add in Seller Central > Develop Apps)' : ''}: ${err.message?.slice(0, 100)}`);
+            return null;
+          }),
       ]);
       const newReportId = ordersCreate.reportId;
       const stReportId = stCreate?.reportId || null;
