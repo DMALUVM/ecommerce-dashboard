@@ -615,14 +615,17 @@ export default async function handler(req, res) {
   }
 
   // ============ SALES SYNC (Reports API - bulk SKU-level daily) ============
-  // Uses GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL for efficient bulk fetch
-  // Single report request → poll → download TSV → parse (no per-order API calls)
-  // This data is LOWER priority than SKU Economics reports
+  // Two-report strategy for accurate revenue:
+  //   1. GET_SALES_AND_TRAFFIC_REPORT (JSON) → authoritative daily totals matching Seller Central
+  //   2. GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL (TSV) → SKU-level breakdown
+  // The orders report only has item_price (misses shipping/gift-wrap/promotions),
+  // so we use Sales & Traffic for the real daily total and orders report for SKU detail.
+  // This data is LOWER priority than SKU Economics reports.
   if (syncType === 'sales') {
     try {
       const daysBack = Math.min(parseInt(req.body.daysBack) || 7, 30);
       const existingReportId = req.body.reportId; // For 2-step polling
-      
+
       // Amazon day finalizes at 3AM EST (midnight PST). Today's data is always partial.
       // Default to yesterday so we only sync complete days.
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -673,6 +676,12 @@ export default async function handler(req, res) {
 
           const qty = parseInt(row.quantity || row.item_quantity || 1) || 1;
           const price = parseFloat(row.item_price || row.price || 0) || 0;
+          // Capture additional revenue components the orders report includes but we previously ignored
+          const shipping = parseFloat(row.shipping_price || row.shipping_amount || 0) || 0;
+          const giftWrap = parseFloat(row.gift_wrap_price || 0) || 0;
+          const promoDiscount = parseFloat(row.item_promotion_discount || row.promotion_discount || 0) || 0;
+          // Total line item revenue: item price + shipping + gift wrap - promo discounts
+          const lineTotal = price + shipping + giftWrap - Math.abs(promoDiscount);
           const status = (row.order_status || row.item_status || '').toLowerCase();
 
           // Skip cancelled orders
@@ -697,9 +706,9 @@ export default async function handler(req, res) {
           }
 
           dailySales[orderDate].skuData[sku].unitsSold += qty;
-          dailySales[orderDate].skuData[sku].netSales += price;
+          dailySales[orderDate].skuData[sku].netSales += lineTotal;
           dailySales[orderDate].totalUnits += qty;
-          dailySales[orderDate].totalRevenue += price;
+          dailySales[orderDate].totalRevenue += lineTotal;
           totalOrders++;
         });
 
@@ -726,6 +735,115 @@ export default async function handler(req, res) {
         return { dailyResults, totalOrders };
       };
 
+      // Helper: Fetch Sales & Traffic report for authoritative daily totals
+      // This gives the exact orderedProductSales that matches Seller Central
+      const fetchSalesAndTraffic = async (start, end) => {
+        try {
+          // GET_SALES_AND_TRAFFIC_REPORT uses a specific JSON format
+          const stReportSpec = {
+            reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
+            marketplaceIds: [marketplaceId],
+            dataStartTime: start.toISOString(),
+            dataEndTime: end.toISOString(),
+            reportOptions: { dateGranularity: 'DAY', asinGranularity: 'SKU' },
+          };
+
+          console.log('[Sales] Also requesting Sales & Traffic report for accurate totals...');
+          const stCreate = await spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', stReportSpec);
+          const stReportId = stCreate.reportId;
+
+          // Poll for completion (usually fast, ~10-30s)
+          let stAttempts = 0;
+          const stMaxAttempts = 30; // ~60s
+          while (stAttempts < stMaxAttempts) {
+            stAttempts++;
+            await new Promise(r => setTimeout(r, 2000));
+            const stStatus = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${stReportId}`);
+
+            if (stStatus.processingStatus === 'DONE') {
+              // Download the JSON report
+              const docInfo = await spApiRequest(accessToken, `/reports/2021-06-30/documents/${stStatus.reportDocumentId}`);
+              const reportRes = await fetch(docInfo.url);
+              if (!reportRes.ok) throw new Error('Failed to download Sales & Traffic document');
+
+              let reportText;
+              if (docInfo.compressionAlgorithm === 'GZIP') {
+                const { gunzipSync } = await import('zlib');
+                const buffer = await reportRes.arrayBuffer();
+                reportText = gunzipSync(Buffer.from(buffer)).toString('utf8');
+              } else {
+                reportText = await reportRes.text();
+              }
+
+              const stData = JSON.parse(reportText);
+              // salesAndTrafficByDate contains { date, salesByDate: { orderedProductSales: { amount, currencyCode }, unitsOrdered, ... } }
+              const dailyTotals = {};
+              const entries = stData.salesAndTrafficByDate || stData.reportData || [];
+              entries.forEach(entry => {
+                const date = (entry.date || '').split('T')[0];
+                if (!date) return;
+                const sales = entry.salesByDate || entry;
+                const orderedSales = parseFloat(sales.orderedProductSales?.amount || sales.orderedProductSales || 0) || 0;
+                const unitsOrdered = parseInt(sales.unitsOrdered || 0) || 0;
+                const ordersPlaced = parseInt(sales.totalOrderItems || sales.ordersPlaced || 0) || 0;
+                dailyTotals[date] = { revenue: orderedSales, units: unitsOrdered, orders: ordersPlaced };
+              });
+
+              console.log('[Sales] Sales & Traffic report:', Object.keys(dailyTotals).length, 'days of authoritative data');
+              return dailyTotals;
+            } else if (stStatus.processingStatus === 'FATAL' || stStatus.processingStatus === 'CANCELLED') {
+              console.warn('[Sales] Sales & Traffic report failed:', stStatus.processingStatus);
+              return null;
+            }
+          }
+          console.warn('[Sales] Sales & Traffic report timed out after', stAttempts, 'attempts');
+          return null;
+        } catch (err) {
+          // Non-fatal: fall back to orders report totals
+          console.warn('[Sales] Sales & Traffic report unavailable:', err.message);
+          return null;
+        }
+      };
+
+      // Helper: merge authoritative Sales & Traffic totals into orders-report results
+      // Uses S&T for the daily total revenue (matches Seller Central) while keeping SKU breakdown from orders report
+      const mergeWithSalesTraffic = (dailyResults, salesTrafficTotals) => {
+        if (!salesTrafficTotals) return dailyResults;
+
+        Object.entries(salesTrafficTotals).forEach(([date, stDay]) => {
+          if (dailyResults[date]) {
+            const ordersRevenue = dailyResults[date].amazon.revenue;
+            const stRevenue = stDay.revenue;
+            // Use Sales & Traffic total if it's higher (it includes shipping, gift-wrap, etc.)
+            // and reasonably close (within 2x to avoid data errors)
+            if (stRevenue > ordersRevenue && stRevenue < ordersRevenue * 2.5) {
+              dailyResults[date].amazon.revenueFromOrders = ordersRevenue;
+              dailyResults[date].amazon.revenue = stRevenue;
+              dailyResults[date].amazon.revenueSource = 'sales-and-traffic';
+            }
+            // Also use S&T units if available and differs (usually more accurate)
+            if (stDay.units > 0) {
+              dailyResults[date].amazon.units = Math.max(dailyResults[date].amazon.units, stDay.units);
+            }
+          } else if (stDay.revenue > 0) {
+            // S&T has a day the orders report missed — add it without SKU detail
+            dailyResults[date] = {
+              date,
+              source: 'amazon-orders-api',
+              amazon: {
+                revenue: stDay.revenue,
+                units: stDay.units,
+                returns: 0, cogs: 0, fees: 0, adSpend: 0, netProfit: 0,
+                skuData: [],
+                revenueSource: 'sales-and-traffic',
+              },
+            };
+          }
+        });
+
+        return dailyResults;
+      };
+
       // Step A: If we have a pending reportId, check its status
       if (existingReportId) {
         const statusRes = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${existingReportId}`);
@@ -733,12 +851,16 @@ export default async function handler(req, res) {
         if (statusRes.processingStatus === 'DONE') {
           const rows = await downloadAndParseReport(statusRes.reportDocumentId);
           const { dailyResults, totalOrders } = aggregateRows(rows);
-          
-          console.log('[Sales] Report ready:', Object.keys(dailyResults).length, 'days,', totalOrders, 'order lines');
+
+          // Also fetch Sales & Traffic for authoritative totals (non-blocking on failure)
+          const salesTrafficTotals = await fetchSalesAndTraffic(startDateObj, endDateObj);
+          const mergedResults = mergeWithSalesTraffic(dailyResults, salesTrafficTotals);
+
+          console.log('[Sales] Report ready:', Object.keys(mergedResults).length, 'days,', totalOrders, 'order lines', salesTrafficTotals ? '(with S&T totals)' : '(orders only)');
           return res.status(200).json({
             success: true, syncType: 'sales', source: 'amazon-orders-api', status: 'complete',
-            summary: { daysWithData: Object.keys(dailyResults).length, totalOrders, reportId: existingReportId },
-            dailySales: dailyResults,
+            summary: { daysWithData: Object.keys(mergedResults).length, totalOrders, reportId: existingReportId, hasSalesTraffic: !!salesTrafficTotals },
+            dailySales: mergedResults,
           });
         } else if (statusRes.processingStatus === 'FATAL' || statusRes.processingStatus === 'CANCELLED') {
           return res.status(200).json({ success: false, error: `Report ${statusRes.processingStatus}`, reportId: existingReportId });
@@ -750,48 +872,122 @@ export default async function handler(req, res) {
         }
       }
 
-      // Step B: Request a new report
-      const reportSpec = {
+      // Step B: Request BOTH reports in parallel (they generate on Amazon's side simultaneously)
+      // 1. Orders report → SKU-level breakdown (item_price + shipping + gift-wrap)
+      // 2. Sales & Traffic → authoritative daily totals matching Seller Central
+      const ordersReportSpec = {
         reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
         marketplaceIds: [marketplaceId],
         dataStartTime: startDateObj.toISOString(),
         dataEndTime: endDateObj.toISOString(),
       };
+      const salesTrafficSpec = {
+        reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
+        marketplaceIds: [marketplaceId],
+        dataStartTime: startDateObj.toISOString(),
+        dataEndTime: endDateObj.toISOString(),
+        reportOptions: { dateGranularity: 'DAY', asinGranularity: 'SKU' },
+      };
 
-      console.log('[Sales] Requesting report:', reportSpec.reportType);
-      const createResponse = await spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', reportSpec);
-      const newReportId = createResponse.reportId;
-      console.log('[Sales] Report requested:', newReportId);
+      console.log('[Sales] Requesting both Orders + Sales & Traffic reports in parallel...');
+      // Fire both report requests simultaneously
+      const [ordersCreate, stCreate] = await Promise.all([
+        spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', ordersReportSpec),
+        spApiRequest(accessToken, '/reports/2021-06-30/reports', 'POST', salesTrafficSpec)
+          .catch(err => { console.warn('[Sales] S&T report request failed (non-fatal):', err.message); return null; }),
+      ]);
+      const newReportId = ordersCreate.reportId;
+      const stReportId = stCreate?.reportId || null;
+      console.log('[Sales] Orders report:', newReportId, '| S&T report:', stReportId || 'N/A');
 
-      // Step C: Poll for completion (short ranges usually complete in <30s)
-      // With Vercel Pro 120s timeout, we can poll for ~100s leaving 20s for download+parse
+      // Step C: Poll BOTH reports simultaneously
+      // With Vercel Pro 120s timeout, we poll for ~80s leaving 20s buffer for download+parse
       let attempts = 0;
-      const maxAttempts = 45; // ~90s of polling
+      const maxAttempts = 40; // ~80s of polling
+      let ordersResult = null;
+      let stResult = null;
+      let ordersDone = false;
+      let stDone = !stReportId; // If no S&T report, mark as done immediately
 
-      while (attempts < maxAttempts) {
+      while (attempts < maxAttempts && (!ordersDone || !stDone)) {
         attempts++;
         await new Promise(r => setTimeout(r, 2000));
 
-        const statusRes = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${newReportId}`);
-
-        if (statusRes.processingStatus === 'DONE') {
-          const rows = await downloadAndParseReport(statusRes.reportDocumentId);
-          const { dailyResults, totalOrders } = aggregateRows(rows);
-
-          console.log('[Sales] Report complete:', Object.keys(dailyResults).length, 'days,', totalOrders, 'order lines, polled', attempts, 'times');
-          return res.status(200).json({
-            success: true, syncType: 'sales', source: 'amazon-orders-api', status: 'complete',
-            summary: { daysWithData: Object.keys(dailyResults).length, totalOrders, reportId: newReportId },
-            dailySales: dailyResults,
-          });
-        } else if (statusRes.processingStatus === 'FATAL' || statusRes.processingStatus === 'CANCELLED') {
-          throw new Error(`Report generation failed: ${statusRes.processingStatus}`);
+        // Poll orders report if not done
+        if (!ordersDone) {
+          const statusRes = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${newReportId}`);
+          if (statusRes.processingStatus === 'DONE') {
+            const rows = await downloadAndParseReport(statusRes.reportDocumentId);
+            ordersResult = aggregateRows(rows);
+            ordersDone = true;
+            console.log('[Sales] Orders report complete after', attempts, 'polls');
+          } else if (statusRes.processingStatus === 'FATAL' || statusRes.processingStatus === 'CANCELLED') {
+            throw new Error(`Orders report generation failed: ${statusRes.processingStatus}`);
+          }
         }
-        // IN_QUEUE or IN_PROGRESS - keep polling
+
+        // Poll S&T report if not done
+        if (!stDone && stReportId) {
+          try {
+            const stStatus = await spApiRequest(accessToken, `/reports/2021-06-30/reports/${stReportId}`);
+            if (stStatus.processingStatus === 'DONE') {
+              // Download and parse the JSON report
+              const docInfo = await spApiRequest(accessToken, `/reports/2021-06-30/documents/${stStatus.reportDocumentId}`);
+              const reportRes = await fetch(docInfo.url);
+              let reportText;
+              if (docInfo.compressionAlgorithm === 'GZIP') {
+                const { gunzipSync } = await import('zlib');
+                const buffer = await reportRes.arrayBuffer();
+                reportText = gunzipSync(Buffer.from(buffer)).toString('utf8');
+              } else {
+                reportText = await reportRes.text();
+              }
+              const stData = JSON.parse(reportText);
+              const dailyTotals = {};
+              const entries = stData.salesAndTrafficByDate || stData.reportData || [];
+              entries.forEach(entry => {
+                const date = (entry.date || '').split('T')[0];
+                if (!date) return;
+                const sales = entry.salesByDate || entry;
+                const orderedSales = parseFloat(sales.orderedProductSales?.amount || sales.orderedProductSales || 0) || 0;
+                const unitsOrdered = parseInt(sales.unitsOrdered || 0) || 0;
+                dailyTotals[date] = { revenue: orderedSales, units: unitsOrdered };
+              });
+              stResult = dailyTotals;
+              stDone = true;
+              console.log('[Sales] S&T report complete after', attempts, 'polls,', Object.keys(dailyTotals).length, 'days');
+            } else if (stStatus.processingStatus === 'FATAL' || stStatus.processingStatus === 'CANCELLED') {
+              console.warn('[Sales] S&T report failed:', stStatus.processingStatus);
+              stDone = true; // Give up on S&T, proceed with orders only
+            }
+          } catch (stErr) {
+            console.warn('[Sales] S&T poll error (non-fatal):', stErr.message);
+            stDone = true; // Give up on S&T, proceed with orders only
+          }
+        }
+
+        // If orders are done but S&T is taking too long, don't hold up the response
+        if (ordersDone && !stDone && attempts > 20) {
+          console.warn('[Sales] S&T report still pending after 20 polls, proceeding with orders only');
+          stDone = true;
+        }
       }
 
-      // If we timed out waiting, return the reportId so client can retry
-      console.log('[Sales] Report not ready after', attempts, 'attempts, returning reportId for retry');
+      // Return results
+      if (ordersResult) {
+        const { dailyResults, totalOrders } = ordersResult;
+        const mergedResults = mergeWithSalesTraffic(dailyResults, stResult);
+
+        console.log('[Sales] Final:', Object.keys(mergedResults).length, 'days,', totalOrders, 'order lines,', stResult ? 'with S&T totals' : 'orders only');
+        return res.status(200).json({
+          success: true, syncType: 'sales', source: 'amazon-orders-api', status: 'complete',
+          summary: { daysWithData: Object.keys(mergedResults).length, totalOrders, reportId: newReportId, hasSalesTraffic: !!stResult },
+          dailySales: mergedResults,
+        });
+      }
+
+      // If we timed out waiting for the orders report, return reportId for retry
+      console.log('[Sales] Orders report not ready after', attempts, 'attempts, returning reportId for retry');
       return res.status(200).json({
         success: true, syncType: 'sales', status: 'pending', reportId: newReportId,
         message: 'Report is generating. Will retry automatically.',
