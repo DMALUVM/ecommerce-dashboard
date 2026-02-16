@@ -626,11 +626,21 @@ export default async function handler(req, res) {
       const daysBack = Math.min(parseInt(req.body.daysBack) || 7, 30);
       const existingReportId = req.body.reportId; // For 2-step polling
 
-      // Amazon day finalizes at 3AM EST (midnight PST). Today's data is always partial.
-      // Default to yesterday so we only sync complete days.
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const endDateObj = endDate ? new Date(endDate) : yesterday;
-      const startDateObj = startDate ? new Date(startDate) : new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+      // Amazon's business day runs midnight-to-midnight PST (= 3AM-3AM EST / UTC-8).
+      // A day's data is only complete after midnight PST (3AM EST / 8AM UTC).
+      // We determine the "latest complete Amazon day" based on the current time in PST.
+      const now = new Date();
+      const utcHour = now.getUTCHours();
+      const utcDay = now.getUTCDate();
+      // PST = UTC-8. If it's before 8AM UTC (midnight PST), today in PST hasn't ended yet,
+      // so the latest complete day is 2 days ago UTC. Otherwise it's yesterday UTC.
+      // (During PDT/UTC-7, cutoff is 7AM UTC — using 8AM UTC is conservative and safe year-round.)
+      const isPSTNextDay = utcHour >= 8; // Past midnight PST → today's PST data is complete
+      const latestCompleteDay = new Date(Date.UTC(
+        now.getUTCFullYear(), now.getUTCMonth(), utcDay - (isPSTNextDay ? 1 : 2)
+      ));
+      const endDateObj = endDate ? new Date(endDate) : latestCompleteDay;
+      const startDateObj = startDate ? new Date(startDate) : new Date(latestCompleteDay.getTime() - (daysBack - 1) * 24 * 60 * 60 * 1000);
       
       console.log('[Sales] Report range:', startDateObj.toISOString().split('T')[0], 'to', endDateObj.toISOString().split('T')[0]);
 
