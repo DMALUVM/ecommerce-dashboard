@@ -33,7 +33,7 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
   
   if (showSaveConfirm) {
     return (
-      <div className="fixed bottom-4 right-4 bg-gradient-to-r from-emerald-600 to-green-600 text-white px-5 py-3 rounded-xl shadow-2xl shadow-emerald-500/30 flex items-center gap-3 z-50 animate-slide-in">
+      <div className="fixed bottom-4 right-4 bg-gradient-to-r from-emerald-600 to-green-600 text-white px-5 py-3 rounded-xl shadow-2xl shadow-emerald-500/30 flex items-center gap-3 z-50 animate-slide-in" aria-live="polite" role="status">
         <div className="w-6 h-6 bg-white/20 rounded-full flex items-center justify-center">
           <Check className="w-4 h-4" />
         </div>
@@ -72,7 +72,7 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
   };
   
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end" aria-live="polite" role="status">
       {toastQueue.map((t, idx) => {
         const { bg, shadow, Icon, iconBg } = config[t.type] || config.success;
         return (

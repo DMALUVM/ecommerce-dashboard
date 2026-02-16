@@ -58,6 +58,7 @@ const NavTabs = ({
       <div className="relative flex-shrink-0">
         <button 
           onClick={() => setNavDropdown(isOpen ? null : dropdownKey)}
+          aria-label={label}
           className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap ${isActive ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
         >
           <Icon className="w-4 h-4" />
@@ -123,7 +124,7 @@ const NavTabs = ({
     }] : []),
     // Product & profit analysis (with divider)
     ...(appSettings.modulesEnabled?.profitability !== false ? [{
-      view: 'profitability', label: '💰 Profitability & P&L', icon: PieChart,
+      view: 'profitability', label: 'Profitability & P&L', icon: PieChart,
       disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
       onClick: () => setView('profitability'),
       divider: true,
@@ -174,8 +175,8 @@ const NavTabs = ({
   return (
     <div ref={navRef} className={`flex items-center gap-1 sm:gap-2 mb-4 sm:mb-6 p-1.5 bg-slate-800/50 rounded-xl relative ${navDropdown ? '' : 'overflow-x-auto scrollbar-hide'}`}>
       {/* Core Navigation - Always visible */}
-      <button onClick={() => setView('dashboard')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" /><span className="hidden sm:inline">Dashboard</span></button>
-      <button onClick={() => setView('upload')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" /><span className="hidden sm:inline">Upload</span></button>
+      <button onClick={() => setView('dashboard')} aria-label="Dashboard" className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'dashboard' ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><BarChart3 className="w-4 h-4" /><span className="hidden sm:inline">Dashboard</span></button>
+      <button onClick={() => setView('upload')} aria-label="Upload" className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'upload' || view === 'period-upload' || view === 'inv-upload' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Upload className="w-4 h-4" /><span className="hidden sm:inline">Upload</span></button>
       
       <div className="w-px bg-slate-600 mx-0.5 sm:mx-1 h-6 flex-shrink-0" />
       
@@ -215,10 +216,10 @@ const NavTabs = ({
       <div className="w-px bg-slate-600 mx-0.5 sm:mx-1 h-6 flex-shrink-0" />
       
       {/* Reports & Actions */}
-      <button onClick={() => setView('reports')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'reports' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><CheckSquare className="w-4 h-4" /><span className="hidden sm:inline">Actions</span></button>
-      
+      <button onClick={() => setView('reports')} aria-label="Actions" className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'reports' ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><CheckSquare className="w-4 h-4" /><span className="hidden sm:inline">Actions</span></button>
+
       {/* Settings */}
-      <button onClick={() => setView('settings')} className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" /><span className="hidden sm:inline">Settings</span></button>
+      <button onClick={() => setView('settings')} aria-label="Settings" className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all whitespace-nowrap flex-shrink-0 ${view === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-500 text-white shadow-lg shadow-slate-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}><Settings className="w-4 h-4" /><span className="hidden sm:inline">Settings</span></button>
     </div>
   );
 };

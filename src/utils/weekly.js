@@ -144,33 +144,33 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
       w.shopify.cogs += num(day.shopify.cogs);
       
       w.shopify.shippingCollected += num(day.shopify.shippingCollected);
-w.shopify.discounts += num(day.shopify.discounts);
+      w.shopify.discounts += num(day.shopify.discounts);
       const meta = num(day.metaSpend ?? day.shopify.metaSpend);
       const google = num(day.googleSpend ?? day.shopify.googleSpend);
       w.shopify.metaSpend += meta;
       w.shopify.googleSpend += google;
       w.shopify.adSpend += num(day.shopify.adSpend ?? (meta + google));
       w.shopify.netProfit += num(day.shopify.netProfit);
-// Ads KPI metrics (supports nested shopify.adsMetrics or flat root fields from bulk imports)
-const dm = day.shopify.adsMetrics || {};
-const metaImpr = num(dm.metaImpressions ?? day.metaImpressions);
-const metaClicks = num(dm.metaClicks ?? day.metaClicks);
-const metaPurch = num(dm.metaPurchases ?? day.metaPurchases ?? day.metaConversions);
-const metaValue = num(dm.metaPurchaseValue ?? day.metaPurchaseValue);
-const googleImpr = num(dm.googleImpressions ?? day.googleImpressions);
-const googleClicks = num(dm.googleClicks ?? day.googleClicks);
-const googleConv = num(dm.googleConversions ?? day.googleConversions);
+      // Ads KPI metrics (supports nested shopify.adsMetrics or flat root fields from bulk imports)
+      const dm = day.shopify.adsMetrics || {};
+      const metaImpr = num(dm.metaImpressions ?? day.metaImpressions);
+      const metaClicks = num(dm.metaClicks ?? day.metaClicks);
+      const metaPurch = num(dm.metaPurchases ?? day.metaPurchases ?? day.metaConversions);
+      const metaValue = num(dm.metaPurchaseValue ?? day.metaPurchaseValue);
+      const googleImpr = num(dm.googleImpressions ?? day.googleImpressions);
+      const googleClicks = num(dm.googleClicks ?? day.googleClicks);
+      const googleConv = num(dm.googleConversions ?? day.googleConversions);
 
-if (!w.shopify.adsMetrics) {
-  w.shopify.adsMetrics = { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 };
-}
-w.shopify.adsMetrics.metaImpressions += metaImpr;
-w.shopify.adsMetrics.metaClicks += metaClicks;
-w.shopify.adsMetrics.metaPurchases += metaPurch;
-w.shopify.adsMetrics.metaPurchaseValue += metaValue;
-w.shopify.adsMetrics.googleImpressions += googleImpr;
-w.shopify.adsMetrics.googleClicks += googleClicks;
-w.shopify.adsMetrics.googleConversions += googleConv;
+      if (!w.shopify.adsMetrics) {
+        w.shopify.adsMetrics = { metaImpressions: 0, metaClicks: 0, metaPurchases: 0, metaPurchaseValue: 0, metaCTR: 0, metaCPC: 0, metaCPM: 0, metaROAS: 0, googleImpressions: 0, googleClicks: 0, googleConversions: 0, googleCTR: 0, googleCPC: 0, googleCostPerConv: 0 };
+      }
+      w.shopify.adsMetrics.metaImpressions += metaImpr;
+      w.shopify.adsMetrics.metaClicks += metaClicks;
+      w.shopify.adsMetrics.metaPurchases += metaPurch;
+      w.shopify.adsMetrics.metaPurchaseValue += metaValue;
+      w.shopify.adsMetrics.googleImpressions += googleImpr;
+      w.shopify.adsMetrics.googleClicks += googleClicks;
+      w.shopify.adsMetrics.googleConversions += googleConv;
 
       if (!w.shopify._skuMap) w.shopify._skuMap = {};
       const skuArr = Array.isArray(day.shopify.skuData) ? day.shopify.skuData : [];
@@ -210,54 +210,47 @@ w.shopify.adsMetrics.googleConversions += googleConv;
       w.shopify.skuData = [];
     }
 
+    // Ensure Shopify SKU totals reconcile to revenue by including shipping collected as a separate line item
+    if (w.shopify.shippingCollected > 0) {
+      const hasShippingRow = Array.isArray(w.shopify.skuData) && w.shopify.skuData.some(r => r && (r.isShipping || String(r.sku || '').toLowerCase() === 'shipping'));
+      if (!hasShippingRow) {
+        w.shopify.skuData = Array.isArray(w.shopify.skuData) ? [...w.shopify.skuData] : [];
+        w.shopify.skuData.push({
+          sku: 'Shipping',
+          name: 'Shipping (collected)',
+          unitsSold: 0,
+          grossSales: w.shopify.shippingCollected,
+          discounts: 0,
+          netSales: w.shopify.shippingCollected,
+          cogs: 0,
+          profit: w.shopify.shippingCollected,
+          isShipping: true,
+        });
+      }
+    }
 
-// Ensure Shopify SKU totals reconcile to revenue by including shipping collected as a separate line item
-if (w.shopify.shippingCollected > 0) {
-  const hasShippingRow = Array.isArray(w.shopify.skuData) && w.shopify.skuData.some(r => r && (r.isShipping || String(r.sku || '').toLowerCase() === 'shipping'));
-  if (!hasShippingRow) {
-    w.shopify.skuData = Array.isArray(w.shopify.skuData) ? [...w.shopify.skuData] : [];
-    w.shopify.skuData.push({
-      sku: 'Shipping',
-      name: 'Shipping (collected)',
-      unitsSold: 0,
-      grossSales: w.shopify.shippingCollected,
-      discounts: 0,
-      netSales: w.shopify.shippingCollected,
-      cogs: 0,
-      profit: w.shopify.shippingCollected,
-      isShipping: true,
-    });
-  }
-}
+    // Derived metrics
+    w.amazon.returnRate = w.amazon.units > 0 ? (num(w.amazon.returns) / num(w.amazon.units)) * 100 : 0;
+    w.shopify.aov = w.shopify.orders > 0 ? (num(w.shopify.revenue) / num(w.shopify.orders)) : 0;
+    w.amazon.aov = w.amazon.units > 0 ? (num(w.amazon.revenue) / num(w.amazon.units)) : 0;
 
+    // Derive weekly ad KPIs from accumulated totals (prefer weighted / ratio-based metrics)
+    if (w.shopify.adsMetrics) {
+      const am = w.shopify.adsMetrics;
+      const metaSpend = num(w.shopify.metaSpend);
+      const googleSpend = num(w.shopify.googleSpend);
 
-// Derived metrics
-w.amazon.returnRate = w.amazon.units > 0 ? (num(w.amazon.returns) / num(w.amazon.units)) * 100 : 0;
-w.shopify.aov = w.shopify.orders > 0 ? (num(w.shopify.revenue) / num(w.shopify.orders)) : 0;
-w.amazon.aov = w.amazon.units > 0 ? (num(w.amazon.revenue) / num(w.amazon.units)) : 0;
+      am.metaCTR = am.metaImpressions > 0 ? (am.metaClicks / am.metaImpressions) * 100 : 0;
+      am.metaCPC = am.metaClicks > 0 ? (metaSpend / am.metaClicks) : 0;
+      am.metaCPM = am.metaImpressions > 0 ? (metaSpend / am.metaImpressions) * 1000 : 0;
+      am.metaROAS = metaSpend > 0 ? (am.metaPurchaseValue / metaSpend) : 0;
 
-// Derive weekly ad KPIs from accumulated totals (prefer weighted / ratio-based metrics)
-if (w.shopify.adsMetrics) {
-  const am = w.shopify.adsMetrics;
-  const metaSpend = num(w.shopify.metaSpend);
-  const googleSpend = num(w.shopify.googleSpend);
+      am.googleCTR = am.googleImpressions > 0 ? (am.googleClicks / am.googleImpressions) * 100 : 0;
+      am.googleCPC = am.googleClicks > 0 ? (googleSpend / am.googleClicks) : 0;
+      am.googleCostPerConv = am.googleConversions > 0 ? (googleSpend / am.googleConversions) : 0;
+    }
 
-  am.metaCTR = am.metaImpressions > 0 ? (am.metaClicks / am.metaImpressions) * 100 : 0;
-  am.metaCPC = am.metaClicks > 0 ? (metaSpend / am.metaClicks) : 0;
-  am.metaCPM = am.metaImpressions > 0 ? (metaSpend / am.metaImpressions) * 1000 : 0;
-  am.metaROAS = metaSpend > 0 ? (am.metaPurchaseValue / metaSpend) : 0;
-
-  am.googleCTR = am.googleImpressions > 0 ? (am.googleClicks / am.googleImpressions) * 100 : 0;
-  am.googleCPC = am.googleClicks > 0 ? (googleSpend / am.googleClicks) : 0;
-  am.googleCostPerConv = am.googleConversions > 0 ? (googleSpend / am.googleConversions) : 0;
-}
-
-    
-// Derived averages
-w.amazon.aov = num(w.amazon.units) > 0 ? (num(w.amazon.revenue) / num(w.amazon.units)) : 0;
-w.shopify.aov = num(w.shopify.orders) > 0 ? (num(w.shopify.revenue) / num(w.shopify.orders)) : 0;
-
-const totalRevenue = num(w.amazon.revenue) + num(w.shopify.revenue);
+    const totalRevenue = num(w.amazon.revenue) + num(w.shopify.revenue);
     const totalUnits = num(w.amazon.units) + num(w.shopify.units);
     const totalCogs = num(w.amazon.cogs) + num(w.shopify.cogs);
     const totalAdSpend = num(w.amazon.adSpend) + num(w.shopify.adSpend);

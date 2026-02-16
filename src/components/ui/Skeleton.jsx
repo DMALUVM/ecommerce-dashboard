@@ -21,11 +21,14 @@ export const SkeletonCard = () => (
 );
 
 // Skeleton for a 4-card KPI row
-export const SkeletonKPIRow = ({ count = 4 }) => (
-  <div className={`grid grid-cols-2 lg:grid-cols-${count} gap-4 mb-6`}>
-    {Array.from({ length: count }).map((_, i) => <SkeletonCard key={i} />)}
-  </div>
-);
+export const SkeletonKPIRow = ({ count = 4 }) => {
+  const colsClass = { 1: 'lg:grid-cols-1', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
+  return (
+    <div className={`grid grid-cols-2 ${colsClass[count] || 'lg:grid-cols-4'} gap-4 mb-6`}>
+      {Array.from({ length: count }).map((_, i) => <SkeletonCard key={i} />)}
+    </div>
+  );
+};
 
 // Skeleton for a chart area
 export const SkeletonChart = ({ height = "h-64" }) => (

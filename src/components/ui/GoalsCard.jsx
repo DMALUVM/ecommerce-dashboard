@@ -1,5 +1,5 @@
 import React from 'react';
-import { Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Target, TrendingUp, TrendingDown, Minus, CheckCircle } from 'lucide-react';
 import { formatCurrency } from '../../utils/format';
 
 const GoalsCard = ({ 
@@ -75,7 +75,7 @@ const GoalsCard = ({
         </div>
         <div className="flex justify-between items-center mt-1">
           <p className={`text-xs ${hit ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {pct.toFixed(0)}% {hit ? '🎉' : ''} 
+            {pct.toFixed(0)}% {hit && <CheckCircle className="w-3 h-3 inline" />}
             <span className="text-slate-500 ml-1">
               ({diff >= 0 ? '+' : ''}{formatCurrency(diff)})
             </span>
@@ -138,7 +138,7 @@ const GoalsCard = ({
       {recentWeeks.length >= 3 && (
         <div className="mt-3 pt-3 border-t border-slate-700/50">
           <p className="text-xs text-slate-400">
-            📈 Trend based on last {recentWeeks.length} weeks | 
+            <TrendingUp className="w-3 h-3 inline mr-1" />Trend based on last {recentWeeks.length} weeks |
             Revenue: <span className={revenueTrend.trend === 'up' ? 'text-emerald-400' : revenueTrend.trend === 'down' ? 'text-rose-400' : 'text-slate-300'}>
               {revenueTrend.avgChange > 0 ? '+' : ''}{revenueTrend.avgChange.toFixed(1)}%/wk
             </span> | 

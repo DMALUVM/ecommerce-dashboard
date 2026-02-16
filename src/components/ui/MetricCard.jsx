@@ -54,13 +54,13 @@ const MetricCard = ({ label, value, sub, icon: Icon, color = 'slate', trend, onC
 
   return (
     <div 
-      className={`bg-gradient-to-br ${colors[color] || colors.emerald} border rounded-2xl p-5 transition-all duration-200 hover:shadow-lg hover:shadow-black/10 hover:-translate-y-0.5 ${onClick ? 'cursor-pointer' : ''}`}
+      className={`bg-gradient-to-br ${colors[color] || colors.slate} border rounded-2xl p-5 transition-all duration-200 hover:shadow-lg hover:shadow-black/10 hover:-translate-y-0.5 ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
     >
       <div className="flex items-start justify-between mb-3">
         <span className="text-slate-400 text-sm font-medium">{label}</span>
         {Icon && (
-          <div className={`p-1.5 rounded-lg ${iconC[color] || iconC.emerald}`}>
+          <div className={`p-1.5 rounded-lg ${iconC[color] || iconC.slate}`}>
             <Icon className="w-4 h-4" />
           </div>
         )}
