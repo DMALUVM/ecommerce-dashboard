@@ -4822,15 +4822,27 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
     
     // Now apply the new store's data (overwriting the cleared defaults)
-    // Also clear localStorage to prevent stale data from previous store
+    // Clear ALL store-specific localStorage to prevent cross-store data contamination
+    // (credentials and data are reloaded from cloud immediately after this)
     try {
       const lsKeysToClear = [
+        // Core data keys — prevent inventory/sales leaking between stores
+        'ecommerce_dashboard_v5', 'ecommerce_daily_sales_v1',
+        'ecommerce_inventory_v5', 'ecommerce_cogs_v1',
+        'ecommerce_periods_v1', 'ecommerce_goals_v1',
+        'ecommerce_sales_tax_v1', 'ecommerce_product_names_v1',
+        'ecommerce_settings_v1', 'ecommerce_notes_v1',
+        'ecommerce_invoices_v1', 'ecommerce_amazon_forecast_v1',
+        'ecommerce_3pl_ledger_v1', 'ecommerce_weekly_reports_v1',
+        'ecommerce_forecast_accuracy_v1', 'ecommerce_forecast_corrections_v1',
+        // AI/analytics keys
         'ecommerce_ads_intel_v1', 'ecommerce_dtc_intel_v1',
         'ecommerce_amazon_campaigns_v1', 'ecommerce_ai_chat_history_v1',
         'ecommerce_return_rates_v1', 'ecommerce_ai_forecasts_v1',
         'ecommerce_ai_learning_v1', 'ecommerce_unified_ai_v1',
         'ecommerce_production_v1', 'ecommerce_banking_v1',
         'ecommerce_recurring_v1', 'ecommerce_widget_config_v1',
+        // Credential cache keys (reloaded from store_credentials table)
         'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
         'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
       ];
