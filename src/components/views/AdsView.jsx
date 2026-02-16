@@ -740,7 +740,7 @@ const AdsView = ({
                   <div><span className="text-slate-500">Conv%</span><p className={`font-medium ${cur.gConvRate > 5 ? 'text-emerald-400' : cur.gConvRate > 2 ? 'text-amber-400' : 'text-slate-400'}`}>{cur.gConvRate > 0 ? cur.gConvRate.toFixed(1) + '%' : '—'}</p></div>
                 </div>
                 <Sparkline data={periodData.gTrend} color="bg-red-500" h={24} />
-              </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={() => setAdsViewMode('upload')} className="text-red-400 hover:underline">upload CSV</button></p>}
+              </> : <p className="text-slate-600 text-xs mt-1">No Google Ads data — <button onClick={() => setAdsViewMode('upload')} className="text-red-400 hover:underline">upload Campaign or Search Term report</button></p>}
             </div>
             <div className="bg-gradient-to-br from-blue-900/15 to-slate-800/40 rounded-xl border border-blue-500/20 p-4">
               <div className="flex items-center justify-between mb-2"><h4 className="text-blue-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"/>Meta</h4><span className="text-white font-bold text-lg">{formatCurrency(cur.mSpend)}</span></div>
@@ -752,7 +752,7 @@ const AdsView = ({
                   <div><span className="text-slate-500">CPC</span><p className={`font-medium ${cur.mCpc > 0 ? (cur.mCpc < 1 ? 'text-emerald-400' : cur.mCpc < 2 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-500'}`}>{cur.mCpc > 0 ? formatCurrency(cur.mCpc) : '—'}</p></div>
                 </div>
                 <Sparkline data={periodData.mTrend} color="bg-blue-500" h={24} />
-              </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={() => setAdsViewMode('upload')} className="text-blue-400 hover:underline">upload CSV</button></p>}
+              </> : <p className="text-slate-600 text-xs mt-1">No Meta Ads data — <button onClick={() => setAdsViewMode('upload')} className="text-blue-400 hover:underline">upload Campaign or Ad Set report</button></p>}
             </div>
           </div>
 

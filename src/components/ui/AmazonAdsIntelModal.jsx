@@ -947,7 +947,7 @@ const detectReportType = (headers, rows, fileName) => {
 
 // ============ AI ACTION REPORT BUILDER ============
 
-export const buildActionReportPrompt = (intelData) => {
+export const buildActionReportPrompt = (intelData, storeName) => {
   if (!intelData) return null;
   
   // Detect date range across all reports
@@ -991,7 +991,9 @@ export const buildActionReportPrompt = (intelData) => {
     });
     
     // Brand vs Non-Brand classification
-    const brandTerms = ['tallowbourn', 'tallowbourne', 'tallow bourn'];
+    const brandTerms = storeName
+      ? [storeName.toLowerCase(), storeName.toLowerCase().replace(/\s+/g, '')]
+      : [];
     let brandSpend = 0, brandSales = 0, nonBrandSpend = 0, nonBrandSales = 0;
     const allTerms = [...(d.topByROAS || []), ...(d.topBySales || []), ...(d.wasteful || [])];
     const seenTerms = new Set();
@@ -1232,19 +1234,18 @@ For EACH: 2-3 specific changes, exact bid amounts, keywords to negate/harvest, b
 2. MEDIUM (5-15 min) — restructuring, new ad groups
 3. STRATEGIC (15+ min) — new campaigns, major budget shifts`;
 
-  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
+  const brandName = storeName || 'this brand';
+  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for ${brandName}.
 
 DATE RANGE: ${dateRange}
 REPORTS AVAILABLE: ${available.join(', ')}
 ${available.length < 5 ? `\nNOTE: Only ${available.length} report types uploaded. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
 
-PRODUCT CONTEXT:
-- Lip Balm 3-Pack (Parent ASIN B0CLHTF8YN) — highest volume SKU
-- Body Balm 2oz (B0CLF4XDCP) — premium product, higher AOV
-- Deodorant (B0CLHSC2WC) — newer product, still building traction
-- Typical price points: Lip balm $10-14, Body balm $18-24, Deodorant $12-16
-- Target blended ACOS: 25% (willing to go higher for new customer acquisition)
-- Target TACOS: under 12%
+BUSINESS CONTEXT:
+- Brand: ${brandName}
+- Marketplace: Amazon
+- Identify ASINs, products, and pricing from the data below
+- Target metrics: User should set targets based on their margins
 
 ${dataContext}
 
@@ -1316,6 +1317,7 @@ const AmazonAdsIntelModal = ({
   onGoToAnalyst,
   callAI,
   saveReportToHistory,
+  storeName,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -1542,7 +1544,7 @@ const AmazonAdsIntelModal = ({
     setActionReport(null);
     
     try {
-      const prompts = buildActionReportPrompt(adsIntelData);
+      const prompts = buildActionReportPrompt(adsIntelData, storeName);
       if (!prompts) throw new Error('No data available for report');
       
       const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel);
@@ -1643,9 +1645,16 @@ const AmazonAdsIntelModal = ({
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500"
                     >
-                      {AI_MODEL_OPTIONS.map(m => (
-                        <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
-                      ))}
+                      <optgroup label="Anthropic">
+                        {AI_MODEL_OPTIONS.filter(m => m.provider === 'anthropic').map(m => (
+                          <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="OpenAI">
+                        {AI_MODEL_OPTIONS.filter(m => m.provider === 'openai').map(m => (
+                          <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                        ))}
+                      </optgroup>
                     </select>
                   </div>
                   <button

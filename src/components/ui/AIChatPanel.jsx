@@ -60,9 +60,16 @@ const AIChatPanel = ({
                   className="bg-white/20 text-white text-xs rounded-lg px-2 py-1.5 border border-white/30 focus:outline-none cursor-pointer appearance-none"
                   style={{ maxWidth: '130px' }}
                 >
-                  {aiModelOptions.map(m => (
-                    <option key={m.value} value={m.value} className="bg-slate-800 text-white">{m.label}</option>
-                  ))}
+                  <optgroup label="Anthropic" className="bg-slate-800 text-white">
+                    {aiModelOptions.filter(m => m.provider === 'anthropic').map(m => (
+                      <option key={m.value} value={m.value} className="bg-slate-800 text-white">{m.label}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="OpenAI" className="bg-slate-800 text-white">
+                    {aiModelOptions.filter(m => m.provider === 'openai').map(m => (
+                      <option key={m.value} value={m.value} className="bg-slate-800 text-white">{m.label}</option>
+                    ))}
+                  </optgroup>
                 </select>
               )}
               {aiMessages.length > 0 && (

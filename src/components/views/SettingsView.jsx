@@ -6,7 +6,7 @@ import {
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { lsSet } from '../../utils/storage';
 import { hasDailySalesData } from '../../utils/date';
-import { AI_MODELS, AI_DEFAULT_MODEL } from '../../utils/config';
+import { AI_MODELS, AI_DEFAULT_MODEL, AI_MODEL_OPTIONS } from '../../utils/config';
 import NavTabs from '../ui/NavTabs';
 import NumberInput from '../ui/NumberInput';
 import SettingRow from '../ui/SettingRow';
@@ -3441,9 +3441,16 @@ const SettingsView = ({
               onChange={(e) => updateSetting('aiModel', e.target.value)}
               className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
             >
-              {Object.entries(AI_MODELS).map(([key, m]) => (
-                <option key={key} value={key}>{m.label} — {m.tier} ({m.cost})</option>
-              ))}
+              <optgroup label="Anthropic">
+                {AI_MODEL_OPTIONS.filter(m => m.provider === 'anthropic').map(m => (
+                  <option key={m.value} value={m.value}>{m.label} — {m.tier} ({m.cost})</option>
+                ))}
+              </optgroup>
+              <optgroup label="OpenAI">
+                {AI_MODEL_OPTIONS.filter(m => m.provider === 'openai').map(m => (
+                  <option key={m.value} value={m.value}>{m.label} — {m.tier} ({m.cost})</option>
+                ))}
+              </optgroup>
             </select>
           </SettingRow>
           <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400 space-y-1">

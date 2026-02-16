@@ -839,7 +839,7 @@ ${intelData.shopifyLandingPages.slice(0, 15).map(p => `  ${p.path} [${p.type}] |
 
 // ============ AI REPORT PROMPT ============
 
-export const buildDtcActionReportPrompt = (intelData) => {
+export const buildDtcActionReportPrompt = (intelData, storeName) => {
   if (!intelData) return null;
 
   const available = [];
@@ -936,7 +936,9 @@ export const buildDtcActionReportPrompt = (intelData) => {
 
   // Google brand vs non-brand split
   let gBrandSpend = 0, gBrandConvVal = 0, gNonBrandSpend = 0, gNonBrandConvVal = 0;
-  const brandTerms = ['tallowbourn', 'tallowbourne', 'tallow bourn'];
+  const brandTerms = storeName
+    ? [storeName.toLowerCase(), storeName.toLowerCase().replace(/\s+/g, '')]
+    : [];
   if (intelData.googleSearchTerms) {
     const st = intelData.googleSearchTerms;
     [...(st.topByROAS || []), ...(st.topByRevenue || []), ...(st.wasteful || [])].forEach(t => {
@@ -1195,21 +1197,17 @@ Numbered checklist of EVERY action, organized by platform (${[hasMeta && 'Meta A
 ## 📆 CEO's WEEKLY REVIEW TEMPLATE
 7-item checklist for Monday morning: metric, where to find it, what "good" looks like, what to do if off.`;
 
-  const userPrompt = `Generate a comprehensive DTC Growth & Advertising Action Report for Tallowbourn (tallow-based skincare: lip balms, body balms, deodorant).
+  const brandName = storeName || 'this brand';
+  const userPrompt = `Generate a comprehensive DTC Growth & Advertising Action Report for ${brandName}.
 
 REPORTS AVAILABLE: ${available.join(', ')}
 ${available.length < 5 ? `\nNOTE: Only ${available.length} report types uploaded. Analyze what's available and note which missing reports would enable deeper analysis.` : ''}
 
-PRODUCT CONTEXT:
-- Lip Balm 3-Pack — hero SKU, ~$14 price point, highest volume
-- Body Balm 2oz — premium product, $18-24 price point
-- Deodorant — newer product, $12-16, building awareness
-- Shopify DTC site: tallowbourn.com
-- Also selling on Amazon (separate PPC report covers Amazon ads)
-- ~$200-300/day total DTC ad budget (Meta + Google)
-- Target TACOS: <30% (total ad spend / total Shopify revenue)
-- ~60% gross margins
-- Target CAC: <$15 for lip balm, <$25 for body balm, <$18 for deodorant
+BUSINESS CONTEXT:
+- Brand: ${brandName}
+- Channels: Shopify DTC + Amazon
+- Ad platforms: Google Ads, Meta Ads
+- Identify products, pricing, and performance from the data below
 
 ${dataContext}
 
@@ -1277,6 +1275,7 @@ const DtcAdsIntelModal = ({
   saveReportToHistory,
   allDaysData,
   setAllDaysData,
+  storeName,
 }) => {
   const [detectedFiles, setDetectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -1539,7 +1538,7 @@ const DtcAdsIntelModal = ({
     setReportError(null);
     setActionReport(null);
     try {
-      const prompts = buildDtcActionReportPrompt(dtcIntelData);
+      const prompts = buildDtcActionReportPrompt(dtcIntelData, storeName);
       if (!prompts) throw new Error('No data available');
       const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel);
       setActionReport(response);
@@ -1637,9 +1636,16 @@ const DtcAdsIntelModal = ({
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
                     >
-                      {AI_MODEL_OPTIONS.map(m => (
-                        <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
-                      ))}
+                      <optgroup label="Anthropic">
+                        {AI_MODEL_OPTIONS.filter(m => m.provider === 'anthropic').map(m => (
+                          <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="OpenAI">
+                        {AI_MODEL_OPTIONS.filter(m => m.provider === 'openai').map(m => (
+                          <option key={m.value} value={m.value}>{m.label} — {m.cost}</option>
+                        ))}
+                      </optgroup>
                     </select>
                   </div>
                   <button onClick={generateActionReport} className="w-full px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-white font-medium flex items-center justify-center gap-2 text-sm shadow-lg shadow-cyan-500/20">

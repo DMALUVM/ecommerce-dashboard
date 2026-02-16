@@ -1033,7 +1033,7 @@ export const mergeTier2IntoIntelData = (existing, tier2Results) => {
 export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, amazonCampaigns, dtcIntelData) => {
   const sections = [];
   
-  sections.push(`You are an expert Amazon & DTC advertising strategist performing a comprehensive audit of Tallowbourn's advertising across all platforms. Provide specific, actionable recommendations with exact numbers. Do NOT be generic — reference specific campaigns, keywords, ASINs, placements, and metrics.
+  sections.push(`You are an expert Amazon & DTC advertising strategist performing a comprehensive audit of this brand's advertising across all platforms. Provide specific, actionable recommendations with exact numbers. Do NOT be generic — reference specific campaigns, keywords, ASINs, placements, and metrics.
 
 CRITICAL METRIC DEFINITIONS — use these correctly throughout:
 - PLATFORM ROAS = Ad-attributed revenue / Ad spend (what Google/Meta/Amazon report — inflated by attribution overlap)
