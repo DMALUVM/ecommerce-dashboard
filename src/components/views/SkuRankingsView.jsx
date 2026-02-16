@@ -126,7 +126,7 @@ const SkuRankingsView = ({
     } else if (skuDateRange === 'ytd') {
       // YTD = 2026 weekly data only
       sortedWeeks = weeks2026;
-      dataSourceLabel = `2026 Year to Date`;
+      dataSourceLabel = `${currentYearStr} Year to Date`;
     } else if (skuDateRange === '2025') {
       // 2025 = Monthly periods only (no weekly data for 2025)
       sortedWeeks = [];

@@ -389,7 +389,7 @@ const ProfitabilityView = ({
     // Calculate key metrics
     const avgOrderValue = totals.units > 0 ? totals.revenue / totals.units : 0;
     const profitPerUnit = totals.units > 0 ? totals.profit / totals.units : 0;
-    const returnRate = (totals.units + totals.returns) > 0 ? (totals.returns / (totals.units + totals.returns)) * 100 : 0;
+    const returnRate = totals.units > 0 ? (totals.returns / totals.units) * 100 : 0;
     const grossMargin = totals.revenue > 0 ? ((totals.revenue - totals.cogs) / totals.revenue) * 100 : 0;
     const operatingMargin = totals.revenue > 0 ? ((totals.revenue - totals.cogs - totals.amazonFees - totals.threeplCosts) / totals.revenue) * 100 : 0;
     
@@ -405,19 +405,19 @@ const ProfitabilityView = ({
     const marginTrends = trendPeriods.map(p => {
       const data = getData(p);
       if (!data) return null;
-      const rev = data.total?.revenue || 1;
+      const rev = data.total?.revenue || 0;
       const profit = getProfit(data.total);
       return {
         period: p,
-        label: trendPeriodType === 'week' 
+        label: trendPeriodType === 'week'
           ? new Date(p + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
           : p.replace(/\s*\d{4}$/, '').slice(0, 3),
-        revenue: data.total?.revenue || 0,
+        revenue: rev,
         profit: profit,
-        margin: (profit / rev) * 100,
-        cogsPct: ((data.total?.cogs || 0) / rev) * 100,
-        adsPct: ((data.total?.adSpend || 0) / rev) * 100,
-        feesPct: (((data.amazon?.fees || 0) + (data.shopify?.threeplCosts || 0)) / rev) * 100,
+        margin: rev > 0 ? (profit / rev) * 100 : 0,
+        cogsPct: rev > 0 ? ((data.total?.cogs || 0) / rev) * 100 : 0,
+        adsPct: rev > 0 ? ((data.total?.adSpend || 0) / rev) * 100 : 0,
+        feesPct: rev > 0 ? (((data.amazon?.fees || 0) + (data.shopify?.threeplCosts || 0)) / rev) * 100 : 0,
       };
     }).filter(Boolean);
     

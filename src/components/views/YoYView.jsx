@@ -222,7 +222,7 @@ const YoYView = ({
     const previousYearComparable = (() => {
       if (!previousYear || !currentYear) return null;
       const currMonthKeys = Object.keys(currentMonths);
-      if (currMonthKeys.length === 0 || currMonthKeys.length >= 12) return null;
+      if (currMonthKeys.length === 0) return null;
       const matchingMonths = currMonthKeys.filter(m => previousMonths[m]);
       if (matchingMonths.length === 0) return null;
       const agg = { revenue: 0, profit: 0, units: 0 };
