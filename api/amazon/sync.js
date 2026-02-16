@@ -988,6 +988,14 @@ export default async function handler(req, res) {
         const { dailyResults, totalOrders } = ordersResult;
         const mergedResults = mergeWithSalesTraffic(dailyResults, stResult);
 
+        // Log revenue comparison for last few days so we can verify accuracy in Vercel logs
+        const recentDays = Object.keys(dailyResults).sort().slice(-3);
+        recentDays.forEach(d => {
+          const ordersRev = dailyResults[d]?.amazon?.revenueFromOrders ?? dailyResults[d]?.amazon?.revenue ?? 0;
+          const stRev = stResult?.[d]?.revenue;
+          const finalRev = mergedResults[d]?.amazon?.revenue ?? 0;
+          console.log(`[Sales] ${d}: orders=$${ordersRev.toFixed(2)}${stRev != null ? ` S&T=$${stRev.toFixed(2)}` : ''} → final=$${finalRev.toFixed(2)}`);
+        });
         console.log('[Sales] Final:', Object.keys(mergedResults).length, 'days,', totalOrders, 'order lines,', stResult ? 'with S&T totals' : 'orders only');
         return res.status(200).json({
           success: true, syncType: 'sales', source: 'amazon-orders-api', status: 'complete',
