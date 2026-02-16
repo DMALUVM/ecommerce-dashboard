@@ -772,11 +772,12 @@ const UploadView = ({
                       onChange={async (e) => {
                         const files = Array.from(e.target.files || []);
                         if (files.length === 0) return;
-                        
+
                         setBulkAdProcessing(true);
                         setBulkAdFiles([]);
                         setBulkAdParsed(null);
-                        
+
+                        try {
                         const parsedFiles = [];
                         let combinedDaily = [];
                         let combinedWeekly = [];
@@ -787,19 +788,19 @@ const UploadView = ({
                         let totalConversions = 0;
                         let errors = [];
                         let detectedPlatforms = new Set();
-                        
+
                         for (const file of files) {
                           const text = await file.text();
                           const parsed = parseBulkAdFile(text, null, file.name);
-                          
+
                           if (parsed.error) {
                             errors.push(`${file.name}: ${parsed.error}`);
                             continue;
                           }
-                          
+
                           if (parsed.platform) detectedPlatforms.add(parsed.platform);
                           parsedFiles.push({ name: file.name, parsed, platform: parsed.platform });
-                          
+
                           if (parsed.dailyData) combinedDaily.push(...parsed.dailyData);
                           if (parsed.weeklyData) combinedWeekly.push(...parsed.weeklyData);
                           if (parsed.monthlyData) combinedMonthly.push(...parsed.monthlyData);
@@ -808,7 +809,7 @@ const UploadView = ({
                           totalClicks += parsed.totalClicks || 0;
                           totalConversions += parsed.totalConversions || 0;
                         }
-                        
+
                         const dailyMap = {};
                         combinedDaily.forEach(d => {
                           if (d.isMonthly) return;
@@ -824,7 +825,7 @@ const UploadView = ({
                           if (d.platform && !dailyMap[d.date].platform) dailyMap[d.date].platform = d.platform;
                         });
                         const deduped = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
-                        
+
                         const weeklyMap = {};
                         deduped.forEach(d => {
                           const date = new Date(d.date + 'T00:00:00');
@@ -840,14 +841,14 @@ const UploadView = ({
                           weeklyMap[weekKey].days++;
                           if (!weeklyMap[weekKey].platform && d.platform) weeklyMap[weekKey].platform = d.platform;
                         });
-                        
+
                         const monthlyData = combinedMonthly;
                         const weeklyData = Object.values(weeklyMap).sort((a, b) => a.weekEnding.localeCompare(b.weekEnding));
-                        
+
                         let weeksWithExistingData = 0;
                         weeklyData.forEach(w => { if (allWeeksData[w.weekEnding]) weeksWithExistingData++; });
                         let monthsWithExistingData = 0;
-                        
+
                         setBulkAdFiles(parsedFiles);
                         setBulkAdParsed({
                           weeklyData, monthlyData, totalSpend, totalImpressions, totalClicks, totalConversions,
@@ -857,7 +858,11 @@ const UploadView = ({
                           isMonthlyData: monthlyData.length > 0 && weeklyData.length === 0,
                           errors,
                         });
-                        setBulkAdProcessing(false);
+                        } catch (err) {
+                          setToast({ message: `Failed to process files: ${err.message}`, type: 'error' });
+                        } finally {
+                          setBulkAdProcessing(false);
+                        }
                       }}
                     />
                     {bulkAdProcessing ? (
@@ -2087,6 +2092,10 @@ const UploadView = ({
                                 preview: false,
                               }),
                             });
+                            if (!res.ok) {
+                              const errorText = await res.text();
+                              throw new Error(`API error ${res.status}: ${errorText.slice(0, 100)}`);
+                            }
                             const data = await res.json();
                             if (data.error) throw new Error(data.error);
                             

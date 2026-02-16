@@ -694,7 +694,7 @@ const SettingsView = ({
             <div>
               <label className="block text-sm text-slate-400 mb-1">Lead Time</label>
               <div className="flex items-center gap-1">
-                <input type="number" value={settingsCategoryForm?.leadTimeDays || 14} onChange={(e) => setSettingsCategoryForm(f => ({ ...f, leadTimeDays: parseInt(e.target.value) || 14 }))} className="w-16 px-2 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center" />
+                <input type="number" min="1" value={settingsCategoryForm?.leadTimeDays || 14} onChange={(e) => setSettingsCategoryForm(f => ({ ...f, leadTimeDays: Math.max(1, parseInt(e.target.value) || 14) }))} className="w-16 px-2 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm text-center" />
                 <span className="text-slate-500 text-xs">days</span>
               </div>
             </div>
