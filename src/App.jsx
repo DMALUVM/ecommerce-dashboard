@@ -16047,21 +16047,57 @@ Analyze the data and respond with ONLY this JSON:
       const tokenBudget = needsFullContext ? budgets.audit : budgets.followUp;
       
       // ── SYSTEM PROMPT: Instructions only (cacheable, no data) ──
-      const systemPrompt = `You are a $15,000/month Amazon PPC strategist and multi-channel advertising expert performing analysis for Tallowbourn, a tallow-based skincare brand selling lip balms, body balms, and natural deodorant through Amazon and Shopify (DTC).
+      // Detect available data for adaptive prompt structure
+      const hasAmzSearchTerms = adsIntelData?.amazon?.sp_search_terms?.records?.length > 0;
+      const hasAmzPlacements = adsIntelData?.amazon?.sp_placement?.records?.length > 0;
+      const hasAmzAdvertised = adsIntelData?.amazon?.sp_advertised_product?.records?.length > 0;
+      const hasGoogleDetail = adsIntelData?.google && Object.keys(adsIntelData.google).some(k => adsIntelData.google[k]?.records?.length > 0);
+      const hasMetaDetail = adsIntelData?.meta && Object.keys(adsIntelData.meta).some(k => adsIntelData.meta[k]?.records?.length > 0);
+      const brandName = storeName || 'this brand';
+
+      // Build data-awareness block
+      const dataGaps = [];
+      if (!hasAmzSearchTerms) dataGaps.push('No Amazon search term data uploaded. Cannot make keyword-level recommendations. Tell user to download Search Term Report from Amazon Ads Console > Reports.');
+      if (!hasAmzPlacements) dataGaps.push('No Amazon placement data uploaded. Cannot analyze TOS vs Product Pages vs RoS. Tell user to download Placement Report from Amazon Ads Console.');
+      if (!hasAmzAdvertised) dataGaps.push('No Amazon advertised product data. Cannot do SKU-level ad profitability analysis.');
+      const sortedDaysForCheck = Object.keys(allDaysData || {}).sort();
+      const hasGoogleSpend = sortedDaysForCheck.some(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? 0) > 0);
+      const hasMetaSpend = sortedDaysForCheck.some(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? 0) > 0);
+      if (hasGoogleSpend && !hasGoogleDetail) dataGaps.push('Google Ads spend detected in daily data but no campaign/keyword detail uploaded. Google analysis limited to spend-level trends. Tell user to upload Google Ads CSV export.');
+      if (hasMetaSpend && !hasMetaDetail) dataGaps.push('Meta Ads spend detected in daily data but no campaign/creative data uploaded. Meta analysis limited to spend-level trends. Tell user to upload Meta Ads CSV export.');
+
+      const dataAwarenessBlock = dataGaps.length > 0
+        ? `\nDATA LIMITATIONS FOR THIS ANALYSIS:\n${dataGaps.map(d => `- ${d}`).join('\n')}\nIMPORTANT: Only produce analysis sections where you have actual data. For sections with missing data, explicitly state what the user should upload. Never fabricate campaign names, keywords, or metrics.\n`
+        : '';
+
+      // Build conditional report sections based on available data
+      const reportSections = [
+        '## EXECUTIVE SUMMARY\n- Ad health score (1-10) with specific justification\n- Total spend, revenue, blended ROAS, TACOS across all channels\n- #1 urgent problem (with dollar impact) and #1 biggest opportunity',
+        '## STOP: Cut Waste (This Week)\nEach item: KEYWORD/CAMPAIGN → EXACT SPEND & TIMEFRAME → ZERO OR LOW SALES → SPECIFIC ACTION (negative match type, pause, reduce bid to $X) → MONTHLY SAVINGS',
+        '## PROTECT: What\'s Working\nEach item: KEYWORD/CAMPAIGN → ROAS, ACOS, CONV RATE → DEFEND STRATEGY (budget floor, bid floor, exact match isolation)',
+        '## SCALE: Growth Opportunities\nEach item: OPPORTUNITY → MATH ("converting at X% with $Y/day — scaling to $Z/day projects $W additional revenue at similar ROAS") → STEP-BY-STEP LAUNCH PLAN',
+      ];
+      if (hasAmzPlacements) reportSections.push('## PLACEMENT OPTIMIZATION\nTOS vs Product Pages vs RoS: ROAS comparison → Specific bid modifier recommendations with exact percentages');
+      reportSections.push('## BUDGET REALLOCATION\nCurrent split → Recommended split with dollar amounts and rationale');
+      reportSections.push('## TREND DIAGNOSIS\nMoM trajectory with % changes, TACOS trend (growing ad-dependence?), seasonal preparation');
+      if (hasGoogleDetail) reportSections.push('## GOOGLE ADS DEEP DIVE\nCampaign performance, search term quality, keyword gaps, CPC/CTR/Conv Rate analysis, negative keyword candidates');
+      if (hasMetaDetail) reportSections.push('## META ADS DEEP DIVE\nCampaign/ad set performance, creative fatigue indicators, audience insights, placement breakdown (Feed vs Stories vs Reels), CPA trends');
+      reportSections.push('## THIS WEEK: Top 5 Priority Actions\n1. [Specific action] → [$X impact] → [Y minutes to implement] → [Exact steps in ad console]');
+
+      const systemPrompt = `You are a $15,000/month multi-channel advertising strategist and PPC expert performing analysis for ${brandName}.
 
 BUSINESS CONTEXT:
-- Brand: Tallowbourn (premium tallow skincare — niche, health-conscious audience)
-- Channels: Amazon (primary revenue) + Shopify DTC
-- Products: Natural tallow lip balm, body balm, deodorant
+- Brand: ${brandName}
+- Channels: Amazon + Shopify DTC
 - Ad platforms: Amazon Ads (SP/SB/SD), Google Ads, Meta Ads
-- Key competitive space: natural/organic skincare, tallow skincare, clean beauty
+- Product catalog and competitive context are discoverable from the data provided below
 
 YOUR ANALYSIS STANDARDS:
 You produce reports that would justify a $15K/month retainer. Every recommendation must pass this test: "Would a CMO pay for this insight, or could they have Googled it?"
 
 HARD RULES — NON-NEGOTIABLE:
 1. CITE SPECIFIC DATA: Every claim must reference actual campaign names, search terms, ASINs, dollar amounts, and percentages from the provided data
-2. SHOW THE MATH: "Search term 'tallow lip balm' spent $147 over 30d with 0 orders → $4.90/day wasted → $147/month savings if negated"
+2. SHOW THE MATH: "Search term X spent $Y over 30d with 0 orders → $Z/day wasted → $W/month savings if negated"
 3. NO VAGUE LANGUAGE: Never say "consider", "you might", "look into", "it could be beneficial" — say DO THIS or STOP THIS
 4. PRIORITIZE BY DOLLAR IMPACT: Lead with highest-savings or highest-revenue-potential items
 5. IMPLEMENTATION STEPS: For every action, give exact click-path in Amazon/Google/Meta ad console
@@ -16070,34 +16106,12 @@ HARD RULES — NON-NEGOTIABLE:
 8. MISSING DATA: When data is insufficient, state exactly which report to download and upload
 9. BID SPECIFICS: Include exact bid amounts, not just "increase bids"
 10. TIME-BOUND: Every recommendation gets a "do by" date (this week / next 7 days / next 30 days)
-
+11. ATTRIBUTION INTEGRITY: Google/Meta platform-reported conversions may overlap with Shopify orders. Never stack platform ROAS values as additive. Use MER (Total Revenue / Total Ad Spend) as the ground truth for cross-platform efficiency
+12. DATA-DEPENDENT: Only produce analysis sections where data exists. If no search terms uploaded, skip keyword recs — tell user what to upload instead. Never fabricate campaign names or metrics
+${dataAwarenessBlock}
 FOR FULL AUDIT/ACTION PLAN REQUESTS — USE THIS STRUCTURE:
 
-## 📊 EXECUTIVE SUMMARY
-- Ad health score (1-10) with specific justification
-- Total spend, revenue, blended ROAS, TACOS across all channels
-- #1 urgent problem (with dollar impact) and #1 biggest opportunity
-
-## 🔴 STOP: Cut Waste (This Week)
-Each item: KEYWORD/CAMPAIGN → EXACT SPEND & TIMEFRAME → ZERO OR LOW SALES → SPECIFIC ACTION (negative match type, pause, reduce bid to $X) → MONTHLY SAVINGS
-
-## 🟢 PROTECT: What's Working
-Each item: KEYWORD/CAMPAIGN → ROAS, ACOS, CONV RATE → DEFEND STRATEGY (budget floor, bid floor, exact match isolation)
-
-## 🚀 SCALE: Growth Opportunities  
-Each item: OPPORTUNITY → MATH ("converting at X% with $Y/day — scaling to $Z/day projects $W additional revenue at similar ROAS") → STEP-BY-STEP LAUNCH PLAN
-
-## 🔄 PLACEMENT OPTIMIZATION
-TOS vs Product Pages vs RoS: ROAS comparison → Specific bid modifier recommendations with exact percentages
-
-## 💰 BUDGET REALLOCATION
-Current split → Recommended split with dollar amounts and rationale
-
-## 📈 TREND DIAGNOSIS  
-MoM trajectory with % changes, TACOS trend (growing ad-dependence?), seasonal preparation
-
-## 🎯 THIS WEEK: Top 5 Priority Actions
-1. [Specific action] → [$X impact] → [Y minutes to implement] → [Exact steps]
+${reportSections.join('\n\n')}
 
 FOR FOLLOW-UP QUESTIONS:
 Reference the full data from the prior analysis. Be concise but still specific with numbers. If asking about a specific campaign or keyword, zoom in on that data point.`;
@@ -16111,16 +16125,8 @@ Reference the full data from the prior analysis. Be concise but still specific w
         const last30Days = {};
         sortedDays.slice(-30).forEach(d => { last30Days[d] = allDaysData[d]; });
         
-        // Primary: New Tier 2 comprehensive prompt (from adsReportParser)
-        dataBlock = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns);
-        
-        // Append old-format intel if available and not redundant
-        const oldContext = buildAdsIntelContext(adsIntelData);
-        if (oldContext && !dataBlock.includes('SP SEARCH TERM')) {
-          dataBlock += '\n' + oldContext;
-        }
-        const dtcContext = buildDtcIntelContext(dtcIntelData);
-        if (dtcContext) dataBlock += '\n' + dtcContext;
+        // Comprehensive prompt builder — single source of truth for all ad data
+        dataBlock = buildComprehensiveAdsPrompt(adsIntelData, last30Days, amazonCampaigns, dtcIntelData);
         
         // ── Inject prior report memory for continuity ──
         if (adsAiReportHistory.length > 0) {
@@ -16166,7 +16172,14 @@ Reference the full data from the prior analysis. Be concise but still specific w
         });
         rSpend = rAmzSpend + rGoog + rMeta;
         const rAcos = rRev > 0 ? ((rAmzSpend / rRev) * 100).toFixed(1) : 'N/A';
-        dataBlock = `[14-day snapshot: Amazon $${rAmzSpend.toFixed(0)} spend (ACOS ${rAcos}%), Google $${rGoog.toFixed(0)}, Meta $${rMeta.toFixed(0)}. Total spend $${rSpend.toFixed(0)}, revenue $${rRev.toFixed(0)}, blended ROAS ${rSpend > 0 ? (rRev/rSpend).toFixed(2) : 'N/A'}x. Full data was provided in the first message of this conversation.]`;
+        const availableData = [
+          hasAmzSearchTerms && 'Amazon search terms',
+          hasAmzPlacements && 'Amazon placements',
+          hasAmzAdvertised && 'Amazon SKU ad data',
+          hasGoogleDetail && 'Google campaign details',
+          hasMetaDetail && 'Meta campaign details',
+        ].filter(Boolean).join(', ') || 'daily KPIs only';
+        dataBlock = `[14-day snapshot: Amazon $${rAmzSpend.toFixed(0)} spend (ACOS ${rAcos}%), Google $${rGoog.toFixed(0)}, Meta $${rMeta.toFixed(0)}. Total spend $${rSpend.toFixed(0)}, revenue $${rRev.toFixed(0)}, blended ROAS ${rSpend > 0 ? (rRev/rSpend).toFixed(2) : 'N/A'}x. Data available from initial analysis: ${availableData}. Full data was provided in the first message of this conversation.]`;
       }
       
       // Build message with data separated from question
@@ -17897,6 +17910,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setToast={setToast}
       setUploadTab={setUploadTab}
       showAdsAIChat={showAdsAIChat}
+      storeName={storeName}
       setView={setView}
       view={view}
       save={save}

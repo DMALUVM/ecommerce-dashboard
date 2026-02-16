@@ -76,8 +76,8 @@ const AdsView = ({
   setAdsTimeTab, setAdsViewMode, setAdsYear, setAmazonCampaignFilter,
   setAmazonCampaignSort, setNavDropdown, setSelectedDay, setSelectedInvDate,
   setSelectedPeriod, setSelectedWeek, setShowAdsAIChat, setShowAdsBulkUpload,
-  setShowAdsIntelUpload, setToast, setUploadTab, showAdsAIChat, setView,
-  view, save
+  setShowAdsIntelUpload, setToast, setUploadTab, showAdsAIChat, storeName,
+  setView, view, save
 }) => {
   const sortedWeeks = Object.keys(allWeeksData).sort();
   const sortedDays = Object.keys(allDaysData || {}).sort();
@@ -127,7 +127,7 @@ const AdsView = ({
           gSpend = 0, mSpend = 0, shopRev = 0,
           gClicks = 0, mClicks = 0, amzClicks = 0,
           gImpr = 0, mImpr = 0, amzImpr = 0,
-          gConv = 0, mPurch = 0, amzConv = 0, mPurchVal = 0;
+          gConv = 0, mPurch = 0, amzConv = 0, mPurchVal = 0, gConvVal = 0;
       dayList.forEach(d => {
         const day = allDaysData[d]; if (!day) return;
         const aS = day.amazon?.adSpend ?? day.amazonAdsMetrics?.spend ?? 0;
@@ -145,6 +145,7 @@ const AdsView = ({
         gImpr += am.googleImpressions || day.googleImpressions || 0; mImpr += am.metaImpressions || day.metaImpressions || 0; amzImpr += amzM.impressions || day.amazon?.adImpressions || 0;
         gConv += am.googleConversions || day.googleConversions || 0; mPurch += am.metaPurchases || day.metaPurchases || day.metaConversions || 0;
         amzConv += amzM.conversions || day.amazon?.adOrders || 0; mPurchVal += am.metaPurchaseValue || day.metaPurchaseValue || 0;
+        gConvVal += am.googleConvValue || day.googleConvValue || day.googleConversionValue || 0;
       });
       const totalClicks = gClicks + mClicks + amzClicks;
       const totalImpr = gImpr + mImpr + amzImpr;
@@ -163,10 +164,13 @@ const AdsView = ({
         gCpc: gClicks > 0 ? gSpend / gClicks : 0,
         gCtr: gImpr > 0 ? (gClicks / gImpr) * 100 : 0,
         gConvRate: gClicks > 0 ? (gConv / gClicks) * 100 : 0,
+        gConvVal,
+        gRoas: gSpend > 0 ? (gConvVal > 0 ? gConvVal / gSpend : 0) : 0,
         mCpc: mClicks > 0 ? mSpend / mClicks : 0,
         mCtr: mImpr > 0 ? (mClicks / mImpr) * 100 : 0,
         mCpa: mPurch > 0 ? mSpend / mPurch : 0,
         mRoas: mSpend > 0 ? mPurchVal / mSpend : 0,
+        amzAdRoas: amzSpend > 0 ? amzAdRev / amzSpend : 0,
         adRevPct: rev > 0 ? (amzAdRev / rev) * 100 : 0,
         organicRev: rev - amzAdRev,
         organicPct: rev > 0 ? ((rev - amzAdRev) / rev) * 100 : 0,
@@ -220,7 +224,11 @@ const AdsView = ({
       const mAds = day.shopify?.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
       const aR = day.amazon?.revenue || 0; const sR = day.shopify?.revenue || 0;
       const totalAds = aAds + gAds + mAds; const totalRev = aR + sR;
-      return { date: d, amazonAds: aAds, googleAds: gAds, metaAds: mAds, totalAds, amazonRev: aR, shopifyRev: sR, totalRev, tacos: totalRev > 0 ? (totalAds / totalRev) * 100 : 0 };
+      const am = day.shopify?.adsMetrics || {};
+      const amzM = day.amazonAdsMetrics || {};
+      const clicks = (amzM.clicks || day.amazon?.adClicks || 0) + (am.googleClicks || day.googleClicks || 0) + (am.metaClicks || day.metaClicks || 0);
+      const conversions = (amzM.conversions || day.amazon?.adOrders || 0) + (am.googleConversions || day.googleConversions || 0) + (am.metaPurchases || day.metaPurchases || 0);
+      return { date: d, amazonAds: aAds, googleAds: gAds, metaAds: mAds, totalAds, amazonRev: aR, shopifyRev: sR, totalRev, tacos: totalRev > 0 ? (totalAds / totalRev) * 100 : 0, roas: totalAds > 0 ? totalRev / totalAds : 0, clicks, conversions };
     }).filter(Boolean);
 
     return { current: cur, prior, trend, dowData, budgetSplit, days, priorDays, aTrend, gTrend, mTrend, tableRows };
@@ -374,6 +382,182 @@ const AdsView = ({
   }, [adsIntelData, dateRange, periodData, allDaysData, hasCampaignData, campaigns]);
 
   // ══════════════════════════════════════════════════════════════
+  // DATA COMPLETENESS INDICATOR
+  // ══════════════════════════════════════════════════════════════
+  const dataCompleteness = useMemo(() => {
+    const checks = [];
+    const { current: cur } = periodData;
+
+    // Amazon checks
+    const amzDailyDays = sortedDays.filter(d => (allDaysData[d]?.amazon?.adSpend ?? allDaysData[d]?.amazonAdsMetrics?.spend ?? 0) > 0).length;
+    checks.push({ platform: 'Amazon', type: 'Daily KPIs', status: amzDailyDays >= 7 ? 'complete' : amzDailyDays > 0 ? 'partial' : 'missing', detail: amzDailyDays > 0 ? `${amzDailyDays}d tracked` : 'Upload daily sales data', weight: 15 });
+
+    checks.push({ platform: 'Amazon', type: 'Campaigns', status: hasCampaignData ? 'complete' : 'missing', detail: hasCampaignData ? `${campaigns.filter(c => (c.spend||0) > 0).length} active` : 'Upload campaign report', weight: 10 });
+
+    const hasAmzST = adsIntelData?.amazon?.sp_search_terms?.records?.length > 0;
+    const stCount = hasAmzST ? adsIntelData.amazon.sp_search_terms.records.length : 0;
+    checks.push({ platform: 'Amazon', type: 'Search Terms', status: hasAmzST ? 'complete' : 'missing', detail: hasAmzST ? `${stCount} terms` : 'Upload for keyword insights', weight: 15 });
+
+    const hasAmzPlc = adsIntelData?.amazon?.sp_placement?.records?.length > 0;
+    checks.push({ platform: 'Amazon', type: 'Placements', status: hasAmzPlc ? 'complete' : 'missing', detail: hasAmzPlc ? 'TOS/RoS/PDP data' : 'Upload placement report', weight: 10 });
+
+    // Google checks
+    const gDays = sortedDays.filter(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? 0) > 0).length;
+    const hasGoogleCamp = adsIntelData?.google && Object.keys(adsIntelData.google).some(k => adsIntelData.google[k]?.records?.length > 0);
+    checks.push({ platform: 'Google', type: 'Daily Spend', status: gDays >= 7 ? 'complete' : gDays > 0 ? 'partial' : 'missing', detail: gDays > 0 ? `${gDays}d tracked` : 'No Google data', weight: 10 });
+    checks.push({ platform: 'Google', type: 'Campaign Details', status: hasGoogleCamp ? 'complete' : (gDays > 0 ? 'missing' : 'missing'), detail: hasGoogleCamp ? `${Object.values(adsIntelData.google).reduce((s, d) => s + (d?.records?.length || 0), 0)} rows` : (gDays > 0 ? 'Upload Google Ads CSV' : 'N/A'), weight: 15 });
+
+    // Meta checks
+    const mDays = sortedDays.filter(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? 0) > 0).length;
+    const hasMetaCamp = adsIntelData?.meta && Object.keys(adsIntelData.meta).some(k => adsIntelData.meta[k]?.records?.length > 0);
+    checks.push({ platform: 'Meta', type: 'Daily Spend', status: mDays >= 7 ? 'complete' : mDays > 0 ? 'partial' : 'missing', detail: mDays > 0 ? `${mDays}d tracked` : 'No Meta data', weight: 10 });
+    checks.push({ platform: 'Meta', type: 'Campaign/Creative', status: hasMetaCamp ? 'complete' : (mDays > 0 ? 'missing' : 'missing'), detail: hasMetaCamp ? `${Object.values(adsIntelData.meta).reduce((s, d) => s + (d?.records?.length || 0), 0)} rows` : (mDays > 0 ? 'Upload Meta Ads CSV' : 'N/A'), weight: 15 });
+
+    // Score
+    const maxScore = checks.reduce((s, c) => s + c.weight, 0);
+    const score = checks.reduce((s, c) => s + (c.status === 'complete' ? c.weight : c.status === 'partial' ? c.weight * 0.5 : 0), 0);
+    const pct = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+    const missingCount = checks.filter(c => c.status === 'missing' && c.detail !== 'N/A').length;
+
+    return { checks, pct, missingCount };
+  }, [sortedDays, allDaysData, adsIntelData, hasCampaignData, campaigns, periodData]);
+
+  // ══════════════════════════════════════════════════════════════
+  // CROSS-PLATFORM INTELLIGENCE (Google & Meta)
+  // ══════════════════════════════════════════════════════════════
+  const googleInsights = useMemo(() => {
+    if (!adsIntelData?.google || typeof adsIntelData.google !== 'object') return null;
+    const intel = { hasData: false, topCampaigns: [], wastedTerms: [], topTerms: [] };
+    const cutoffDate = dateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - dateRange); return d.toISOString().slice(0, 10); })();
+    const inRange = (r) => { if (!cutoffDate) return true; return (r['Day'] || r['Date'] || r['date'] || '') >= cutoffDate; };
+
+    for (const [reportType, data] of Object.entries(adsIntelData.google)) {
+      if (!data?.records?.length) continue;
+      intel.hasData = true;
+      const records = data.records.filter(inRange);
+
+      // Detect campaigns
+      const campKey = data.headers?.find(h => /campaign/i.test(h));
+      const spendKey = data.headers?.find(h => /^(spend|cost|amount)/i.test(h));
+      const salesKey = data.headers?.find(h => /conv.*value|sales|revenue/i.test(h));
+      const clicksKey = data.headers?.find(h => /^clicks$/i.test(h));
+      const convKey = data.headers?.find(h => /^conversions$/i.test(h));
+      const imprKey = data.headers?.find(h => /^impressions$/i.test(h));
+      const termKey = data.headers?.find(h => /search.*term/i.test(h));
+
+      if (campKey && spendKey) {
+        const cm = {};
+        records.forEach(r => {
+          const n = r[campKey]; if (!n) return;
+          if (!cm[n]) cm[n] = { name: n, spend: 0, sales: 0, clicks: 0, conv: 0, impr: 0 };
+          cm[n].spend += Number(r[spendKey] || 0);
+          cm[n].sales += Number(r[salesKey] || 0);
+          cm[n].clicks += Number(r[clicksKey] || 0);
+          cm[n].conv += Number(r[convKey] || 0);
+          cm[n].impr += Number(r[imprKey] || 0);
+        });
+        const gcamps = Object.values(cm).filter(c => c.spend > 0).map(c => ({
+          ...c, roas: c.spend > 0 && c.sales > 0 ? c.sales / c.spend : 0,
+          cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
+          ctr: c.impr > 0 ? (c.clicks / c.impr) * 100 : 0,
+          convRate: c.clicks > 0 ? (c.conv / c.clicks) * 100 : 0,
+        })).sort((a, b) => b.spend - a.spend);
+        if (gcamps.length > intel.topCampaigns.length) intel.topCampaigns = gcamps.slice(0, 12);
+      }
+
+      if (termKey && spendKey) {
+        const tm = {};
+        records.forEach(r => {
+          const t = r[termKey]; if (!t) return;
+          if (!tm[t]) tm[t] = { term: t, spend: 0, sales: 0, clicks: 0, conv: 0 };
+          tm[t].spend += Number(r[spendKey] || 0);
+          tm[t].sales += Number(r[salesKey] || 0);
+          tm[t].clicks += Number(r[clicksKey] || 0);
+          tm[t].conv += Number(r[convKey] || 0);
+        });
+        const terms = Object.values(tm);
+        intel.wastedTerms = terms.filter(t => t.spend >= 5 && t.conv === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
+        intel.topTerms = terms.filter(t => t.spend >= 3 && t.conv > 0).map(t => ({ ...t, roas: t.sales > 0 && t.spend > 0 ? t.sales / t.spend : 0, cpa: t.conv > 0 ? t.spend / t.conv : 0 })).sort((a, b) => b.roas - a.roas).slice(0, 10);
+      }
+    }
+    return intel.hasData ? intel : null;
+  }, [adsIntelData, dateRange]);
+
+  const metaInsights = useMemo(() => {
+    if (!adsIntelData?.meta || typeof adsIntelData.meta !== 'object') return null;
+    const intel = { hasData: false, topCampaigns: [], topAdSets: [], placementBreakdown: [] };
+    const cutoffDate = dateRange === 'all' ? null : (() => { const d = new Date(); d.setDate(d.getDate() - dateRange); return d.toISOString().slice(0, 10); })();
+    const inRange = (r) => { if (!cutoffDate) return true; return (r['Day'] || r['Date'] || r['date'] || r['Reporting starts'] || '') >= cutoffDate; };
+
+    for (const [reportType, data] of Object.entries(adsIntelData.meta)) {
+      if (!data?.records?.length) continue;
+      intel.hasData = true;
+      const records = data.records.filter(inRange);
+
+      const campKey = data.headers?.find(h => /campaign.*name/i.test(h));
+      const adSetKey = data.headers?.find(h => /ad.*set.*name/i.test(h));
+      const spendKey = data.headers?.find(h => /^(spend|amount.*spent|cost)/i.test(h));
+      const salesKey = data.headers?.find(h => /purchase.*value|conv.*value|revenue/i.test(h));
+      const clicksKey = data.headers?.find(h => /^(link.*clicks|clicks)$/i.test(h));
+      const purchKey = data.headers?.find(h => /purchases|conversions/i.test(h));
+      const imprKey = data.headers?.find(h => /^(impressions|reach)$/i.test(h));
+      const placementKey = data.headers?.find(h => /placement/i.test(h));
+
+      if (campKey && spendKey) {
+        const cm = {};
+        records.forEach(r => {
+          const n = r[campKey]; if (!n) return;
+          if (!cm[n]) cm[n] = { name: n, spend: 0, sales: 0, clicks: 0, purch: 0, impr: 0 };
+          cm[n].spend += Number(r[spendKey] || 0);
+          cm[n].sales += Number(r[salesKey] || 0);
+          cm[n].clicks += Number(r[clicksKey] || 0);
+          cm[n].purch += Number(r[purchKey] || 0);
+          cm[n].impr += Number(r[imprKey] || 0);
+        });
+        const mcamps = Object.values(cm).filter(c => c.spend > 0).map(c => ({
+          ...c, roas: c.spend > 0 && c.sales > 0 ? c.sales / c.spend : 0,
+          cpa: c.purch > 0 ? c.spend / c.purch : 0,
+          ctr: c.impr > 0 ? (c.clicks / c.impr) * 100 : 0,
+        })).sort((a, b) => b.spend - a.spend);
+        if (mcamps.length > intel.topCampaigns.length) intel.topCampaigns = mcamps.slice(0, 12);
+      }
+
+      if (adSetKey && spendKey) {
+        const sm = {};
+        records.forEach(r => {
+          const n = r[adSetKey]; if (!n) return;
+          if (!sm[n]) sm[n] = { name: n, spend: 0, sales: 0, clicks: 0, purch: 0 };
+          sm[n].spend += Number(r[spendKey] || 0);
+          sm[n].sales += Number(r[salesKey] || 0);
+          sm[n].clicks += Number(r[clicksKey] || 0);
+          sm[n].purch += Number(r[purchKey] || 0);
+        });
+        intel.topAdSets = Object.values(sm).filter(s => s.spend > 0).map(s => ({
+          ...s, roas: s.spend > 0 && s.sales > 0 ? s.sales / s.spend : 0,
+          cpa: s.purch > 0 ? s.spend / s.purch : 0,
+        })).sort((a, b) => b.spend - a.spend).slice(0, 10);
+      }
+
+      if (placementKey && spendKey) {
+        const pm = {};
+        records.forEach(r => {
+          const p = r[placementKey]; if (!p) return;
+          if (!pm[p]) pm[p] = { placement: p, spend: 0, sales: 0, clicks: 0, impr: 0 };
+          pm[p].spend += Number(r[spendKey] || 0);
+          pm[p].sales += Number(r[salesKey] || 0);
+          pm[p].clicks += Number(r[clicksKey] || 0);
+          pm[p].impr += Number(r[imprKey] || 0);
+        });
+        intel.placementBreakdown = Object.values(pm).filter(p => p.spend > 0).map(p => ({
+          ...p, roas: p.spend > 0 && p.sales > 0 ? p.sales / p.spend : 0,
+          ctr: p.impr > 0 ? (p.clicks / p.impr) * 100 : 0,
+        })).sort((a, b) => b.spend - a.spend);
+      }
+    }
+    return intel.hasData ? intel : null;
+  }, [adsIntelData, dateRange]);
+
+  // ══════════════════════════════════════════════════════════════
   // HANDLERS
   // ══════════════════════════════════════════════════════════════
   const handleFileDrop = useCallback(async (fileList) => {
@@ -501,24 +685,59 @@ const AdsView = ({
             </div>
           </div>
 
+          {/* ── DATA COMPLETENESS INDICATOR ── */}
+          {dataCompleteness.pct < 100 && (
+            <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
+              <button onClick={() => setShowDataSources(p => !p)} className="w-full flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Database className="w-4 h-4 text-cyan-400"/>
+                  <span className="text-white text-sm font-medium">Data Completeness: {dataCompleteness.pct}%</span>
+                  {dataCompleteness.missingCount > 0 && <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{dataCompleteness.missingCount} gap{dataCompleteness.missingCount !== 1 ? 's' : ''}</span>}
+                </div>
+                <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${showDataSources ? 'rotate-180' : ''}`}/>
+              </button>
+              <div className="mt-2 h-1.5 rounded-full bg-slate-700/50 overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${dataCompleteness.pct >= 80 ? 'bg-emerald-500' : dataCompleteness.pct >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${dataCompleteness.pct}%` }}/>
+              </div>
+              {showDataSources && (
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {dataCompleteness.checks.map((c, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-700/20">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.status === 'complete' ? 'bg-emerald-500' : c.status === 'partial' ? 'bg-amber-500' : 'bg-slate-600'}`}/>
+                      <span className="text-slate-400 w-14 shrink-0">{c.platform}</span>
+                      <span className="text-white flex-1">{c.type}</span>
+                      <span className={`text-[10px] ${c.status === 'complete' ? 'text-emerald-400' : c.status === 'partial' ? 'text-amber-400' : 'text-slate-600'}`}>
+                        {c.status === 'missing' && c.detail !== 'N/A' ? (
+                          <button onClick={() => setAdsViewMode('upload')} className="text-cyan-400 hover:underline">{c.detail}</button>
+                        ) : c.detail}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── PLATFORM CARDS ── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
             <div className="bg-gradient-to-br from-orange-900/15 to-slate-800/40 rounded-xl border border-orange-500/20 p-4">
               <div className="flex items-center justify-between mb-2"><h4 className="text-orange-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-orange-500"/>Amazon</h4><span className="text-white font-bold text-lg">{formatCurrency(cur.amzSpend)}</span></div>
-              <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="grid grid-cols-4 gap-2 text-xs">
                 <div><span className="text-slate-500">Revenue</span><p className="text-emerald-400 font-medium">{formatCurrency(cur.amzRev)}</p></div>
                 <div><span className="text-slate-500">TACOS</span><p className={`font-medium ${tacosColor(cur.amzTacos)}`}>{cur.amzTacos > 0 ? cur.amzTacos.toFixed(1) + '%' : '—'}</p></div>
                 <div><span className="text-slate-500">ACOS</span><p className={`font-medium ${acosColor(cur.amzAcos)}`}>{cur.amzAcos > 0 ? cur.amzAcos.toFixed(1) + '%' : '—'}</p></div>
+                <div><span className="text-slate-500">Ad ROAS</span><p className={`font-medium ${roasColor(cur.amzAdRoas)}`}>{cur.amzAdRoas > 0 ? cur.amzAdRoas.toFixed(2) + 'x' : '—'}</p></div>
               </div>
               <Sparkline data={periodData.aTrend} color="bg-orange-500" h={24} />
             </div>
             <div className="bg-gradient-to-br from-red-900/15 to-slate-800/40 rounded-xl border border-red-500/20 p-4">
               <div className="flex items-center justify-between mb-2"><h4 className="text-red-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500"/>Google</h4><span className="text-white font-bold text-lg">{formatCurrency(cur.gSpend)}</span></div>
               {cur.gSpend > 0 ? <>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div><span className="text-slate-500">Clicks</span><p className="text-white font-medium">{formatNumber(cur.gClicks)}</p></div>
-                  <div><span className="text-slate-500">Conv</span><p className="text-emerald-400 font-medium">{cur.gConv}</p></div>
-                  <div><span className="text-slate-500">CPA</span><p className={`font-medium ${cur.gConv > 0 ? ((cur.gSpend / cur.gConv) <= 15 ? 'text-emerald-400' : (cur.gSpend / cur.gConv) <= 30 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-500'}`}>{cur.gConv > 0 ? formatCurrency(cur.gSpend / cur.gConv) : '—'}</p></div>
+                <div className="grid grid-cols-4 gap-2 text-xs">
+                  <div><span className="text-slate-500">ROAS</span><p className={`font-medium ${cur.gRoas > 0 ? roasColor(cur.gRoas) : 'text-slate-500'}`}>{cur.gRoas > 0 ? cur.gRoas.toFixed(2) + 'x' : '—'}</p></div>
+                  <div><span className="text-slate-500">CTR</span><p className={`font-medium ${cur.gCtr > 3 ? 'text-emerald-400' : cur.gCtr > 1 ? 'text-amber-400' : 'text-slate-400'}`}>{cur.gCtr > 0 ? cur.gCtr.toFixed(1) + '%' : '—'}</p></div>
+                  <div><span className="text-slate-500">CPC</span><p className={`font-medium ${cur.gCpc > 0 ? (cur.gCpc < 1.5 ? 'text-emerald-400' : cur.gCpc < 3 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-500'}`}>{cur.gCpc > 0 ? formatCurrency(cur.gCpc) : '—'}</p></div>
+                  <div><span className="text-slate-500">Conv%</span><p className={`font-medium ${cur.gConvRate > 5 ? 'text-emerald-400' : cur.gConvRate > 2 ? 'text-amber-400' : 'text-slate-400'}`}>{cur.gConvRate > 0 ? cur.gConvRate.toFixed(1) + '%' : '—'}</p></div>
                 </div>
                 <Sparkline data={periodData.gTrend} color="bg-red-500" h={24} />
               </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={() => setAdsViewMode('upload')} className="text-red-400 hover:underline">upload CSV</button></p>}
@@ -526,15 +745,37 @@ const AdsView = ({
             <div className="bg-gradient-to-br from-blue-900/15 to-slate-800/40 rounded-xl border border-blue-500/20 p-4">
               <div className="flex items-center justify-between mb-2"><h4 className="text-blue-400 font-semibold text-sm flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"/>Meta</h4><span className="text-white font-bold text-lg">{formatCurrency(cur.mSpend)}</span></div>
               {cur.mSpend > 0 ? <>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div><span className="text-slate-500">Clicks</span><p className="text-white font-medium">{formatNumber(cur.mClicks)}</p></div>
-                  <div><span className="text-slate-500">Purchases</span><p className="text-emerald-400 font-medium">{formatNumber(Math.round(cur.mPurch))}</p></div>
+                <div className="grid grid-cols-4 gap-2 text-xs">
+                  <div><span className="text-slate-500">ROAS</span><p className={`font-medium ${cur.mRoas > 0 ? roasColor(cur.mRoas) : 'text-slate-500'}`}>{cur.mRoas > 0 ? cur.mRoas.toFixed(2) + 'x' : '—'}</p></div>
+                  <div><span className="text-slate-500">CTR</span><p className={`font-medium ${cur.mCtr > 2 ? 'text-emerald-400' : cur.mCtr > 0.8 ? 'text-amber-400' : 'text-slate-400'}`}>{cur.mCtr > 0 ? cur.mCtr.toFixed(2) + '%' : '—'}</p></div>
                   <div><span className="text-slate-500">CPA</span><p className={`font-medium ${cur.mCpa > 0 && cur.mCpa <= 15 ? 'text-emerald-400' : cur.mCpa <= 30 ? 'text-amber-400' : 'text-rose-400'}`}>{cur.mCpa > 0 ? formatCurrency(cur.mCpa) : '—'}</p></div>
+                  <div><span className="text-slate-500">CPC</span><p className={`font-medium ${cur.mCpc > 0 ? (cur.mCpc < 1 ? 'text-emerald-400' : cur.mCpc < 2 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-500'}`}>{cur.mCpc > 0 ? formatCurrency(cur.mCpc) : '—'}</p></div>
                 </div>
                 <Sparkline data={periodData.mTrend} color="bg-blue-500" h={24} />
               </> : <p className="text-slate-600 text-xs mt-1">No data — <button onClick={() => setAdsViewMode('upload')} className="text-blue-400 hover:underline">upload CSV</button></p>}
             </div>
           </div>
+
+          {/* ── PER-PLATFORM PROFITABILITY ── */}
+          {cur.spend > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-3.5">
+                <p className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Amazon Net (Rev - Ad Spend)</p>
+                <p className={`text-lg font-bold ${(cur.amzRev - cur.amzSpend) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(cur.amzRev - cur.amzSpend)}</p>
+                <p className="text-slate-600 text-[10px]">{cur.amzSpend > 0 ? `${((cur.amzRev - cur.amzSpend) / cur.amzSpend * 100).toFixed(0)}% ROI` : ''}</p>
+              </div>
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-3.5">
+                <p className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">DTC Net (Shopify Rev - G/M Spend)</p>
+                <p className={`text-lg font-bold ${(cur.shopRev - cur.gSpend - cur.mSpend) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(cur.shopRev - cur.gSpend - cur.mSpend)}</p>
+                <p className="text-slate-600 text-[10px]">Attribution approximate — platform conversions may overlap</p>
+              </div>
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-3.5">
+                <p className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Blended MER (Total Rev / Total Spend)</p>
+                <p className={`text-lg font-bold ${cur.roas >= 3 ? 'text-emerald-400' : cur.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{cur.roas > 0 ? cur.roas.toFixed(2) + 'x' : '—'}</p>
+                <p className="text-slate-600 text-[10px]">Ground truth — no attribution overlap</p>
+              </div>
+            </div>
+          )}
 
           {/* ── ALERTS ── */}
           {(amazonAdsInsights.staleCampaignWarning || amazonAdsInsights.zeroSaleCampaigns.length > 0 || amazonAdsInsights.zeroSaleDays.length > 0) && (
@@ -628,7 +869,7 @@ const AdsView = ({
           })()}
 
           {/* ── INTELLIGENCE SECTION ── */}
-          {amazonAdsInsights.hasData && (
+          {(amazonAdsInsights.hasData || googleInsights?.hasData || metaInsights?.hasData) && (
             <div className="mb-5">
               <h2 className="text-base font-bold text-white flex items-center gap-2 mb-3"><Flame className="w-4 h-4 text-orange-400"/>Intelligence — {dateRangeLabel}</h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -785,6 +1026,77 @@ const AdsView = ({
                   </div>
                 )}
 
+                {/* Google Campaigns */}
+                {googleInsights?.topCampaigns?.length > 0 && (
+                  <div className="bg-gradient-to-br from-red-900/10 to-slate-800/30 rounded-xl border border-red-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500"/>Google Campaigns</h3>
+                    <div className="space-y-1">
+                      {googleInsights.topCampaigns.slice(0, 8).map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-rose-500'}`}/>
+                          <span className="text-white flex-1 truncate">{c.name}</span>
+                          <span className="text-slate-300 w-14 text-right">{formatCurrency(c.spend)}</span>
+                          <span className={`font-semibold w-12 text-right ${roasColor(c.roas)}`}>{c.roas > 0 ? c.roas.toFixed(1) + 'x' : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => { setAdsAiInput('Deep dive into my Google Ads campaigns. Which should I scale, pause, or restructure? Show the math.'); setShowAdsAIChat(true); }} className="mt-2 text-[10px] text-red-400 hover:text-red-300">Get Google analysis →</button>
+                  </div>
+                )}
+
+                {/* Google Wasted Terms */}
+                {googleInsights?.wastedTerms?.length > 0 && (
+                  <div className="bg-gradient-to-br from-rose-900/10 to-slate-800/30 rounded-xl border border-rose-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-rose-400"/>Google Wasted Terms</h3>
+                    <div className="space-y-1">
+                      {googleInsights.wastedTerms.slice(0, 6).map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-rose-900/10">
+                          <span className="text-white flex-1 truncate">{t.term}</span>
+                          <span className="text-rose-400 font-medium">{formatCurrency(t.spend)}</span>
+                          <span className="text-slate-600">{t.clicks}c / 0 conv</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => { setAdsAiInput('Generate Google Ads negative keyword list from my search term data with match types and savings estimates.'); setShowAdsAIChat(true); }} className="mt-2 text-[10px] text-rose-400 hover:text-rose-300">Get negative keywords →</button>
+                  </div>
+                )}
+
+                {/* Meta Campaign Performance */}
+                {metaInsights?.topCampaigns?.length > 0 && (
+                  <div className="bg-gradient-to-br from-blue-900/10 to-slate-800/30 rounded-xl border border-blue-500/20 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"/>Meta Campaigns</h3>
+                    <div className="space-y-1">
+                      {metaInsights.topCampaigns.slice(0, 8).map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.roas >= 3 ? 'bg-emerald-500' : c.roas >= 1.5 ? 'bg-amber-500' : 'bg-rose-500'}`}/>
+                          <span className="text-white flex-1 truncate">{c.name}</span>
+                          <span className="text-slate-300 w-14 text-right">{formatCurrency(c.spend)}</span>
+                          <span className={`font-semibold w-12 text-right ${roasColor(c.roas)}`}>{c.roas > 0 ? c.roas.toFixed(1) + 'x' : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => { setAdsAiInput('Analyze my Meta Ads campaigns. Which creatives and audiences are winning? What should I kill, scale, or test next?'); setShowAdsAIChat(true); }} className="mt-2 text-[10px] text-blue-400 hover:text-blue-300">Get Meta analysis →</button>
+                  </div>
+                )}
+
+                {/* Meta Placement Breakdown */}
+                {metaInsights?.placementBreakdown?.length > 0 && (
+                  <div className="bg-slate-800/30 rounded-xl border border-blue-500/15 p-4">
+                    <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-blue-400"/>Meta Placements</h3>
+                    <div className="space-y-2">
+                      {metaInsights.placementBreakdown.map((p, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg hover:bg-slate-700/30">
+                          <span className="text-white font-medium flex-1 truncate">{p.placement}</span>
+                          <div className="flex items-center gap-3">
+                            <span className="text-slate-400">{formatCurrency(p.spend)}</span>
+                            <span className={`font-semibold ${roasColor(p.roas)}`}>{p.roas > 0 ? p.roas.toFixed(1) + 'x' : '—'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Day of Week */}
                 {dowData.some(d => d.count > 0) && (() => {
                   const maxRev = Math.max(...dowData.map(x => x.avgRev), 0.01);
@@ -825,7 +1137,7 @@ const AdsView = ({
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-slate-800 z-10">
                       <tr className="border-b border-slate-700 text-slate-500 text-[10px] uppercase">
-                        <th className="py-2.5 px-3 text-left">Date</th><th className="py-2.5 px-2 text-right">Amazon</th><th className="py-2.5 px-2 text-right">Google</th><th className="py-2.5 px-2 text-right">Meta</th><th className="py-2.5 px-2 text-right">Total Spend</th><th className="py-2.5 px-2 text-right">Revenue</th><th className="py-2.5 px-2 text-right">TACOS</th>
+                        <th className="py-2.5 px-3 text-left">Date</th><th className="py-2.5 px-2 text-right">Amazon</th><th className="py-2.5 px-2 text-right">Google</th><th className="py-2.5 px-2 text-right">Meta</th><th className="py-2.5 px-2 text-right">Spend</th><th className="py-2.5 px-2 text-right">Revenue</th><th className="py-2.5 px-2 text-right">ROAS</th><th className="py-2.5 px-2 text-right">TACOS</th><th className="py-2.5 px-2 text-right">Clicks</th><th className="py-2.5 px-2 text-right">Conv</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -837,7 +1149,10 @@ const AdsView = ({
                           <td className="py-2 px-2 text-right text-blue-400">{d.metaAds > 0 ? formatCurrency(d.metaAds) : '—'}</td>
                           <td className="py-2 px-2 text-right text-white font-medium">{formatCurrency(d.totalAds)}</td>
                           <td className="py-2 px-2 text-right text-emerald-400">{formatCurrency(d.totalRev)}</td>
+                          <td className={`py-2 px-2 text-right font-medium ${d.roas >= 3 ? 'text-emerald-400' : d.roas >= 1.5 ? 'text-amber-400' : d.roas > 0 ? 'text-rose-400' : 'text-slate-600'}`}>{d.roas > 0 ? d.roas.toFixed(1) + 'x' : '—'}</td>
                           <td className={`py-2 px-2 text-right font-medium ${tacosColor(d.tacos)}`}>{d.tacos > 0 ? d.tacos.toFixed(1) + '%' : '—'}</td>
+                          <td className="py-2 px-2 text-right text-slate-400">{d.clicks > 0 ? formatNumber(d.clicks) : '—'}</td>
+                          <td className="py-2 px-2 text-right text-violet-400">{d.conversions > 0 ? d.conversions : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -849,7 +1164,10 @@ const AdsView = ({
                         <td className="py-2 px-2 text-right text-blue-400">{formatCurrency(cur.mSpend)}</td>
                         <td className="py-2 px-2 text-right text-white">{formatCurrency(cur.spend)}</td>
                         <td className="py-2 px-2 text-right text-emerald-400">{formatCurrency(cur.rev)}</td>
+                        <td className={`py-2 px-2 text-right ${cur.roas >= 3 ? 'text-emerald-400' : cur.roas >= 1.5 ? 'text-amber-400' : 'text-rose-400'}`}>{cur.roas > 0 ? cur.roas.toFixed(1) + 'x' : '—'}</td>
                         <td className={`py-2 px-2 text-right ${tacosColor(cur.tacos)}`}>{cur.tacos > 0 ? cur.tacos.toFixed(1) + '%' : '—'}</td>
+                        <td className="py-2 px-2 text-right text-slate-400">{formatNumber(cur.totalClicks)}</td>
+                        <td className="py-2 px-2 text-right text-violet-400">{cur.totalConv}</td>
                       </tr>
                     </tfoot>
                   </table>
@@ -870,7 +1188,8 @@ const AdsView = ({
                 <p className="text-slate-500 text-xs mt-0.5">Cross-platform audit from all loaded data sources</p>
               </div>
               <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">
-                {AI_MODEL_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                <optgroup label="Anthropic">{AI_MODEL_OPTIONS.filter(m => m.provider === 'anthropic').map(m => <option key={m.value} value={m.value}>{m.label} ({m.cost})</option>)}</optgroup>
+                <optgroup label="OpenAI">{AI_MODEL_OPTIONS.filter(m => m.provider === 'openai').map(m => <option key={m.value} value={m.value}>{m.label} ({m.cost})</option>)}</optgroup>
               </select>
             </div>
 
@@ -974,7 +1293,7 @@ const AdsView = ({
                 <div className="flex items-center gap-1">
                   <button onClick={() => { const r = adsAiMessages.filter(m => m.role === 'assistant').map(m => m.content).join('\n\n---\n\n'); navigator.clipboard.writeText(r).then(() => setToast({ message: 'Copied', type: 'success' })); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">📋 Text</button>
                   <button onClick={() => { const r = adsAiMessages.filter(m => m.role === 'assistant').map(m => m.content).join('\n\n---\n\n'); const html = markdownToHtml(r); const blob = new Blob([html], { type: 'text/html' }); const item = new ClipboardItem({ 'text/html': blob, 'text/plain': new Blob([r], { type: 'text/plain' }) }); navigator.clipboard.write([item]).then(() => setToast({ message: 'Copied for Docs', type: 'success' })).catch(() => navigator.clipboard.writeText(r)); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">📄 Docs</button>
-                  <button onClick={() => { const r = adsAiMessages.map(m => m.role === 'user' ? `**PROMPT:** ${m.content}` : m.content).join('\n\n---\n\n'); const h = `# Tallowbourn Advertising Audit\n**${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}** · ${getModelLabel(aiChatModel)}\n\n---\n\n`; const blob = new Blob([h + r], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `tallowbourn-audit-${new Date().toISOString().slice(0, 10)}.md`; a.click(); URL.revokeObjectURL(url); setToast({ message: 'Downloaded', type: 'success' }); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">⬇ .md</button>
+                  <button onClick={() => { const bn = storeName || 'Brand'; const r = adsAiMessages.map(m => m.role === 'user' ? `**PROMPT:** ${m.content}` : m.content).join('\n\n---\n\n'); const h = `# ${bn} Advertising Audit\n**${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}** · ${getModelLabel(aiChatModel)}\n\n---\n\n`; const blob = new Blob([h + r], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${(bn).toLowerCase().replace(/\s+/g, '-')}-audit-${new Date().toISOString().slice(0, 10)}.md`; a.click(); URL.revokeObjectURL(url); setToast({ message: 'Downloaded', type: 'success' }); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">⬇ .md</button>
                   <button onClick={() => {
                     const report = adsAiMessages.filter(m => m.role === 'assistant').map(m => m.content).join('\n\n---\n\n');
                     const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -982,7 +1301,8 @@ const AdsView = ({
                     const modeLabel = REPORT_MODES.find(m => m.key === reportMode)?.label || 'All Platforms';
                     const htmlBody = markdownToHtml(report);
                     const kpiHtml = `<div class="kpi-bar"><div class="kpi"><span class="kpi-label">Ad Spend</span><span class="kpi-value">$${(cur.spend || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div><div class="kpi"><span class="kpi-label">Revenue</span><span class="kpi-value">$${(cur.rev || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div><div class="kpi"><span class="kpi-label">ROAS</span><span class="kpi-value">${(cur.roas || 0).toFixed(2)}x</span></div><div class="kpi"><span class="kpi-label">TACOS</span><span class="kpi-value">${(cur.tacos || 0).toFixed(1)}%</span></div><div class="kpi"><span class="kpi-label">Days</span><span class="kpi-value">${cur.days || 0}</span></div></div>`;
-                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tallowbourn ${modeLabel} Audit</title><style>@page{margin:.75in;size:letter}*{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.65;max-width:100%;padding:0;margin:0;font-size:11pt}.header{background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);color:white;padding:32px 40px 20px;margin:-.75in -.75in 0}.header h1{font-size:22pt;margin:0 0 4px;font-weight:800}.header .subtitle{font-size:13pt;opacity:.85;margin-bottom:12px;font-weight:300}.header .meta{font-size:9pt;opacity:.7;display:flex;gap:20px}.kpi-bar{display:flex;gap:0;margin:0 -.75in;padding:16px 40px;background:#0a1628}.kpi{flex:1;text-align:center;border-right:1px solid rgba(255,255,255,.1)}.kpi:last-child{border-right:none}.kpi-label{display:block;font-size:8pt;text-transform:uppercase;letter-spacing:.5px;color:rgba(255,255,255,.5);margin-bottom:2px}.kpi-value{display:block;font-size:14pt;font-weight:700;color:white}.content{padding-top:24px}h2{color:#1a1a2e;border-bottom:3px solid #e94560;padding-bottom:6px;margin-top:32px;font-size:14pt}h3{color:#16213e;margin-top:22px;font-size:12pt;border-left:3px solid #e94560;padding-left:10px}p,li{font-size:11pt;margin-bottom:6px}ul,ol{padding-left:22px}strong{color:#e94560}code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:10pt}hr{border:none;border-top:1px solid #ddd;margin:28px 0}.footer{margin-top:48px;padding-top:16px;border-top:2px solid #1a1a2e;font-size:8pt;color:#888;text-align:center}.confidential{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 16px;margin-bottom:24px;font-size:9pt;color:#856404}@media print{.no-print{display:none!important}.header,.kpi-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="header"><h1>Tallowbourn Advertising Audit</h1><div class="subtitle">${modeLabel} Performance Report</div><div class="meta"><span>${dateStr}</span><span>${modelName}</span><span>${dateRangeLabel} window</span></div></div>${kpiHtml}<div class="content"><div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404">Press Ctrl+P → Save as PDF</div><div class="confidential">CONFIDENTIAL — Proprietary advertising data for Tallowbourn.</div>${htmlBody}</div><div class="footer"><p><strong>Tallowbourn Advertising Command Center</strong></p><p>${modeLabel} Audit · ${dateStr} · ${modelName} · ${Date.now().toString(36).toUpperCase()}</p><p style="margin-top:6px;font-size:7pt">AI-generated analysis. Validate before implementation.</p></div></body></html>`;
+                    const bn = storeName || 'Brand';
+                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bn} ${modeLabel} Audit</title><style>@page{margin:.75in;size:letter}*{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.65;max-width:100%;padding:0;margin:0;font-size:11pt}.header{background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);color:white;padding:32px 40px 20px;margin:-.75in -.75in 0}.header h1{font-size:22pt;margin:0 0 4px;font-weight:800}.header .subtitle{font-size:13pt;opacity:.85;margin-bottom:12px;font-weight:300}.header .meta{font-size:9pt;opacity:.7;display:flex;gap:20px}.kpi-bar{display:flex;gap:0;margin:0 -.75in;padding:16px 40px;background:#0a1628}.kpi{flex:1;text-align:center;border-right:1px solid rgba(255,255,255,.1)}.kpi:last-child{border-right:none}.kpi-label{display:block;font-size:8pt;text-transform:uppercase;letter-spacing:.5px;color:rgba(255,255,255,.5);margin-bottom:2px}.kpi-value{display:block;font-size:14pt;font-weight:700;color:white}.content{padding-top:24px}h2{color:#1a1a2e;border-bottom:3px solid #e94560;padding-bottom:6px;margin-top:32px;font-size:14pt}h3{color:#16213e;margin-top:22px;font-size:12pt;border-left:3px solid #e94560;padding-left:10px}p,li{font-size:11pt;margin-bottom:6px}ul,ol{padding-left:22px}strong{color:#e94560}code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:10pt}hr{border:none;border-top:1px solid #ddd;margin:28px 0}.footer{margin-top:48px;padding-top:16px;border-top:2px solid #1a1a2e;font-size:8pt;color:#888;text-align:center}.confidential{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 16px;margin-bottom:24px;font-size:9pt;color:#856404}@media print{.no-print{display:none!important}.header,.kpi-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="header"><h1>${bn} Advertising Audit</h1><div class="subtitle">${modeLabel} Performance Report</div><div class="meta"><span>${dateStr}</span><span>${modelName}</span><span>${dateRangeLabel} window</span></div></div>${kpiHtml}<div class="content"><div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404">Press Ctrl+P → Save as PDF</div><div class="confidential">CONFIDENTIAL — Proprietary advertising data for ${bn}.</div>${htmlBody}</div><div class="footer"><p><strong>${bn} Advertising Command Center</strong></p><p>${modeLabel} Audit · ${dateStr} · ${modelName} · ${Date.now().toString(36).toUpperCase()}</p><p style="margin-top:6px;font-size:7pt">AI-generated analysis. Validate before implementation.</p></div></body></html>`;
                     const w = window.open('', '_blank', 'width=900,height=700'); w.document.write(printDoc); w.document.close(); setTimeout(() => w.print(), 500);
                   }} className="px-3 py-1.5 bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-lg text-white text-[10px] font-medium hover:from-orange-500 hover:to-amber-500 flex items-center gap-1">📊 Export PDF</button>
                 </div>
@@ -1111,7 +1431,8 @@ const AdsView = ({
                 </div>
                 <div className="flex items-center gap-1.5">
                   <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-1.5 py-1 text-white text-[10px]">
-                    {AI_MODEL_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label.replace('Claude ', '')}</option>)}
+                    <optgroup label="Anthropic">{AI_MODEL_OPTIONS.filter(m => m.provider === 'anthropic').map(m => <option key={m.value} value={m.value}>{m.label.replace('Claude ', '')} ({m.cost})</option>)}</optgroup>
+                    <optgroup label="OpenAI">{AI_MODEL_OPTIONS.filter(m => m.provider === 'openai').map(m => <option key={m.value} value={m.value}>{m.label} ({m.cost})</option>)}</optgroup>
                   </select>
                   <button onClick={() => setAdsAiMessages([])} className="p-1.5 hover:bg-white/20 rounded-lg text-white/60 hover:text-white" title="Clear"><RefreshCw className="w-3.5 h-3.5"/></button>
                   <button onClick={() => setShowAdsAIChat(false)} className="p-1.5 hover:bg-white/20 rounded-lg text-white"><X className="w-4 h-4"/></button>

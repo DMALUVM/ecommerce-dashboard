@@ -13,10 +13,15 @@
 // ============================================================
 
 const AI_MODELS = {
-  'claude-opus-4-6':             { label: 'Claude Opus 4.6',    cost: '~$0.25/report', tier: 'Premium',  desc: 'Most intelligent, deepest analysis' },
-  'claude-sonnet-4-5-20250929':  { label: 'Claude Sonnet 4.5',  cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
-  'claude-opus-4-5-20250918':    { label: 'Claude Opus 4.5',    cost: '~$0.20/report', tier: 'Premium',  desc: 'Deep analysis, 5x cost' },
-  'claude-haiku-4-5-20251001':   { label: 'Claude Haiku 4.5',   cost: '~$0.01/report', tier: 'Fast',     desc: 'Cheapest, shorter reports' },
+  // Anthropic
+  'claude-opus-4-6':             { label: 'Claude Opus 4.6',    provider: 'anthropic', cost: '~$0.25/report', tier: 'Premium',  desc: 'Most intelligent, deepest analysis' },
+  'claude-sonnet-4-5-20250929':  { label: 'Claude Sonnet 4.5',  provider: 'anthropic', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
+  'claude-opus-4-5-20250918':    { label: 'Claude Opus 4.5',    provider: 'anthropic', cost: '~$0.20/report', tier: 'Premium',  desc: 'Deep analysis, 5x cost' },
+  'claude-haiku-4-5-20251001':   { label: 'Claude Haiku 4.5',   provider: 'anthropic', cost: '~$0.01/report', tier: 'Fast',     desc: 'Cheapest, shorter reports' },
+  // OpenAI
+  'gpt-4o':                      { label: 'GPT-4o',             provider: 'openai',    cost: '~$0.06/report', tier: 'Balanced', desc: 'OpenAI flagship, balanced speed/quality' },
+  'gpt-4o-mini':                 { label: 'GPT-4o Mini',        provider: 'openai',    cost: '~$0.01/report', tier: 'Fast',     desc: 'Fast and affordable' },
+  'o3':                          { label: 'o3 (Reasoning)',      provider: 'openai',    cost: '~$0.40/report', tier: 'Premium',  desc: 'Deep reasoning, highest cost' },
 };
 
 // Default model used for reports, forecasts, and new chat sessions
@@ -29,19 +34,22 @@ const AI_TOKEN_BUDGETS = {
   haiku:  { audit:  8000, followUp:  4096, report:  8000 },
 };
 
-// Helper: get tier name from model string
+// Helper: get tier name from model string (works for both Anthropic and OpenAI models)
 const getModelTier = (model) => {
-  if (model?.includes('opus'))   return 'opus';
-  if (model?.includes('haiku'))  return 'haiku';
-  return 'sonnet'; // default
+  if (model?.includes('opus') || model === 'o3')    return 'opus';
+  if (model?.includes('haiku') || model === 'gpt-4o-mini') return 'haiku';
+  return 'sonnet'; // default: sonnet, gpt-4o, etc.
 };
+
+// Helper: get provider from model string
+const getModelProvider = (model) => AI_MODELS[model]?.provider || 'anthropic';
 
 // Helper: get display label for a model string
 const getModelLabel = (model) => AI_MODELS[model]?.label || model;
 
 // Ordered list for <select> dropdowns
 const AI_MODEL_OPTIONS = Object.entries(AI_MODELS).map(([key, m]) => ({
-  value: key, label: m.label, cost: m.cost, tier: m.tier, desc: m.desc,
+  value: key, label: m.label, provider: m.provider, cost: m.cost, tier: m.tier, desc: m.desc,
 }));
 
 // Dashboard widget configuration - defined at module level for consistent access
@@ -67,4 +75,4 @@ const DEFAULT_DASHBOARD_WIDGETS = {
   layout: 'auto',
 };
 
-export { DEFAULT_DASHBOARD_WIDGETS, AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel };
+export { DEFAULT_DASHBOARD_WIDGETS, AI_MODELS, AI_DEFAULT_MODEL, AI_TOKEN_BUDGETS, AI_MODEL_OPTIONS, getModelTier, getModelLabel, getModelProvider };

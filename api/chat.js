@@ -1,16 +1,56 @@
-// api/chat.js - Anthropic Claude API with streaming
-// SEC-006: Model allowlist + token cap (existing)
-// SEC-005: In-memory rate limiting (new)
-// SEC-004: Soft auth logging (new, prep for enforcement)
-// BE-201: SSE buffer fix (new)
+// api/chat.js - Multi-provider AI API with streaming
+// Supports: Anthropic Claude, OpenAI GPT/o-series
+// SEC-006: Model validation + token cap
+// SEC-005: In-memory rate limiting
+// SEC-004: Soft auth logging (prep for enforcement)
+// BE-201: SSE buffer fix
 
 export const config = {
   maxDuration: 60,
 };
 
-// === SEC-006: Model & Token Validation ===
-const VALID_MODEL_PREFIXES = ['claude-sonnet', 'claude-opus', 'claude-haiku'];
-const MAX_TOKENS_CEILING = 16000;
+// === Provider Configuration ===
+const PROVIDERS = {
+  anthropic: {
+    url: 'https://api.anthropic.com/v1/messages',
+    envKey: 'ANTHROPIC_API_KEY',
+    buildHeaders: (key) => ({
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+    }),
+    buildBody: ({ model, messages, system, max_tokens }) => ({
+      model, max_tokens, messages, stream: true,
+      ...(system && { system }),
+    }),
+  },
+  openai: {
+    url: 'https://api.openai.com/v1/chat/completions',
+    envKey: 'OPENAI_API_KEY',
+    buildHeaders: (key) => ({
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${key}`,
+    }),
+    buildBody: ({ model, messages, system, max_tokens }) => ({
+      model,
+      max_completion_tokens: max_tokens,
+      stream: true,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        ...messages,
+      ],
+    }),
+  },
+};
+
+// === SEC-006: Model → Provider mapping ===
+function detectProvider(model) {
+  if (model.startsWith('claude-')) return 'anthropic';
+  if (model.startsWith('gpt-') || model.startsWith('o3') || model.startsWith('o1')) return 'openai';
+  return null;
+}
+
+const MAX_TOKENS_CEILING = 16384;
 const MAX_PAYLOAD_BYTES = 1_500_000; // ~1.5 MB
 
 // === SEC-005: Simple Rate Limiter ===
@@ -23,18 +63,18 @@ const rateBuckets = new Map();   // IP → { count, windowStart }
 function checkRateLimit(ip) {
   const now = Date.now();
   const bucket = rateBuckets.get(ip);
-  
+
   if (!bucket || (now - bucket.windowStart) > RATE_WINDOW_MS) {
     // New window
     rateBuckets.set(ip, { count: 1, windowStart: now });
     return { allowed: true, remaining: RATE_MAX_REQUESTS - 1 };
   }
-  
+
   bucket.count++;
   if (bucket.count > RATE_MAX_REQUESTS) {
     return { allowed: false, remaining: 0, retryAfter: Math.ceil((bucket.windowStart + RATE_WINDOW_MS - now) / 1000) };
   }
-  
+
   return { allowed: true, remaining: RATE_MAX_REQUESTS - bucket.count };
 }
 
@@ -46,6 +86,34 @@ setInterval(() => {
   }
 }, RATE_WINDOW_MS * 5);
 
+// === Stream parsers per provider ===
+// Each returns { text, done, error } from a parsed SSE data line
+function parseAnthropicEvent(parsed) {
+  if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+    return { text: parsed.delta.text };
+  }
+  if (parsed.type === 'message_stop') {
+    return { done: true };
+  }
+  if (parsed.type === 'error') {
+    return { error: parsed.error?.message || 'Stream error' };
+  }
+  return {};
+}
+
+function parseOpenAIEvent(parsed) {
+  if (parsed.choices?.[0]?.delta?.content) {
+    return { text: parsed.choices[0].delta.content };
+  }
+  if (parsed.choices?.[0]?.finish_reason === 'stop') {
+    return { done: true };
+  }
+  if (parsed.error) {
+    return { error: parsed.error.message || 'Stream error' };
+  }
+  return {};
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -54,15 +122,15 @@ export default async function handler(req, res) {
   // === SEC-005: Rate Limiting ===
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
   const rateResult = checkRateLimit(clientIp);
-  
+
   res.setHeader('X-RateLimit-Limit', RATE_MAX_REQUESTS);
   res.setHeader('X-RateLimit-Remaining', Math.max(0, rateResult.remaining));
-  
+
   if (!rateResult.allowed) {
     console.warn(`[chat.js] RATE LIMITED: ${clientIp} (${RATE_MAX_REQUESTS} req/${RATE_WINDOW_MS/1000}s exceeded)`);
     res.setHeader('Retry-After', rateResult.retryAfter);
-    return res.status(429).json({ 
-      error: `Rate limit exceeded. Max ${RATE_MAX_REQUESTS} requests per minute. Retry after ${rateResult.retryAfter}s.` 
+    return res.status(429).json({
+      error: `Rate limit exceeded. Max ${RATE_MAX_REQUESTS} requests per minute. Retry after ${rateResult.retryAfter}s.`
     });
   }
 
@@ -87,64 +155,62 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Messages array required and must not be empty' });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    // === SEC-006: Validate model → detect provider ===
+    const providerName = detectProvider(model);
+    if (!providerName) {
+      return res.status(400).json({ error: `Unknown model "${model}". Supported: claude-*, gpt-*, o3, o1` });
+    }
+
+    const providerConfig = PROVIDERS[providerName];
+    const apiKey = process.env[providerConfig.envKey];
     if (!apiKey) {
-      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured. Add it to Vercel Environment Variables.' });
+      return res.status(500).json({ error: `${providerConfig.envKey} not configured. Add it to Vercel Environment Variables.` });
     }
 
-    // === SEC-006: Validate model string ===
-    const isValidModel = VALID_MODEL_PREFIXES.some(prefix => model.startsWith(prefix));
-    if (!isValidModel) {
-      return res.status(400).json({ error: `Invalid model "${model}". Allowed prefixes: ${VALID_MODEL_PREFIXES.join(', ')}` });
-    }
     const safeModel = model;
-
     // Clamp max_tokens to ceiling
     const safeMaxTokens = Math.min(Math.max(1, parseInt(max_tokens) || 4000), MAX_TOKENS_CEILING);
 
     // Log request details
     const inputChars = JSON.stringify(messages).length + (system?.length || 0);
-    console.log(`[chat.js] ip=${clientIp.slice(-8)} auth=${hasAuth ? 'yes' : 'NO'} model=${safeModel} msgs=${messages.length} ~${Math.round(inputChars/4)}tok max=${safeMaxTokens}${safeMaxTokens !== max_tokens ? `(clamped)` : ''}`);
+    console.log(`[chat.js] ip=${clientIp.slice(-8)} auth=${hasAuth ? 'yes' : 'NO'} provider=${providerName} model=${safeModel} msgs=${messages.length} ~${Math.round(inputChars/4)}tok max=${safeMaxTokens}${safeMaxTokens !== max_tokens ? `(clamped)` : ''}`);
 
     // Set headers for SSE streaming
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    
+
     // Send first byte immediately to satisfy Vercel's 25s first-byte requirement
     res.write(': connected\n\n');
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    // Build and send provider-specific request
+    const response = await fetch(providerConfig.url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
+      headers: providerConfig.buildHeaders(apiKey),
+      body: JSON.stringify(providerConfig.buildBody({
         model: safeModel,
-        max_tokens: safeMaxTokens,
         messages,
-        stream: true,
-        ...(system && { system }),
-      }),
+        system,
+        max_tokens: safeMaxTokens,
+      })),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[chat.js] Anthropic error ${response.status}: ${errorText.slice(0, 500)}`);
-      
-      let userError = `Anthropic API error (${response.status})`;
+      console.error(`[chat.js] ${providerName} error ${response.status}: ${errorText.slice(0, 500)}`);
+
+      let userError = `${providerName} API error (${response.status})`;
       try {
         const errObj = JSON.parse(errorText);
         if (errObj.error?.message) userError = errObj.error.message;
       } catch (e) { /* use generic */ }
-      
+
       res.write(`data: ${JSON.stringify({ type: 'error', error: userError })}\n\n`);
       return res.end();
     }
 
     // === BE-201: SSE Stream with proper buffering ===
+    const parseEvent = providerName === 'openai' ? parseOpenAIEvent : parseAnthropicEvent;
     let fullText = '';
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -157,7 +223,7 @@ export default async function handler(req, res) {
       // Prepend any leftover from previous chunk
       sseBuffer += decoder.decode(value, { stream: true });
       const lines = sseBuffer.split('\n');
-      
+
       // Keep the last (potentially incomplete) line in the buffer
       sseBuffer = lines.pop() || '';
 
@@ -168,15 +234,16 @@ export default async function handler(req, res) {
 
           try {
             const parsed = JSON.parse(data);
-            if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-              fullText += parsed.delta.text;
-              res.write(`data: ${JSON.stringify({ type: 'delta', text: parsed.delta.text })}\n\n`);
-            } else if (parsed.type === 'message_stop') {
-              // Stream complete
-            } else if (parsed.type === 'error') {
-              console.error('[chat.js] Stream error:', parsed.error);
-              res.write(`data: ${JSON.stringify({ type: 'error', error: parsed.error?.message || 'Stream error' })}\n\n`);
+            const result = parseEvent(parsed);
+
+            if (result.text) {
+              fullText += result.text;
+              res.write(`data: ${JSON.stringify({ type: 'delta', text: result.text })}\n\n`);
+            } else if (result.error) {
+              console.error(`[chat.js] ${providerName} stream error:`, result.error);
+              res.write(`data: ${JSON.stringify({ type: 'error', error: result.error })}\n\n`);
             }
+            // result.done is handled implicitly when the stream ends
           } catch (e) {
             // Skip parse errors for incomplete JSON (shouldn't happen with buffer, but safety net)
           }
@@ -190,9 +257,10 @@ export default async function handler(req, res) {
         const data = sseBuffer.slice(6).trim();
         if (data && data !== '[DONE]') {
           const parsed = JSON.parse(data);
-          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-            fullText += parsed.delta.text;
-            res.write(`data: ${JSON.stringify({ type: 'delta', text: parsed.delta.text })}\n\n`);
+          const result = parseEvent(parsed);
+          if (result.text) {
+            fullText += result.text;
+            res.write(`data: ${JSON.stringify({ type: 'delta', text: result.text })}\n\n`);
           }
         }
       } catch (e) { /* ignore trailing incomplete data */ }
@@ -200,16 +268,16 @@ export default async function handler(req, res) {
 
     // Send final message
     res.write(`data: ${JSON.stringify({ type: 'complete', content: [{ type: 'text', text: fullText }] })}\n\n`);
-    console.log(`[chat.js] Done, ${fullText.length} chars output`);
+    console.log(`[chat.js] Done, ${providerName}/${safeModel}, ${fullText.length} chars output`);
     return res.end();
 
   } catch (error) {
     console.error('[chat.js] Error:', error.message, error.stack?.split('\n').slice(0, 3).join(' '));
-    
+
     if (!res.headersSent) {
       return res.status(500).json({ error: error.message });
     }
-    
+
     res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
     return res.end();
   }

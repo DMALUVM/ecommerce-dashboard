@@ -1030,7 +1030,7 @@ export const mergeTier2IntoIntelData = (existing, tier2Results) => {
  * Build a comprehensive AI prompt from ALL available ads data (Tier 1 + Tier 2).
  * This feeds the AI report generator with maximum context.
  */
-export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, amazonCampaigns) => {
+export const buildComprehensiveAdsPrompt = (adsIntelData, dailySalesSnippet, amazonCampaigns, dtcIntelData) => {
   const sections = [];
   
   sections.push(`You are an expert Amazon & DTC advertising strategist performing a comprehensive audit of Tallowbourn's advertising across all platforms. Provide specific, actionable recommendations with exact numbers. Do NOT be generic — reference specific campaigns, keywords, ASINs, placements, and metrics.
@@ -1104,76 +1104,124 @@ CROSS-PLATFORM TOTALS:
     }
   }
   
-  // ── Tier 2: Deep analysis data ──
+  // ── Tier 2: Deep analysis data (compact format for token efficiency) ──
   if (adsIntelData) {
     for (const [platform, reports] of Object.entries(adsIntelData)) {
       if (platform === 'lastUpdated' || platform === 'reportCount') continue;
       if (typeof reports !== 'object') continue;
-      
+
       for (const [reportType, reportData] of Object.entries(reports)) {
         if (!reportData?.records || !reportData?.headers) continue;
-        
+
         const records = reportData.records;
         const label = reportData.meta?.label || reportType;
         const rowCount = records.length;
-        
+
         sections.push(`\n## ${platform.toUpperCase()}: ${label} (${rowCount} rows, uploaded ${reportData.meta?.uploadedAt?.slice(0,10) || 'unknown'})`);
-        
-        // Provide summary + top records based on report type
+
+        // Compact header format: [Col1|Col2|Col3]
+        const compactHeader = `[${reportData.headers.join('|')}]`;
+        const compactRow = (r) => reportData.headers.map(h => r[h] ?? '').join('|');
+
         if (rowCount <= 50) {
-          // Small dataset — include all records
-          sections.push(`Headers: ${reportData.headers.join(' | ')}`);
-          records.forEach(r => {
-            const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
-            sections.push(vals);
-          });
+          // Small dataset — include all records in compact format
+          sections.push(compactHeader);
+          records.forEach(r => sections.push(compactRow(r)));
         } else {
-          // Large dataset — provide top performers and summary stats
-          sections.push(`Headers: ${reportData.headers.join(' | ')}`);
-          
-          // Find spend column and sort by it
-          const spendKey = reportData.headers.find(h => 
-            /^(spend|cost|amount spent)/i.test(h)
-          );
-          
+          // Large dataset — diverse selection for comprehensive recommendations
+          sections.push(compactHeader);
+
+          const spendKey = reportData.headers.find(h => /^(spend|cost|amount spent)/i.test(h));
+          const salesKey = reportData.headers.find(h => /sales|revenue|conv.*value/i.test(h));
+          const clicksKey = reportData.headers.find(h => /^clicks$/i.test(h));
+          const convKey = reportData.headers.find(h => /^(conversions|orders|purchases)/i.test(h));
+
           if (spendKey) {
             const sorted = [...records].sort((a, b) => num(b[spendKey]) - num(a[spendKey]));
-            sections.push(`\nTop 30 by spend:`);
-            sorted.slice(0, 30).forEach(r => {
-              const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
-              sections.push(vals);
-            });
-            
-            // Also include worst performers (high spend, low ROAS)
-            const roasKey = reportData.headers.find(h => /roas|return on/i.test(h));
-            const salesKey = reportData.headers.find(h => /sales|revenue|conv.*value/i.test(h));
-            
+
+            // Top 20 by spend (for budget analysis)
+            const topBySpend = sorted.slice(0, 20);
+            sections.push(`\nTop 20 by spend:`);
+            topBySpend.forEach(r => sections.push(compactRow(r)));
+
+            // Top 10 winners by ROAS (for scaling recs)
             if (salesKey) {
+              const withSales = sorted.filter(r => num(r[spendKey]) >= 3 && num(r[salesKey]) > 0);
+              const topByRoas = [...withSales].sort((a, b) => (num(b[salesKey]) / num(b[spendKey])) - (num(a[salesKey]) / num(a[spendKey]))).slice(0, 10);
+              if (topByRoas.length > 0) {
+                // Deduplicate against topBySpend
+                const spendIds = new Set(topBySpend.map(r => compactRow(r)));
+                const unique = topByRoas.filter(r => !spendIds.has(compactRow(r)));
+                if (unique.length > 0) {
+                  sections.push(`\nTop ${unique.length} by ROAS (winners to scale):`);
+                  unique.forEach(r => sections.push(compactRow(r)));
+                }
+              }
+
+              // Wasteful entries (high spend, zero sales — for cut recs)
               const wasteful = sorted.filter(r => num(r[spendKey]) > 5 && num(r[salesKey]) === 0);
               if (wasteful.length > 0) {
-                sections.push(`\nWasteful (spend > $5, zero sales): ${wasteful.length} entries`);
-                wasteful.slice(0, 20).forEach(r => {
-                  const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
-                  sections.push(vals);
-                });
+                sections.push(`\nWasteful (spend>$5, $0 sales): ${wasteful.length} total`);
+                wasteful.slice(0, 15).forEach(r => sections.push(compactRow(r)));
               }
             }
+
+            // Bottom 5 by conversion rate with meaningful spend (for optimization)
+            if (clicksKey && (convKey || salesKey)) {
+              const cKey = convKey || salesKey;
+              const withClicks = sorted.filter(r => num(r[clicksKey]) >= 10 && num(r[spendKey]) >= 5);
+              const lowConv = [...withClicks].sort((a, b) => {
+                const rateA = num(a[clicksKey]) > 0 ? num(a[cKey]) / num(a[clicksKey]) : 0;
+                const rateB = num(b[clicksKey]) > 0 ? num(b[cKey]) / num(b[clicksKey]) : 0;
+                return rateA - rateB;
+              }).slice(0, 5);
+              if (lowConv.length > 0) {
+                sections.push(`\nLowest conversion rate (10+ clicks, optimize these):`);
+                lowConv.forEach(r => sections.push(compactRow(r)));
+              }
+            }
+
+            sections.push(`\n... ${rowCount} total rows`);
           } else {
-            // No spend column — just show first 30
-            sections.push(`\nFirst 30 records:`);
-            records.slice(0, 30).forEach(r => {
-              const vals = reportData.headers.map(h => r[h] ?? '').join(' | ');
-              sections.push(vals);
-            });
+            // No spend column — first 25
+            sections.push(`\nFirst 25 records:`);
+            records.slice(0, 25).forEach(r => sections.push(compactRow(r)));
+            sections.push(`\n... ${rowCount} total rows`);
           }
-          
-          sections.push(`\n... and ${rowCount - 30} more rows`);
         }
       }
     }
   }
-  
-  sections.push(`\n## YOUR TASK\nGenerate a COMPREHENSIVE advertising audit covering:\n1. **Executive Summary** — overall health across all platforms, key wins and problems\n2. **Amazon PPC Analysis** — campaign efficiency, keyword winners/losers, placement strategy, ACOS trends\n3. **Google Ads Analysis** — campaign performance, search term quality, keyword opportunities\n4. **Meta Ads Analysis** — creative performance, audience insights, placement efficiency\n5. **Cross-Channel Insights** — budget allocation efficiency, overlap/cannibalization, attribution gaps\n6. **Immediate Actions** (do this week) — specific, numbered, with expected impact\n7. **Strategic Recommendations** (next 30 days) — budget shifts, new campaigns, testing ideas\n\nBe BRUTALLY specific. Reference actual campaign names, keywords, ASINs, ad names, and dollar amounts. Generic advice like "optimize your campaigns" is worthless.`);
+
+  // ── DTC Intel Data (Google/Meta) ──
+  if (dtcIntelData) {
+    for (const [platform, reports] of Object.entries(dtcIntelData)) {
+      if (typeof reports !== 'object') continue;
+      for (const [reportType, reportData] of Object.entries(reports)) {
+        if (!reportData?.records || !reportData?.headers) continue;
+        const records = reportData.records;
+        const label = reportData.meta?.label || reportType;
+        sections.push(`\n## ${platform.toUpperCase()}: ${label} (${records.length} rows)`);
+        const compactHeader = `[${reportData.headers.join('|')}]`;
+        const compactRow = (r) => reportData.headers.map(h => r[h] ?? '').join('|');
+        sections.push(compactHeader);
+        if (records.length <= 50) {
+          records.forEach(r => sections.push(compactRow(r)));
+        } else {
+          const spendKey = reportData.headers.find(h => /^(spend|cost|amount)/i.test(h));
+          if (spendKey) {
+            const sorted = [...records].sort((a, b) => num(b[spendKey]) - num(a[spendKey]));
+            sorted.slice(0, 25).forEach(r => sections.push(compactRow(r)));
+          } else {
+            records.slice(0, 25).forEach(r => sections.push(compactRow(r)));
+          }
+          sections.push(`\n... ${records.length} total rows`);
+        }
+      }
+    }
+  }
+
+  sections.push(`\n## YOUR TASK\nGenerate a COMPREHENSIVE advertising audit. Be BRUTALLY specific — reference actual campaign names, keywords, ASINs, ad names, and dollar amounts. Generic advice like "optimize your campaigns" is worthless. Every recommendation needs the math behind it.`);
   
   return sections.join('\n');
 };
