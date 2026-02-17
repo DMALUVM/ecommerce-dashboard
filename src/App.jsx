@@ -4825,6 +4825,19 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Also clear localStorage to prevent stale data from previous store
     try {
       const lsKeysToClear = [
+        // Primary data keys — MUST clear to prevent cross-store contamination
+        'ecommerce_dashboard_v5', 'ecommerce_daily_sales_v1',
+        'ecommerce_inventory_v5', 'ecommerce_cogs_v1',
+        'ecommerce_periods_v1', 'ecommerce_store_name_v1',
+        'ecommerce_sales_tax_v1', 'ecommerce_settings_v1',
+        'ecommerce_invoices_v1', 'ecommerce_amazon_forecast_v1',
+        'ecommerce_forecast_meta_v1', 'ecommerce_notes_v1',
+        'ecommerce_goals_v1', 'ecommerce_product_names_v1',
+        'ecommerce_theme_v1', 'ecommerce_3pl_ledger_v1',
+        'ecommerce_weekly_reports_v1',
+        'ecommerce_forecast_accuracy_v1', 'ecommerce_forecast_corrections_v1',
+        'ecommerce_lead_times_v1',
+        // Feature + credential keys
         'ecommerce_ads_intel_v1', 'ecommerce_dtc_intel_v1',
         'ecommerce_amazon_campaigns_v1', 'ecommerce_ai_chat_history_v1',
         'ecommerce_return_rates_v1', 'ecommerce_ai_forecasts_v1',
@@ -5207,10 +5220,13 @@ const switchStore = useCallback(async (storeId) => {
   try {
     // Save current store first
     await pushToCloudNow(combinedData);
-    
+
     // Load new store
     await loadFromCloud(storeId);
-    
+
+    // Persist activeStoreId to meta so page refresh loads the correct store
+    await saveMetaToCloud(stores, storeId);
+
     setToast({ message: `Switched to "${store?.name || storeName || 'store'}"`, type: 'success' });
   } catch (err) {
     console.error('Store switch failed:', err);
@@ -5220,7 +5236,7 @@ const switchStore = useCallback(async (storeId) => {
     setShowStoreSelector(false);
     setShowStoreModal(false);
   }
-}, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud, storeName]);
+}, [activeStoreId, stores, combinedData, pushToCloudNow, loadFromCloud, storeName, saveMetaToCloud]);
 
 const deleteStore = useCallback(async (storeId) => {
   const store = stores.find(s => s.id === storeId);
