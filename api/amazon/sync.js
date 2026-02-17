@@ -639,7 +639,10 @@ export default async function handler(req, res) {
       const currentPSTDate = new Date(Date.UTC(
         now.getUTCFullYear(), now.getUTCMonth(), utcDay - (isPSTNextDay ? 0 : 1)
       ));
-      const endDateObj = endDate ? new Date(endDate) : currentPSTDate;
+      // Use next day as endDate so Amazon includes the full current day's orders
+      // (Amazon's dataEndTime is exclusive — "2026-02-16" excludes Feb 16 orders)
+      const endDateForApi = new Date(currentPSTDate.getTime() + 24 * 60 * 60 * 1000);
+      const endDateObj = endDate ? new Date(endDate) : endDateForApi;
       const startDateObj = startDate ? new Date(startDate) : new Date(currentPSTDate.getTime() - (daysBack - 1) * 24 * 60 * 60 * 1000);
 
       console.log('[Sales] Report range:', startDateObj.toISOString().split('T')[0], 'to', endDateObj.toISOString().split('T')[0], '(today in PST, partial data included)');

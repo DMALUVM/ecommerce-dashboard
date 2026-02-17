@@ -5936,11 +5936,12 @@ const savePeriods = async (d) => {
       if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
         amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
         if (sku) {
-          if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
           amazonSkuData[sku].unitsSold += sold;
           amazonSkuData[sku].returns += ret;
           amazonSkuData[sku].netSales += sales;
           amazonSkuData[sku].netProceeds += proceeds;
+          amazonSkuData[sku].fees += fees;
           amazonSkuData[sku].adSpend += ads;
           // COGS already in Net proceeds - per-SKU cogs derived below
         }
@@ -6014,7 +6015,7 @@ const savePeriods = async (d) => {
     // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
     amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
     // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
+    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.fees || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
 
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
@@ -6343,11 +6344,12 @@ const savePeriods = async (d) => {
       if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
         amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
         if (sku) {
-          if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
           amazonSkuData[sku].unitsSold += sold;
           amazonSkuData[sku].returns += ret;
           amazonSkuData[sku].netSales += sales;
           amazonSkuData[sku].netProceeds += proceeds;
+          amazonSkuData[sku].fees += fees;
           amazonSkuData[sku].adSpend += ads;
           // COGS already in Net proceeds - per-SKU cogs derived below
         }
@@ -6411,7 +6413,7 @@ const savePeriods = async (d) => {
     // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
     amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
     // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
+    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.fees || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
 
     // Convert SKU data to sorted arrays
@@ -6467,11 +6469,12 @@ const savePeriods = async (d) => {
           if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
             amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
             if (sku) {
-              if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+              if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
               amazonSkuData[sku].unitsSold += sold;
               amazonSkuData[sku].returns += ret;
               amazonSkuData[sku].netSales += sales;
               amazonSkuData[sku].netProceeds += proceeds;
+              amazonSkuData[sku].fees += fees;
               amazonSkuData[sku].adSpend += ads;
               // COGS already in Net proceeds - per-SKU cogs derived below
             }
@@ -6523,7 +6526,7 @@ const savePeriods = async (d) => {
     // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
     amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
     // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
+    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.fees || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
       
       const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
@@ -6691,12 +6694,13 @@ const savePeriods = async (d) => {
         // Aggregate SKU data
         (dayData.amazon.skuData || []).forEach(sku => {
           if (!weeklyAgg[weekKey].amazon.skuData[sku.sku]) {
-            weeklyAgg[weekKey].amazon.skuData[sku.sku] = { ...sku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+            weeklyAgg[weekKey].amazon.skuData[sku.sku] = { ...sku, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
           }
           weeklyAgg[weekKey].amazon.skuData[sku.sku].unitsSold += sku.unitsSold || 0;
           weeklyAgg[weekKey].amazon.skuData[sku.sku].returns += sku.returns || 0;
           weeklyAgg[weekKey].amazon.skuData[sku.sku].netSales += sku.netSales || 0;
           weeklyAgg[weekKey].amazon.skuData[sku.sku].netProceeds += sku.netProceeds || 0;
+          weeklyAgg[weekKey].amazon.skuData[sku.sku].fees += sku.fees || 0;
           weeklyAgg[weekKey].amazon.skuData[sku.sku].adSpend += sku.adSpend || 0;
           weeklyAgg[weekKey].amazon.skuData[sku.sku].cogs += sku.cogs || 0;
         });
@@ -6888,12 +6892,13 @@ const savePeriods = async (d) => {
           const skuKey = sku.sku || sku.msku;
           if (!skuKey) return;
           if (!dailyByWeek[weekKey].amazon.skuData[skuKey]) {
-            dailyByWeek[weekKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+            dailyByWeek[weekKey].amazon.skuData[skuKey] = { sku: skuKey, name: sku.name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
           }
           dailyByWeek[weekKey].amazon.skuData[skuKey].unitsSold += sku.unitsSold || sku.units || 0;
           dailyByWeek[weekKey].amazon.skuData[skuKey].returns += sku.returns || 0;
           dailyByWeek[weekKey].amazon.skuData[skuKey].netSales += sku.netSales || sku.revenue || 0;
           dailyByWeek[weekKey].amazon.skuData[skuKey].netProceeds += sku.netProceeds || 0;
+          dailyByWeek[weekKey].amazon.skuData[skuKey].fees += sku.fees || 0;
           dailyByWeek[weekKey].amazon.skuData[skuKey].adSpend += sku.adSpend || 0;
           dailyByWeek[weekKey].amazon.skuData[skuKey].cogs += sku.cogs || 0;
         });
@@ -7207,11 +7212,12 @@ const savePeriods = async (d) => {
         if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
           amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
           if (sku) {
-            if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+            if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
             amazonSkuData[sku].unitsSold += sold;
             amazonSkuData[sku].returns += ret;
             amazonSkuData[sku].netSales += sales;
             amazonSkuData[sku].netProceeds += proceeds;
+            amazonSkuData[sku].fees += fees;
             amazonSkuData[sku].adSpend += ads;
             // COGS already in Net proceeds - per-SKU cogs derived below
           }
@@ -7340,11 +7346,12 @@ const savePeriods = async (d) => {
       if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
         amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
         if (sku) {
-          if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+          if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
           amazonSkuData[sku].unitsSold += sold;
           amazonSkuData[sku].returns += ret;
           amazonSkuData[sku].netSales += sales;
           amazonSkuData[sku].netProceeds += proceeds;
+          amazonSkuData[sku].fees += fees;
           amazonSkuData[sku].adSpend += ads;
           // COGS already in Net proceeds - per-SKU cogs derived below
         }
@@ -7407,7 +7414,7 @@ const savePeriods = async (d) => {
     // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
     amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
     // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
+    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.fees || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
 
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
@@ -9709,12 +9716,13 @@ const savePeriods = async (d) => {
             
             if (sku) {
               if (!amazonSkuData[sku]) {
-                amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
+                amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, fees: 0, adSpend: 0, cogs: 0 };
               }
               amazonSkuData[sku].unitsSold += sold;
               amazonSkuData[sku].returns += ret;
               amazonSkuData[sku].netSales += sales;
               amazonSkuData[sku].netProceeds += proceeds;
+              amazonSkuData[sku].fees += fees;
               amazonSkuData[sku].adSpend += ads;
               // COGS already in Net proceeds - per-SKU cogs derived below
             }
@@ -9723,7 +9731,7 @@ const savePeriods = async (d) => {
         
         // Derive Amazon COGS from SKU Economics report (already embedded in Net proceeds)
         amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
-        Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
+        Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.fees || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
         
         const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
         

@@ -20,17 +20,11 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
 
   const skuData = useMemo(() => {
     const withCalcs = skuDataRawFixed.map(item => {
-      const profit = isAmz 
+      const profit = isAmz
         ? (item.netProceeds || 0)
         : (item.netSales || 0) - (item.cogs || 0);
-      const proceedsPerUnit = item.unitsSold > 0
-        ? (isAmz
-            ? (item.netProceedsPerUnit !== null && item.netProceedsPerUnit !== undefined
-                ? item.netProceedsPerUnit
-                : (item.netProceeds || 0) / item.unitsSold)
-            : profit / item.unitsSold)
-        : 0;
-      return { ...item, profit, proceedsPerUnit };
+      const profitPerUnit = item.unitsSold > 0 ? profit / item.unitsSold : 0;
+      return { ...item, profit, profitPerUnit };
     });
     return withCalcs.sort((a, b) => {
       const aVal = a[skuSort.field] || 0;
@@ -174,13 +168,13 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
                         <th className="text-left text-xs font-medium text-slate-400 uppercase px-2 py-2">SKU</th>
                         <SortHeader field="unitsSold" label="Units" />
                         <SortHeader field="netSales" label="Sales" />
-                        {isAmz && <SortHeader field="netProceeds" label="Proceeds" />}
+                        {isAmz && <SortHeader field="fees" label="Fees" />}
                         {isAmz && <SortHeader field="adSpend" label="Ad Spend" />}
                         {isAmz && <SortHeader field="returns" label="Returns" />}
                         {!isAmz && <SortHeader field="discounts" label="Discounts" />}
                         <SortHeader field="cogs" label="COGS" />
                         <SortHeader field="profit" label="Profit" />
-                        <SortHeader field="proceedsPerUnit" label="$/Unit" />
+                        <SortHeader field="profitPerUnit" label="$/Unit" />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-700/50">
@@ -189,13 +183,13 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
                           <td className="px-2 py-2"><div className="max-w-[200px] truncate text-white" title={item.name}>{item.sku}</div></td>
                           <td className="text-right px-2 py-2 text-white">{formatNumber(item.unitsSold)}</td>
                           <td className="text-right px-2 py-2 text-white">{formatCurrency(item.netSales)}</td>
-                          {isAmz && <td className="text-right px-2 py-2 text-emerald-400">{formatCurrency(item.netProceeds)}</td>}
+                          {isAmz && <td className="text-right px-2 py-2 text-amber-400">{formatCurrency(item.fees)}</td>}
                           {isAmz && <td className="text-right px-2 py-2 text-violet-400">{formatCurrency(item.adSpend)}</td>}
                           {isAmz && <td className="text-right px-2 py-2 text-rose-400">{formatNumber(item.returns)}</td>}
                           {!isAmz && <td className="text-right px-2 py-2 text-amber-400">{formatCurrency(item.discounts)}</td>}
                           <td className="text-right px-2 py-2 text-slate-400">{formatCurrency(item.cogs)}</td>
                           <td className={`text-right px-2 py-2 font-medium ${item.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(item.profit)}</td>
-                          <td className={`text-right px-2 py-2 font-medium ${item.proceedsPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(item.proceedsPerUnit)}</td>
+                          <td className={`text-right px-2 py-2 font-medium ${item.profitPerUnit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(item.profitPerUnit)}</td>
                         </tr>
                       ))}
                     </tbody>
