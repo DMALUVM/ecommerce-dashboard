@@ -56,6 +56,9 @@ export default async function handler(req, res) {
     test
   } = req.body;
 
+  // Normalize empty marketplace ID to US default (destructuring default only catches undefined, not '')
+  const resolvedMarketplaceId = marketplaceId || 'ATVPDKIKX0DER';
+
   // Validate required fields for SP-API
   if (!clientId || !clientSecret || !refreshToken) {
     return res.status(400).json({ 
@@ -184,7 +187,7 @@ export default async function handler(req, res) {
       
       do {
         // Use FBA Inventory API
-        let endpoint = `/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}`;
+        let endpoint = `/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${resolvedMarketplaceId}&marketplaceIds=${resolvedMarketplaceId}`;
         if (nextToken) {
           endpoint += `&nextToken=${encodeURIComponent(nextToken)}`;
         }
@@ -761,7 +764,7 @@ export default async function handler(req, res) {
           // GET_SALES_AND_TRAFFIC_REPORT uses a specific JSON format
           const stReportSpec = {
             reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
-            marketplaceIds: [marketplaceId],
+            marketplaceIds: [resolvedMarketplaceId],
             dataStartTime: start.toISOString(),
             dataEndTime: end.toISOString(),
             reportOptions: { dateGranularity: 'DAY', asinGranularity: 'SKU' },
@@ -896,13 +899,13 @@ export default async function handler(req, res) {
       // 2. Sales & Traffic → authoritative daily totals matching Seller Central
       const ordersReportSpec = {
         reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
-        marketplaceIds: [marketplaceId],
+        marketplaceIds: [resolvedMarketplaceId],
         dataStartTime: startDateObj.toISOString(),
         dataEndTime: endDateObj.toISOString(),
       };
       const salesTrafficSpec = {
         reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
-        marketplaceIds: [marketplaceId],
+        marketplaceIds: [resolvedMarketplaceId],
         dataStartTime: startDateObj.toISOString(),
         dataEndTime: endDateObj.toISOString(),
         reportOptions: { dateGranularity: 'DAY', asinGranularity: 'SKU' },
@@ -1040,7 +1043,7 @@ export default async function handler(req, res) {
         'POST',
         {
           reportType: 'GET_FBA_MYI_ALL_INVENTORY_DATA',
-          marketplaceIds: [marketplaceId],
+          marketplaceIds: [resolvedMarketplaceId],
         }
       );
 
