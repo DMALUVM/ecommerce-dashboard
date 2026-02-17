@@ -33,7 +33,7 @@ export default function CtaSection({ supabase }) {
               <TrendingUp className="w-7 h-7 text-white" />
             </div>
 
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold mb-6 max-w-3xl mx-auto leading-tight">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold mb-6 max-w-3xl mx-auto leading-tight text-white">
               Your Competitors Are Already Optimizing.{' '}
               <span className="bg-gradient-to-r from-emerald-400 to-emerald-300 bg-clip-text text-transparent">Are You?</span>
             </h2>

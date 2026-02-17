@@ -45,7 +45,7 @@ export default function HeroSection({ supabase }) {
               <span className="text-xs font-medium text-emerald-300">Built for Amazon & Shopify sellers</span>
             </div>
 
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.1] mb-6">
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.1] mb-6 text-white">
               Your Entire Ecommerce Business.{' '}
               <span className="bg-gradient-to-r from-emerald-400 to-emerald-300 bg-clip-text text-transparent">One Dashboard.</span>{' '}
               <span className="text-slate-400">Zero Guesswork.</span>

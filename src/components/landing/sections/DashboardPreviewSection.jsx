@@ -37,7 +37,7 @@ export default function DashboardPreviewSection() {
           style={{ opacity: visible ? 1 : 0, transform: visible ? 'translateY(0)' : 'translateY(24px)' }}
         >
           <p className="text-emerald-400 text-sm font-semibold uppercase tracking-wider mb-3">See It In Action</p>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+          <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-white">
             A Dashboard Built by Sellers,{' '}
             <span className="text-slate-400">for Sellers</span>
           </h2>

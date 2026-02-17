@@ -72,7 +72,7 @@ export default function PainSection() {
         <FadeIn>
           <div className="text-center max-w-3xl mx-auto mb-16">
             <p className="text-emerald-400 text-sm font-semibold uppercase tracking-wider mb-3">The Problem</p>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-white">
               Running an Ecommerce Brand Shouldn't Feel Like{' '}
               <span className="text-slate-400">Flying Blind</span>
             </h2>

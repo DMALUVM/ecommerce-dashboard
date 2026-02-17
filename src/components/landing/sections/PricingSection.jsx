@@ -83,7 +83,7 @@ export default function PricingSection({ supabase }) {
           style={{ opacity: visible ? 1 : 0, transform: visible ? 'translateY(0)' : 'translateY(24px)' }}
         >
           <p className="text-emerald-400 text-sm font-semibold uppercase tracking-wider mb-3">Simple Pricing</p>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+          <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-white">
             One Plan. Everything Included.{' '}
             <span className="text-slate-400">No Surprises.</span>
           </h2>
@@ -157,7 +157,7 @@ export default function PricingSection({ supabase }) {
           className="max-w-2xl mx-auto transition-all duration-700"
           style={{ opacity: visible ? 1 : 0, transitionDelay: '300ms' }}
         >
-          <h3 className="text-xl font-bold text-center mb-8">Frequently Asked Questions</h3>
+          <h3 className="text-xl font-bold text-center mb-8 text-white">Frequently Asked Questions</h3>
           <div className="bg-slate-900/40 border border-slate-800/50 rounded-2xl px-6">
             {faqs.map((faq) => (
               <FaqItem key={faq.q} q={faq.q} a={faq.a} />

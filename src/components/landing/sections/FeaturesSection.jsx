@@ -85,7 +85,7 @@ export default function FeaturesSection() {
         <FadeIn>
           <div className="text-center max-w-3xl mx-auto mb-16">
             <p className="text-emerald-400 text-sm font-semibold uppercase tracking-wider mb-3">The Solution</p>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-white">
               Everything You Need to Run a{' '}
               <span className="bg-gradient-to-r from-emerald-400 to-emerald-300 bg-clip-text text-transparent">Profitable</span>{' '}
               Ecommerce Brand
