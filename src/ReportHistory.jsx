@@ -87,7 +87,7 @@ const ReportHistoryPanel = ({ reportHistory, onSelect, onCompare, selectedId, th
               <div className="flex gap-4 mt-2">
                 {metrics.revenue > 0 && <span className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>Rev: <strong className={light ? 'text-slate-700' : 'text-slate-200'}>${Math.round(metrics.revenue).toLocaleString()}</strong></span>}
                 {metrics.adSpend > 0 && <span className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>Ad$: <strong className="text-rose-400">${Math.round(metrics.adSpend).toLocaleString()}</strong></span>}
-                {metrics.roas > 0 && <span className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>ROAS: <strong className={metrics.roas >= 2.5 ? 'text-emerald-400' : 'text-amber-400'}>{metrics.roas.toFixed(2)}x</strong></span>}
+                {metrics.roas > 0 && <span className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>TACOS: <strong className={(1/metrics.roas*100) <= 15 ? 'text-emerald-400' : 'text-amber-400'}>{(1/metrics.roas*100).toFixed(1)}%</strong></span>}
                 {metrics.actionCount > 0 && <span className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>{metrics.actionCount} actions</span>}
               </div>
             )}
@@ -107,7 +107,7 @@ const ReportComparison = ({ reportA, reportB, theme, onClose }) => {
   const metrics = [
     { label: 'Revenue', a: ma.revenue, b: mb.revenue, format: 'currency' },
     { label: 'Ad Spend', a: ma.adSpend, b: mb.adSpend, format: 'currency', invert: true },
-    { label: 'ROAS', a: ma.roas, b: mb.roas, format: 'roas' },
+    { label: 'TACOS', a: ma.roas > 0 ? (1/ma.roas)*100 : 0, b: mb.roas > 0 ? (1/mb.roas)*100 : 0, format: 'pct', invert: true },
     { label: 'ACOS/TACOS', a: ma.tacos || ma.acos, b: mb.tacos || mb.acos, format: 'pct', invert: true },
     { label: 'Net Profit', a: ma.netProfit, b: mb.netProfit, format: 'currency' },
     { label: 'Actions Generated', a: ma.actionCount, b: mb.actionCount, format: 'number' },
@@ -116,7 +116,7 @@ const ReportComparison = ({ reportA, reportB, theme, onClose }) => {
   const fmtVal = (v, fmt) => {
     if (v === undefined || v === null) return '—';
     if (fmt === 'currency') return `$${Math.round(v).toLocaleString()}`;
-    if (fmt === 'roas') return `${v.toFixed(2)}x`;
+
     if (fmt === 'pct') return `${v.toFixed(1)}%`;
     return v.toLocaleString();
   };

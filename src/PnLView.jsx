@@ -203,6 +203,7 @@ const PnLView = ({ allWeeksData, allDaysData, savedCogs, threeplLedger, get3PLFo
       current.profitTrend = previous.netProfit !== 0 ? ((current.netProfit - previous.netProfit) / Math.abs(previous.netProfit)) * 100 : 0;
       current.marginTrend = current.netMargin - previous.netMargin;
       current.roasTrend = current.roas - previous.roas;
+      current.tacosTrend = current.tacos - previous.tacos;
     }
     
     return { current, previous };
@@ -262,7 +263,6 @@ const PnLView = ({ allWeeksData, allDaysData, savedCogs, threeplLedger, get3PLFo
       ['Operating Margin', '', fPct(d.operatingMargin)],
       [],
       ['Key Metrics'],
-      ['ROAS', '', `${d.roas.toFixed(2)}x`],
       ['TACOS', '', fPct(d.tacos)],
       ['AOV', '', fc(d.aov)],
       ['Total Orders', '', d.orders.toLocaleString()],
@@ -324,7 +324,7 @@ const PnLView = ({ allWeeksData, allDaysData, savedCogs, threeplLedger, get3PLFo
         <MetricCard label="Revenue" value={d.revenue} trend={d.revenueTrend} icon={DollarSign} theme={theme} />
         <MetricCard label="Net Profit" value={d.netProfit} trend={d.profitTrend} icon={TrendingUp} theme={theme} />
         <MetricCard label="Net Margin" value={fPct(d.netMargin)} suffix="" trend={d.marginTrend} trendValue={d.marginTrend !== undefined ? `${d.marginTrend > 0 ? '+' : ''}${d.marginTrend.toFixed(1)}pp` : undefined} icon={TrendingUp} theme={theme} />
-        <MetricCard label="Blended ROAS" value={`${d.roas.toFixed(2)}x`} suffix="" trend={d.roasTrend} trendValue={d.roasTrend !== undefined ? `${d.roasTrend > 0 ? '+' : ''}${d.roasTrend.toFixed(2)}x` : undefined} icon={TrendingUp} theme={theme} />
+        <MetricCard label="Blended TACOS" value={`${d.tacos.toFixed(1)}%`} suffix="" trend={d.tacosTrend !== undefined ? -d.tacosTrend : undefined} trendValue={d.tacosTrend !== undefined ? `${d.tacosTrend < 0 ? '' : '+'}${d.tacosTrend.toFixed(1)}pp` : undefined} icon={TrendingUp} theme={theme} />
       </div>
 
       {/* Waterfall Chart */}
@@ -515,7 +515,7 @@ const PnLView = ({ allWeeksData, allDaysData, savedCogs, threeplLedger, get3PLFo
               { label: 'Revenue', curr: d.revenue, prev: p.revenue },
               { label: 'Net Profit', curr: d.netProfit, prev: p.netProfit },
               { label: 'Ad Spend', curr: d.adSpend, prev: p.adSpend, invert: true },
-              { label: 'ROAS', curr: d.roas, prev: p.roas, suffix: 'x', decimals: 2 },
+              { label: 'TACOS', curr: d.tacos, prev: p.tacos, suffix: '%', decimals: 1, invert: true },
             ].map(({ label, curr, prev, invert, suffix, decimals }) => {
               const change = prev !== 0 ? ((curr - prev) / Math.abs(prev)) * 100 : 0;
               const isGood = invert ? change <= 0 : change >= 0;

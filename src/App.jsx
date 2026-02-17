@@ -13367,7 +13367,15 @@ const savePeriods = async (d) => {
               // Merge transactions (same dedup logic as manual sync)
               setBankingData(prev => {
                 const existingIds = new Set((prev?.transactions || []).map(t => t.qboId).filter(Boolean));
-                const newTransactions = (data.transactions || []).filter(t => !existingIds.has(t.qboId));
+                let newTransactions = (data.transactions || []).filter(t => !existingIds.has(t.qboId));
+                // Secondary dedup: catch same transaction from CSV + QBO by fingerprint
+                const existingFingerprints = new Set(
+                  (prev?.transactions || []).map(t => `${t.date}|${Math.abs(t.amount).toFixed(2)}|${(t.account || '').slice(0,20).toLowerCase()}`)
+                );
+                newTransactions = newTransactions.filter(t => {
+                  const fp = `${t.date}|${Math.abs(t.amount).toFixed(2)}|${(t.account || '').slice(0,20).toLowerCase()}`;
+                  return !existingFingerprints.has(fp);
+                });
                 const allTxns = [...(prev?.transactions || []), ...newTransactions];
                 return {
                   ...prev,
@@ -14476,70 +14484,82 @@ Keep insights brief and actionable. Format as numbered list.`;
       
       // Helper to read SSE stream from chat API (utilizes Pro 60s timeout)
       const fetchStreamingAI = async (prompt, systemPrompt) => {
-        
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system: systemPrompt,
-            messages: [{ role: 'user', content: prompt }],
-            model: aiChatModel || AI_DEFAULT_MODEL,
-            max_tokens: 4000,
-          }),
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          devError('API error:', response.status, errorText);
-          throw new Error(`API error: ${response.status}`);
-        }
-        
-        // Check if it's a streaming response
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('text/event-stream')) {
-          // Read SSE stream
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let fullText = '';
-          let buffer = '';
-          
-          
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line
-            
-            for (const line of lines) {
-              // Skip comments (: ping, : keepalive, etc.)
-              if (line.startsWith(':')) continue;
-              
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-                  if (data.type === 'delta' && data.text) {
-                    fullText += data.text;
-                  } else if (data.type === 'done' && data.fullText) {
-                    fullText = data.fullText;
-                  } else if (data.type === 'complete' && data.content?.[0]?.text) {
-                    fullText = data.content[0].text;
-                  } else if (data.type === 'error') {
-                    throw new Error(data.error);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+        try {
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system: systemPrompt,
+              messages: [{ role: 'user', content: prompt }],
+              model: aiChatModel || AI_DEFAULT_MODEL,
+              max_tokens: 4000,
+            }),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            devError('API error:', response.status, errorText);
+            throw new Error(`API error: ${response.status}`);
+          }
+
+          // Check if it's a streaming response
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('text/event-stream')) {
+            // Read SSE stream
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            let buffer = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || ''; // Keep incomplete line
+
+              for (const line of lines) {
+                // Skip comments (: ping, : keepalive, etc.)
+                if (line.startsWith(':')) continue;
+
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.type === 'delta' && data.text) {
+                      fullText += data.text;
+                    } else if (data.type === 'done' && data.fullText) {
+                      fullText = data.fullText;
+                    } else if (data.type === 'complete' && data.content?.[0]?.text) {
+                      fullText = data.content[0].text;
+                    } else if (data.type === 'error') {
+                      throw new Error(data.error);
+                    }
+                  } catch (e) {
+                    // Ignore parse errors for incomplete JSON
                   }
-                } catch (e) {
-                  // Ignore parse errors for incomplete JSON
                 }
               }
             }
+
+            clearTimeout(timeoutId);
+            return fullText;
+          } else {
+            // Fallback to JSON response (non-streaming)
+            const data = await response.json();
+            clearTimeout(timeoutId);
+            return data.content?.[0]?.text || '';
           }
-          
-          return fullText;
-        } else {
-          // Fallback to JSON response (non-streaming)
-          const data = await response.json();
-          return data.content?.[0]?.text || '';
+        } catch (err) {
+          clearTimeout(timeoutId);
+          if (err.name === 'AbortError') {
+            throw new Error('AI request timed out after 90 seconds');
+          }
+          throw err;
         }
       };
       

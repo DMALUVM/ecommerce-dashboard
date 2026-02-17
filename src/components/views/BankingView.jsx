@@ -519,7 +519,7 @@ const BankingView = ({
       const medianAmount = monthlyAmounts[Math.floor(monthlyAmounts.length / 2)];
       
       // Check consistency - amounts should be within 30% of median (relaxed from 20%)
-      const isConsistent = monthlyAmounts.every(a => Math.abs(a - medianAmount) / medianAmount < 0.3);
+      const isConsistent = medianAmount !== 0 && monthlyAmounts.every(a => Math.abs(a - medianAmount) / medianAmount < 0.3);
       
       // Calculate average amount
       const avgAmount = monthlyAmounts.reduce((s, a) => s + a, 0) / monthlyAmounts.length;
@@ -2659,7 +2659,7 @@ const BankingView = ({
               // Use sales data for forecast if available, otherwise banking
               const hasActualSalesData = weeksWithData > 0;
               const monthsCompleted = ytdMonths.length || (weeksWithData > 0 ? Math.ceil(weeksWithData / 4.33) : 0);
-              const monthsRemaining = 12 - Math.max(monthsCompleted, now.getMonth() + 1);
+              const monthsRemaining = Math.max(0, 12 - (now.getMonth() + 1));
               
               // Calculate forecast based on best available data
               let forecastBasis, avgMonthlyProfit, linearProjection, trendProjection;

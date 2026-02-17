@@ -9,20 +9,20 @@ const AI_CONFIG = {
   maxTokens: 12000,  // Reports need 8K-12K tokens for full output
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
-  
+
   // Forecast calculation weights (data-driven, not AI-generated)
   forecastWeights: {
     daily: 0.60,    // 60% weight on recent daily average
     weekly: 0.20,   // 20% weight on weekly trend
     amazon: 0.20,   // 20% weight on Amazon forecast (if available)
   },
-  
+
   // Sanity bounds for AI adjustments
   bounds: {
     maxAdjustment: 0.05,  // Max ±5% adjustment per future week
     maxTotalDeviation: 0.25, // Max ±25% from calculated baseline
   },
-  
+
   // Learning configuration
   learning: {
     minSamplesForCorrection: 3,  // Need 3+ samples before applying learned corrections
@@ -43,13 +43,13 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
   const selectedModel = typeof rawModel === 'string' ? rawModel : AI_CONFIG.model;
   const tokenLimit = maxTokensOverride || AI_CONFIG.maxTokens;
   let requestBody;
-  
+
   // Sanitize messages to ensure all content is plain strings (prevents circular refs from window/DOM leaking in)
   const sanitizeMessages = (msgs) => (msgs || []).map(m => ({
     role: String(m.role || 'user'),
     content: typeof m.content === 'string' ? m.content : (m.content != null ? String(m.content) : ''),
   }));
-  
+
   if (typeof promptOrOptions === 'string') {
     // Simple prompt string
     requestBody = {
@@ -67,53 +67,67 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
       max_tokens: tokenLimit,
     };
   }
-  
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-  });
-  
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`AI API error: ${response.status} - ${error}`);
-  }
-  
-  // Handle streaming response
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('text/event-stream')) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-    let buffer = '';
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      
-      for (const line of lines) {
-        if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'delta' && data.text) fullText += data.text;
-            else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
-            else if (data.type === 'done' && data.fullText) fullText = data.fullText;
-            else if (data.type === 'error') throw new Error(data.error);
-          } catch (e) { /* Skip parse errors for incomplete JSON */ }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`AI API error: ${response.status} - ${error}`);
+    }
+
+    // Handle streaming response
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream')) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith(':')) continue; // Skip SSE comments like ": connected"
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'delta' && data.text) fullText += data.text;
+              else if (data.type === 'complete' && data.content?.[0]?.text) fullText = data.content[0].text;
+              else if (data.type === 'done' && data.fullText) fullText = data.fullText;
+              else if (data.type === 'error') throw new Error(data.error);
+            } catch (e) { /* Skip parse errors for incomplete JSON */ }
+          }
         }
       }
+      clearTimeout(timeoutId);
+      return fullText;
     }
-    return fullText;
+
+    // Fallback to JSON response (shouldn't happen with streaming enabled)
+    const data = await response.json();
+    clearTimeout(timeoutId);
+    return data.content?.[0]?.text || '';
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('AI request timed out after 90 seconds');
+    }
+    throw err;
   }
-  
-  // Fallback to JSON response (shouldn't happen with streaming enabled)
-  const data = await response.json();
-  return data.content?.[0]?.text || '';
 };
 
 export { AI_CONFIG, callAI };
