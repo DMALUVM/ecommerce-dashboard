@@ -4697,6 +4697,14 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   }
   loadFromCloudLockRef.current = true;
 
+  // HARD REDIRECT: If we already loaded a store, force any rogue caller to load that same store.
+  // switchStore/deleteStore set activeStoreIdRef BEFORE calling loadFromCloud, so they pass naturally.
+  if (storeId && activeStoreIdRef.current && storeId !== activeStoreIdRef.current) {
+    console.warn('[LoadCloud] REDIRECTED — ignoring storeId', storeId, '→ using active store', activeStoreIdRef.current);
+    try { console.trace('[LoadCloud] redirect caller trace'); } catch (e) {}
+    storeId = activeStoreIdRef.current; // Override the bad storeId
+  }
+
   console.log('[LoadCloud] START — user:', session.user.id, 'storeId:', storeId);
   setCloudStatus('Loading…');
   
@@ -4797,6 +4805,8 @@ const loadFromCloud = useCallback(async (storeId = null) => {
 
     setActiveStoreId(targetStoreId);
     activeStoreIdRef.current = targetStoreId; // Sync ref immediately to block race conditions
+    // Persist to localStorage directly — the sync effect is blocked by isLoadingDataRef during init
+    try { writeToLocal('ecommerce_active_store_id', targetStoreId); } catch (e) {}
 
     // Load the specific store's row
     const { data: storeRow, error: storeError } = await supabase
