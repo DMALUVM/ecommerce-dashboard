@@ -1498,6 +1498,7 @@ const pendingSaveDataRef = useRef(null); // Queue next save if one is in progres
 const [stores, setStores] = useState([]); // List of { id, name, createdAt }
 const [activeStoreId, setActiveStoreId] = useState(null);
 const activeStoreIdRef = useRef(null); // Mirrors activeStoreId for use in closures/guards
+const loadFromCloudLockRef = useRef(false); // Prevents concurrent loadFromCloud calls
 const [showStoreSelector, setShowStoreSelector] = useState(false); // Header dropdown
 const [showStoreModal, setShowStoreModal] = useState(false); // Full modal for create/manage
 const [newStoreName, setNewStoreName] = useState('');
@@ -4689,12 +4690,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     return { ok: false, reason: 'no_session', stores: [] };
   }
 
-  // GUARD: Block unexpected store switches (e.g. mystery re-loads after init)
-  // Only switchStore/deleteStore should change the active store — they set activeStoreIdRef first
-  if (storeId && activeStoreIdRef.current && storeId !== activeStoreIdRef.current) {
-    console.warn('[LoadCloud] BLOCKED — unexpected store switch from', activeStoreIdRef.current, 'to', storeId);
-    return { ok: false, reason: 'unexpected_switch', stores: [] };
+  // CONCURRENCY LOCK: only one loadFromCloud can run at a time
+  if (loadFromCloudLockRef.current) {
+    console.warn('[LoadCloud] BLOCKED — another load already in progress, storeId:', storeId);
+    return { ok: false, reason: 'concurrent_load', stores: [] };
   }
+  loadFromCloudLockRef.current = true;
 
   console.log('[LoadCloud] START — user:', session.user.id, 'storeId:', storeId);
   setCloudStatus('Loading…');
@@ -4786,6 +4787,14 @@ const loadFromCloud = useCallback(async (storeId = null) => {
         } catch (e) { /* non-fatal */ }
       }
     }
+    // POST-RESOLUTION GUARD: block if resolving to a different store than already active
+    // switchStore/deleteStore set activeStoreIdRef BEFORE calling loadFromCloud, so their calls pass
+    if (activeStoreIdRef.current && targetStoreId !== activeStoreIdRef.current) {
+      console.warn('[LoadCloud] BLOCKED — resolved to', targetStoreId, 'but active store is', activeStoreIdRef.current);
+      setCloudStatus('');
+      return { ok: false, reason: 'wrong_store_resolved', stores: loadedStores };
+    }
+
     setActiveStoreId(targetStoreId);
     activeStoreIdRef.current = targetStoreId; // Sync ref immediately to block race conditions
 
@@ -5106,6 +5115,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setCloudStatus('');
     return { ok: false, reason: 'error', stores: [] };
   } finally {
+    loadFromCloudLockRef.current = false; // Release concurrency lock
     isLoadingDataRef.current = false; setDataLoading(false);
   }
 }, [session, writeToLocal]);
@@ -12822,7 +12832,6 @@ const savePeriods = async (d) => {
                       
                       return {
                         ...item,
-                        _hasFreshData: !!(packiyoItem || freshAmz || freshHome),
                         amazonQty: newAmazonQty,
                         amazonInbound: newAmazonInbound,
                         awdQty: newAwdQty,
@@ -12899,51 +12908,41 @@ const savePeriods = async (d) => {
                       });
                     }
 
-                    // Remove stale items that don't appear in ANY fresh sync source
-                    // This prevents demo/contaminated items from persisting across syncs
-                    const staleCount = updatedItems.filter(i => i._hasFreshData === false).length;
-                    const freshOnly = updatedItems.filter(i => i._hasFreshData !== false);
-                    if (staleCount > 0) {
-                      console.log(`[AutoSync] Inventory: removed ${staleCount} stale items not found in any sync source`);
-                    }
-                    // Clean up the internal flag before saving
-                    freshOnly.forEach(i => delete i._hasFreshData);
-
-                    freshOnly.sort((a, b) => b.totalValue - a.totalValue);
+                    updatedItems.sort((a, b) => b.totalValue - a.totalValue);
                     
                     // Recalculate supply chain KPIs from updated items
                     let critical = 0, low = 0, healthy = 0, overstock = 0;
-                    freshOnly.forEach(item => {
+                    updatedItems.forEach(item => {
                       if (item.health === 'critical') critical++;
                       else if (item.health === 'low') low++;
                       else if (item.health === 'healthy') healthy++;
                       else if (item.health === 'overstock') overstock++;
                     });
 
-                    const itemsWithTurnover = freshOnly.filter(i => i.turnoverRate > 0);
+                    const itemsWithTurnover = updatedItems.filter(i => i.turnoverRate > 0);
                     const avgTurnover = itemsWithTurnover.length > 0
                       ? itemsWithTurnover.reduce((s, i) => s + i.turnoverRate, 0) / itemsWithTurnover.length : 0;
-                    const totalCarryingCost = freshOnly.reduce((s, i) => s + (i.annualCarryingCost || 0), 0);
-                    const itemsWithSellThrough = freshOnly.filter(i => i.sellThroughRate > 0);
+                    const totalCarryingCost = updatedItems.reduce((s, i) => s + (i.annualCarryingCost || 0), 0);
+                    const itemsWithSellThrough = updatedItems.filter(i => i.sellThroughRate > 0);
                     const avgSellThrough = itemsWithSellThrough.length > 0
                       ? itemsWithSellThrough.reduce((s, i) => s + i.sellThroughRate, 0) / itemsWithSellThrough.length : 0;
-                    const itemsWithVel = freshOnly.filter(i => i.weeklyVel > 0);
+                    const itemsWithVel = updatedItems.filter(i => i.weeklyVel > 0);
                     const inStockRate = itemsWithVel.length > 0
                       ? Math.round((itemsWithVel.filter(i => i.totalQty > 0).length / itemsWithVel.length) * 1000) / 10 : 100;
-                    const abcCounts = freshOnly.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
+                    const abcCounts = updatedItems.reduce((acc, i) => { acc[i.abcClass] = (acc[i.abcClass] || 0) + 1; return acc; }, {});
 
                     // Recalculate Amazon totals from updated items if fresh data was used
-                    const newAmzTotal = freshOnly.reduce((s, i) => s + (i.amazonQty || 0), 0);
-                    const newAmzValue = freshOnly.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
-                    const newAmzInbound = freshOnly.reduce((s, i) => s + (i.amazonInbound || 0), 0);
-                    const newAwdTotal = freshOnly.reduce((s, i) => s + (i.awdQty || 0), 0);
-                    const newAwdValue = freshOnly.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
-                    const homeUnits = freshOnly.reduce((s, i) => s + (i.homeQty || 0), 0);
-                    const homeValue = freshOnly.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
+                    const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+                    const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+                    const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+                    const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+                    const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+                    const homeUnits = updatedItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+                    const homeValue = updatedItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
 
                     const updatedSnapshot = {
                       ...currentSnapshot,
-                      items: freshOnly,
+                      items: updatedItems,
                       summary: {
                         ...currentSnapshot.summary,
                         amazonUnits: newAmzTotal,
@@ -12957,7 +12956,7 @@ const savePeriods = async (d) => {
                         homeValue,
                         totalUnits: newAmzTotal + newTplTotal + homeUnits + newAwdTotal + newAmzInbound,
                         totalValue: newAmzValue + newTplValue + homeValue + newAwdValue,
-                        skuCount: freshOnly.length,
+                        skuCount: updatedItems.length,
                         // Recalculated supply chain KPIs
                         critical,
                         low,
@@ -13061,7 +13060,7 @@ const savePeriods = async (d) => {
               const velocityData = getStandaloneVelocity(item.sku);
               const hasNewVelocity = velocityData.amazon > 0 || velocityData.shopify > 0;
               
-              if (!hasAnyFreshData && !hasNewVelocity) return { ...item, _hasFreshData: false }; // Mark stale
+              if (!hasAnyFreshData && !hasNewVelocity) return item; // No fresh data for this item, keep as-is
               
               const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
               const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
@@ -13107,7 +13106,6 @@ const savePeriods = async (d) => {
               
               return {
                 ...item,
-                _hasFreshData: true,
                 amazonQty: newAmazonQty,
                 amazonInbound: newAmazonInbound,
                 awdQty: newAwdQty,
@@ -13171,33 +13169,25 @@ const savePeriods = async (d) => {
               });
             }
             
-            // Remove stale items that don't appear in ANY fresh sync source
-            const staleCount2 = updatedItems.filter(i => i._hasFreshData === false).length;
-            const freshOnly2 = updatedItems.filter(i => i._hasFreshData !== false);
-            if (staleCount2 > 0) {
-              console.log(`[AutoSync] Standalone merge: removed ${staleCount2} stale items not found in any sync source`);
-            }
-            freshOnly2.forEach(i => delete i._hasFreshData);
-
             // Recalculate summary
             let critical = 0, low = 0, healthy = 0, overstock = 0;
-            freshOnly2.forEach(item => {
+            updatedItems.forEach(item => {
               if (item.health === 'critical') critical++;
               else if (item.health === 'low') low++;
               else if (item.health === 'healthy') healthy++;
               else if (item.health === 'overstock') overstock++;
             });
 
-            const newAmzTotal = freshOnly2.reduce((s, i) => s + (i.amazonQty || 0), 0);
-            const newAmzValue = freshOnly2.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
-            const newAmzInbound = freshOnly2.reduce((s, i) => s + (i.amazonInbound || 0), 0);
-            const newAwdTotal = freshOnly2.reduce((s, i) => s + (i.awdQty || 0), 0);
-            const newAwdValue = freshOnly2.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
-            const newHomeTotal = freshOnly2.reduce((s, i) => s + (i.homeQty || 0), 0);
-            const newHomeValue = freshOnly2.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
-            const newTplTotal = freshOnly2.reduce((s, i) => s + (i.threeplQty || 0), 0);
-            const newTplValue = freshOnly2.reduce((s, i) => s + ((i.threeplQty || 0) * (i.cost || 0)), 0);
-            const newTplInbound = freshOnly2.reduce((s, i) => s + (i.threeplInbound || 0), 0);
+            const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+            const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+            const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+            const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+            const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+            const newHomeTotal = updatedItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+            const newHomeValue = updatedItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
+            const newTplTotal = updatedItems.reduce((s, i) => s + (i.threeplQty || 0), 0);
+            const newTplValue = updatedItems.reduce((s, i) => s + ((i.threeplQty || 0) * (i.cost || 0)), 0);
+            const newTplInbound = updatedItems.reduce((s, i) => s + (i.threeplInbound || 0), 0);
 
             // SAFETY: Verify we haven't accidentally zeroed out any location data
             let abortMerge = false;
@@ -13209,7 +13199,7 @@ const savePeriods = async (d) => {
             }
             if (!abortMerge && oldAwdU > 0 && newAwdTotal === 0 && !freshAmazonFbaData) {
               console.warn(`[AutoSync] SAFETY: AWD units would drop ${oldAwdU}→0 without fresh FBA data — restoring from snapshot`);
-              freshOnly2.forEach(it => {
+              updatedItems.forEach(it => {
                 const orig = currentSnapshot.items.find(o => o.sku === it.sku);
                 if (orig && (orig.awdQty || 0) > 0 && (it.awdQty || 0) === 0) {
                   it.awdQty = orig.awdQty;
@@ -13223,7 +13213,7 @@ const savePeriods = async (d) => {
             if (!abortMerge) {
             const updatedSnapshot = {
               ...currentSnapshot,
-              items: freshOnly2,
+              items: updatedItems,
               summary: {
                 ...currentSnapshot.summary,
                 amazonUnits: newAmzTotal,
@@ -13237,7 +13227,7 @@ const savePeriods = async (d) => {
                 threeplValue: newTplValue,
                 totalUnits: newAmzTotal + newTplTotal + newHomeTotal + newAwdTotal + newAmzInbound + newTplInbound,
                 totalValue: newAmzValue + newTplValue + newHomeValue + newAwdValue,
-                skuCount: freshOnly2.length,
+                skuCount: updatedItems.length,
                 critical, low, healthy, overstock,
               },
               sources: {
