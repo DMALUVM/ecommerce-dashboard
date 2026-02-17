@@ -621,23 +621,24 @@ const DashboardView = ({
       return (
         <div
           style={{ order: getWidgetOrder(id) }}
-          className={`relative group ${className}`}
+          className={`relative group/widget ${className}`}
         >
-          {/* Hide button - visible on hover */}
-          <div className="absolute -top-2 -right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+          {/* Hide button - visible on hover, positioned inside container to avoid overflow clipping */}
+          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover/widget:opacity-100 transition-opacity z-20 pointer-events-auto">
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); hideWidget(id); }}
-              className="p-1.5 bg-slate-700 hover:bg-rose-600 rounded-lg shadow-lg transition-colors border border-slate-600"
+              className="p-1.5 bg-slate-800/90 hover:bg-rose-600 rounded-lg shadow-lg transition-colors border border-slate-600 backdrop-blur-sm cursor-pointer"
               title="Hide widget"
             >
-              <EyeOff className="w-3 h-3 text-slate-300" />
+              <EyeOff className="w-3.5 h-3.5 text-slate-300" />
             </button>
           </div>
           {children}
         </div>
       );
     };
-    
+
     // DashboardWidget - full widget with title/icon for consistent look
     const DashboardWidget = ({ id, title, icon: Icon, children, className = '', noPadding = false }) => {
       return (

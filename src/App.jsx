@@ -17940,6 +17940,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       editingAccountBalance={editingAccountBalance}
       editingTransaction={editingTransaction}
       files={files}
+      getProfit={getProfit}
       globalModals={globalModals}
       invHistory={invHistory}
       navDropdown={navDropdown}
