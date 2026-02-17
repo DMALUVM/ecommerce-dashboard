@@ -4576,6 +4576,13 @@ const save3PLLedger = useCallback((newLedger) => {
   queueCloudSave({ ...combinedData, threeplLedger: newLedger });
 }, [combinedData, queueCloudSave]);
 
+// Persist activeStoreId to localStorage so init can recover if meta row is stale
+useEffect(() => {
+  if (activeStoreId && !isLoadingDataRef.current) {
+    try { writeToLocal('ecommerce_active_store_id', activeStoreId); } catch (e) {}
+  }
+}, [activeStoreId]);
+
 // Store name persistence
 useEffect(() => {
   try {
@@ -4745,8 +4752,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     }
     
     // Determine which store to load
+    // Fallback: explicit arg → localStorage (survives refresh) → meta row → first store → 'default'
     // If resolved target is "default" (demo) but user has their own stores, prefer the user store
-    let targetStoreId = storeId || meta.activeStoreId || (loadedStores[0]?.id) || 'default';
+    const lsActiveStoreRaw = !storeId ? lsGet('ecommerce_active_store_id') : null;
+    // Only trust localStorage value if it exists in the stores list (prevents stale/orphaned IDs)
+    const lsActiveStore = lsActiveStoreRaw && loadedStores.some(s => s.id === lsActiveStoreRaw) ? lsActiveStoreRaw : null;
+    let targetStoreId = storeId || lsActiveStore || meta.activeStoreId || (loadedStores[0]?.id) || 'default';
     if (!storeId && targetStoreId === 'default' && loadedStores.length > 1) {
       const userStore = loadedStores.find(s => s.id !== 'default');
       if (userStore) {
@@ -4987,7 +4998,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     
     // Load credentials from store_credentials table — wrapped in try/catch to never break data load
     try {
-      const loadedStoreId = storeId || activeStoreId || 'default';
+      const loadedStoreId = storeId || targetStoreId || 'default';
       const CRED_SETTER_MAP = {
         shopify: { setter: setShopifyCredentials, lsKey: 'ecommerce_shopify_creds_v1', stateKey: 'shopifyCredentials' },
         packiyo: { setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1', stateKey: 'packiyoCredentials' },
