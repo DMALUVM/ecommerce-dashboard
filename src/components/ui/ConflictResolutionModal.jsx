@@ -10,6 +10,7 @@ const ConflictResolutionModal = ({
   conflictCheckRef,
   pushToCloudNow,
   loadFromCloud,
+  activeStoreId,
   setToast,
   setAllWeeksData,
   setAllDaysData,
@@ -40,7 +41,7 @@ const ConflictResolutionModal = ({
     setShowConflictModal(false);
     setConflictData(null);
     conflictCheckRef.current = false;
-    await loadFromCloud();
+    await loadFromCloud(activeStoreId || undefined);
     setToast({ message: 'Reloaded from cloud (local changes discarded)', type: 'info' });
   };
   
