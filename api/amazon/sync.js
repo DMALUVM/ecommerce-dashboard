@@ -629,23 +629,20 @@ export default async function handler(req, res) {
       const daysBack = Math.min(parseInt(req.body.daysBack) || 7, 30);
       const existingReportId = req.body.reportId; // For 2-step polling
 
-      // Amazon's business day runs midnight-to-midnight PST (= 3AM-3AM EST / UTC-8).
-      // A day's data is only complete after midnight PST (3AM EST / 8AM UTC).
-      // We determine the "latest complete Amazon day" based on the current time in PST.
+      // Include today's in-progress data (partial is OK — SKU Economics overwrites later).
+      // PST = UTC-8. Convert UTC time to current PST date.
       const now = new Date();
       const utcHour = now.getUTCHours();
       const utcDay = now.getUTCDate();
-      // PST = UTC-8. If it's before 8AM UTC (midnight PST), today in PST hasn't ended yet,
-      // so the latest complete day is 2 days ago UTC. Otherwise it's yesterday UTC.
-      // (During PDT/UTC-7, cutoff is 7AM UTC — using 8AM UTC is conservative and safe year-round.)
-      const isPSTNextDay = utcHour >= 8; // Past midnight PST → today's PST data is complete
-      const latestCompleteDay = new Date(Date.UTC(
-        now.getUTCFullYear(), now.getUTCMonth(), utcDay - (isPSTNextDay ? 1 : 2)
+      const isPSTNextDay = utcHour >= 8; // Past midnight PST
+      // Current PST date: if past 8AM UTC (midnight PST), PST date = UTC date; otherwise UTC date - 1
+      const currentPSTDate = new Date(Date.UTC(
+        now.getUTCFullYear(), now.getUTCMonth(), utcDay - (isPSTNextDay ? 0 : 1)
       ));
-      const endDateObj = endDate ? new Date(endDate) : latestCompleteDay;
-      const startDateObj = startDate ? new Date(startDate) : new Date(latestCompleteDay.getTime() - (daysBack - 1) * 24 * 60 * 60 * 1000);
-      
-      console.log('[Sales] Report range:', startDateObj.toISOString().split('T')[0], 'to', endDateObj.toISOString().split('T')[0]);
+      const endDateObj = endDate ? new Date(endDate) : currentPSTDate;
+      const startDateObj = startDate ? new Date(startDate) : new Date(currentPSTDate.getTime() - (daysBack - 1) * 24 * 60 * 60 * 1000);
+
+      console.log('[Sales] Report range:', startDateObj.toISOString().split('T')[0], 'to', endDateObj.toISOString().split('T')[0], '(today in PST, partial data included)');
 
       // Helper: download and parse a completed report
       const downloadAndParseReport = async (reportDocumentId) => {
