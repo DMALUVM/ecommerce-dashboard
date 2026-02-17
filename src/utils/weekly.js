@@ -51,6 +51,7 @@ const reconcileAmazonSkus = (amazon, skuData) => {
       returns: num(s.returns), // keep
       netSales: num(s.netSales) * revScale,
       netProceeds: num(s.netProceeds) * profitScale,
+      fees: num(s.fees),
       adSpend: num(s.adSpend),
       cogs: num(s.cogs),
       // Preserve explicit per-unit values if present
@@ -118,6 +119,7 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
             returns: 0,
             netSales: 0,
             netProceeds: 0,
+            fees: 0,
             adSpend: 0,
             cogs: 0,
             netProceedsPerUnit: s?.netProceedsPerUnit,
@@ -128,6 +130,7 @@ export const deriveWeeksFromDays = (allDaysData = {}) => {
         t.returns += num(s.returns);
         t.netSales += num(s.netSales);
         t.netProceeds += num(s.netProceeds);
+        t.fees += num(s.fees);
         t.adSpend += num(s.adSpend);
         t.cogs += num(s.cogs);
         if (t.netProceedsPerUnit === undefined || t.netProceedsPerUnit === null) {
@@ -289,6 +292,10 @@ export const mergeWeekData = (storedWeek, derivedWeek) => {
     ...(storedWeek?.amazon || {}),
     ...(derivedWeek?.amazon || {}),
   };
+  // Preserve stored fees if derived fees are 0 (daily data may lack per-day fees)
+  if (num(mergedAmazon.fees) === 0 && num(storedWeek?.amazon?.fees) > 0) {
+    mergedAmazon.fees = storedWeek.amazon.fees;
+  }
   const mergedShopify = {
     ...(storedWeek?.shopify || {}),
     ...(derivedWeek?.shopify || {}),
