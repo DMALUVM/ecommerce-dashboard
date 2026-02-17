@@ -27,16 +27,21 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
       : 0;
 
     const withCalcs = skuDataRawFixed.map(item => {
+      const hasOwnFees = (item.fees || 0) > 0;
       const fees = isAmz
-        ? ((item.fees || 0) > 0
+        ? (hasOwnFees
             ? item.fees
             : (totalSkuSales > 0 ? (item.netSales || 0) / totalSkuSales * channelFees : 0))
         : 0;
+      // For legacy data, stored cogs = true_cogs + fees (mixed). Remove the fee portion.
+      const cogs = isAmz && !hasOwnFees && !hasSkuFees
+        ? Math.max(0, (item.cogs || 0) - fees)
+        : (item.cogs || 0);
       const profit = isAmz
         ? (item.netProceeds || 0)
         : (item.netSales || 0) - (item.cogs || 0);
       const profitPerUnit = item.unitsSold > 0 ? profit / item.unitsSold : 0;
-      return { ...item, fees, profit, profitPerUnit };
+      return { ...item, fees, cogs, profit, profitPerUnit };
     });
     return withCalcs.sort((a, b) => {
       const aVal = a[skuSort.field] || 0;
