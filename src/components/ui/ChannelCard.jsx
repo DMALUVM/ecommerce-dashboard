@@ -19,12 +19,24 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
   }, [isAmz, skuDataRaw, data.shippingCollected]);
 
   const skuData = useMemo(() => {
+    // If per-SKU fees are missing (legacy stored data), distribute channel-level fees proportionally
+    const channelFees = isAmz ? (data.fees || 0) : 0;
+    const hasSkuFees = skuDataRawFixed.some(item => (item.fees || 0) > 0);
+    const totalSkuSales = !hasSkuFees && channelFees > 0
+      ? skuDataRawFixed.reduce((sum, s) => sum + (s.netSales || 0), 0)
+      : 0;
+
     const withCalcs = skuDataRawFixed.map(item => {
+      const fees = isAmz
+        ? ((item.fees || 0) > 0
+            ? item.fees
+            : (totalSkuSales > 0 ? (item.netSales || 0) / totalSkuSales * channelFees : 0))
+        : 0;
       const profit = isAmz
         ? (item.netProceeds || 0)
         : (item.netSales || 0) - (item.cogs || 0);
       const profitPerUnit = item.unitsSold > 0 ? profit / item.unitsSold : 0;
-      return { ...item, profit, profitPerUnit };
+      return { ...item, fees, profit, profitPerUnit };
     });
     return withCalcs.sort((a, b) => {
       const aVal = a[skuSort.field] || 0;
