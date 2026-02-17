@@ -18,8 +18,17 @@
     "api/chat.js": {
       "maxDuration": 60,
       "memory": 512
+    },
+    "api/stripe/webhook.js": {
+      "maxDuration": 15
     }
   },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/privacy.html", "destination": "/privacy.html" },
+    { "source": "/terms.html", "destination": "/terms.html" },
+    { "source": "/((?!api|privacy\\.html|terms\\.html|assets|vite\\.svg|screenshots).*)", "destination": "/index.html" }
+  ],
   "crons": [
     {
       "path": "/api/cron/sync",

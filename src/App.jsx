@@ -1480,6 +1480,7 @@ const [authMode, setAuthMode] = useState('sign_in'); // sign_in | sign_up
 const [authError, setAuthError] = useState('');
 const [cloudStatus, setCloudStatus] = useState('');
 const [isAuthReady, setIsAuthReady] = useState(false);
+const [subscription, setSubscription] = useState(null);
 const lastSavedRef = useRef(0);
 const saveTimerRef = useRef(null);
 const isLoadingDataRef = useRef(false);
@@ -5369,6 +5370,13 @@ useEffect(() => {
     }).data?.subscription;
 
     setIsAuthReady(true);
+
+    // Fetch subscription status for billing/feature gating
+    if (initialSession?.user?.id) {
+      supabase.from('subscriptions').select('*').eq('user_id', initialSession.user.id).maybeSingle()
+        .then(({ data }) => { if (data) setSubscription(data); })
+        .catch((err) => devWarn('[Boot] Subscription fetch failed:', err));
+    }
     } catch (bootErr) {
       // CORS or network failure - fall back to localStorage so app isn't stuck
       console.warn('[Boot] Supabase auth failed (CORS/network), falling back to localStorage:', bootErr.message || bootErr);
@@ -16885,63 +16893,14 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     );
   }
 
-  // If Supabase is configured, require login so your data is private.
+  // If Supabase is configured, require login — redirect to landing page.
+  // Note: When using React Router, the ProtectedRoute in AppRouter.jsx
+  // handles this redirect first. This is a fallback for direct access.
   if (supabase && isAuthReady && !session) {
+    window.location.href = '/?login=true';
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center">
-              <Database className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold">Dashboard Login</h1>
-              <p className="text-slate-400 text-sm">Sign in to access your data from any device.</p>
-            </div>
-          </div>
-
-          <form onSubmit={handleAuth} className="space-y-4">
-            <div>
-              <label className="block text-sm text-slate-300 mb-1">Email</label>
-              <input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" required
-                className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
-            </div>
-            <div>
-              <label className="block text-sm text-slate-300 mb-1">Password</label>
-              <input value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} type="password" required autoComplete="current-password"
-                className="w-full rounded-xl bg-slate-950/60 border border-slate-700 px-3 py-2 outline-none focus:border-emerald-500" />
-            </div>
-
-            {authError && (
-              <div className="text-sm text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl p-3">
-                {authError}
-              </div>
-            )}
-
-            <button type="submit" className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold py-2">
-              {authMode === 'sign_up' ? 'Create account' : 'Sign in'}
-            </button>
-
-            <button type="button" onClick={() => setAuthMode(authMode === 'sign_up' ? 'sign_in' : 'sign_up')}
-              className="w-full rounded-xl border border-slate-700 hover:border-slate-500 text-slate-200 py-2">
-              {authMode === 'sign_up' ? 'Have an account? Sign in' : 'New here? Create an account'}
-            </button>
-          </form>
-          
-          {/* Legal Links */}
-          <div className="mt-6 pt-4 border-t border-slate-800 text-center">
-            <p className="text-xs text-slate-500">
-              By signing in, you agree to our{' '}
-              <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300">
-                Terms of Service
-              </a>
-              {' '}and{' '}
-              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300">
-                Privacy Policy
-              </a>
-            </p>
-          </div>
-        </div>
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -18138,6 +18097,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       queueCloudSave={queueCloudSave}
       pushToCloudNow={pushToCloudNow}
       supabase={supabase}
+      subscription={subscription}
       accounts={accounts}
       best={best}
       bump={bump}

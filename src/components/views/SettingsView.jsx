@@ -107,6 +107,7 @@ const SettingsView = ({
   storeLogo,
   storeName,
   stores,
+  subscription,
   theme,
   toast,
   setView,
@@ -3734,6 +3735,53 @@ const SettingsView = ({
               <button onClick={handleLogout} className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300 flex items-center gap-2">
                 Sign Out
               </button>
+            </SettingRow>
+          </SettingSection>
+        )}
+
+        {/* Billing / Subscription */}
+        {supabase && session && (
+          <SettingSection title="💳 Billing">
+            <SettingRow
+              label="Plan"
+              desc={subscription
+                ? (subscription.status === 'trialing'
+                  ? `Trial — ${Math.max(0, Math.ceil((new Date(subscription.trial_end) - new Date()) / 86400000))} days remaining`
+                  : subscription.status === 'active' ? 'Pro (Active)'
+                  : subscription.status === 'past_due' ? 'Pro (Payment Due)'
+                  : subscription.status === 'canceled' ? 'Canceled'
+                  : subscription.status)
+                : 'No active subscription'}
+            >
+              {subscription?.stripe_customer_id ? (
+                <button
+                  onClick={async () => {
+                    try {
+                      const { redirectToPortal } = await import('../../utils/stripe.js');
+                      await redirectToPortal(subscription.stripe_customer_id);
+                    } catch (e) {
+                      setToast?.({ message: 'Could not open billing portal: ' + e.message, type: 'error' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded-lg text-sm text-violet-300 flex items-center gap-2"
+                >
+                  Manage Billing
+                </button>
+              ) : (
+                <button
+                  onClick={async () => {
+                    try {
+                      const { redirectToCheckout } = await import('../../utils/stripe.js');
+                      await redirectToCheckout(session.user.id, session.user.email);
+                    } catch (e) {
+                      setToast?.({ message: 'Could not start checkout: ' + e.message, type: 'error' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 rounded-lg text-sm text-emerald-300 flex items-center gap-2"
+                >
+                  Upgrade to Pro
+                </button>
+              )}
             </SettingRow>
           </SettingSection>
         )}
