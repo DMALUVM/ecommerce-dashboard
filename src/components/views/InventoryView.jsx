@@ -82,9 +82,28 @@ const InventoryView = ({
   callAI
 }) => {
   const dates = Object.keys(invHistory).sort().reverse();
-  const data = invHistory[selectedInvDate];
-  const idx = dates.indexOf(selectedInvDate);
-  
+  // Auto-fix: if selectedInvDate doesn't match any snapshot, select the most recent
+  const resolvedDate = invHistory[selectedInvDate] ? selectedInvDate : dates[0];
+  const data = resolvedDate ? invHistory[resolvedDate] : null;
+  const idx = dates.indexOf(resolvedDate);
+
+  // If there are dates but selectedInvDate was wrong, fix it
+  useEffect(() => {
+    if (resolvedDate && resolvedDate !== selectedInvDate) {
+      setSelectedInvDate(resolvedDate);
+    }
+  }, [resolvedDate, selectedInvDate, setSelectedInvDate]);
+
+  // No snapshot available — show empty state instead of crashing
+  if (!data) {
+    return (
+      <div className="p-8 text-center">
+        <div className="text-slate-400 text-lg mb-2">No inventory snapshot yet</div>
+        <p className="text-slate-500 text-sm">Go to <span className="text-cyan-400">Upload</span> → <span className="text-emerald-400">Sync Now</span> to pull inventory from your connected sources.</p>
+      </div>
+    );
+  }
+
   // Column visibility - persisted to localStorage
   const ALL_COLUMNS = [
     { key: 'name', label: 'Product', align: 'left', alwaysVisible: true },
