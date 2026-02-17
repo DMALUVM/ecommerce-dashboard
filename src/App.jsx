@@ -16536,7 +16536,7 @@ Reference the full data from the prior analysis. Be concise but still specific w
       // Build ULTRA-MINIMAL prompt
       const p = `${type.toUpperCase()} REPORT ${periodLabel}
 Rev:$${(reportData.total.revenue/1000).toFixed(1)}k${comparisonData ? `(${changes.revenue>0?'+':''}${changes.revenue.toFixed(0)}%)` : ''} Profit:$${(reportData.total.netProfit/1000).toFixed(1)}k Margin:${reportData.total.netMargin.toFixed(0)}% Units:${reportData.total.units}
-AMZ:$${(reportData.amazon.revenue/1000).toFixed(1)}k ${reportData.amazon.roas.toFixed(1)}xROAS | SHOP:$${(reportData.shopify.revenue/1000).toFixed(1)}k ${reportData.shopify.roas.toFixed(1)}xROAS
+AMZ:$${(reportData.amazon.revenue/1000).toFixed(1)}k TACOS:${reportData.amazon.revenue > 0 ? ((reportData.amazon.adSpend/reportData.amazon.revenue)*100).toFixed(1) : 0}% | SHOP:$${(reportData.shopify.revenue/1000).toFixed(1)}k TACOS:${reportData.shopify.revenue > 0 ? ((reportData.shopify.adSpend/reportData.shopify.revenue)*100).toFixed(1) : 0}%
 ${aiForecast ? `Forecast:$${(aiForecast.predictedRevenue/1000).toFixed(1)}k next wk` : ''}
 ${inventoryAlerts.length > 0 ? `LowStock:${inventoryAlerts.join(',')}` : ''}
 ${cashInfo}

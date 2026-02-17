@@ -82,7 +82,7 @@ const ChannelCard = ({ title, color, data, isAmz, showSkuTable = false }) => {
             {!isAmz && data.threeplMetrics?.isProrated && <span className="text-xs text-amber-400">~estimated</span>}
           </div>
           <div><p className="text-slate-500 text-xs uppercase mb-1">Ad Spend</p><p className="text-lg font-semibold text-white">{formatCurrency(data.adSpend)}</p></div>
-          <div><p className="text-slate-500 text-xs uppercase mb-1">TACOS</p><p className="text-lg font-semibold text-white">{(data.roas || 0).toFixed(2)}x</p></div>
+          <div><p className="text-slate-500 text-xs uppercase mb-1">TACOS</p><p className="text-lg font-semibold text-white">{data.revenue > 0 ? ((data.adSpend || 0) / data.revenue * 100).toFixed(1) : '0.0'}%</p></div>
         </div>
         {/* 3PL Breakdown */}
         {show3plBreakdown && has3plData && (
