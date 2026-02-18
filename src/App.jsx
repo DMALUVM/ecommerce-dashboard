@@ -13642,12 +13642,98 @@ const savePeriods = async (d) => {
                   return !existingFingerprints.has(fp);
                 });
                 const allTxns = [...(prev?.transactions || []), ...newTransactions];
-                return {
+
+                // Recalculate ALL aggregates from merged transactions
+                // (Previously only updated transactions, leaving stale accounts/categories/monthlySnapshots)
+                const accounts = {};
+                const categories = {};
+                const monthlySnapshots = {};
+
+                allTxns.forEach(txn => {
+                  // Account aggregates
+                  if (!accounts[txn.account]) {
+                    const existingBalance = prev?.accounts?.[txn.account]?.balance;
+                    const existingInitialBalance = prev?.accounts?.[txn.account]?.initialBalance;
+                    accounts[txn.account] = {
+                      name: txn.account,
+                      type: txn.accountType,
+                      transactions: 0,
+                      totalIn: 0,
+                      totalOut: 0,
+                      initialBalance: existingInitialBalance ?? existingBalance ?? 0,
+                      balance: existingBalance ?? 0,
+                    };
+                    // Preserve manual balance settings
+                    if (prev?.accounts?.[txn.account]?.balanceManuallySet) {
+                      accounts[txn.account].balanceManuallySet = true;
+                      accounts[txn.account].balanceSetDate = prev.accounts[txn.account].balanceSetDate;
+                    }
+                  }
+                  accounts[txn.account].transactions++;
+                  if (txn.isIncome) accounts[txn.account].totalIn += txn.amount;
+                  if (txn.isExpense) accounts[txn.account].totalOut += txn.amount;
+
+                  // Category aggregates
+                  const cat = txn.topCategory || 'Uncategorized';
+                  if (!categories[cat]) categories[cat] = { totalIn: 0, totalOut: 0, count: 0, subcategories: {} };
+                  categories[cat].count++;
+                  if (txn.isIncome) categories[cat].totalIn += txn.amount;
+                  if (txn.isExpense) categories[cat].totalOut += txn.amount;
+
+                  // Monthly snapshots
+                  const month = txn.date?.substring(0, 7);
+                  if (month) {
+                    if (!monthlySnapshots[month]) monthlySnapshots[month] = { income: 0, expenses: 0, net: 0, transactions: 0 };
+                    monthlySnapshots[month].transactions++;
+                    if (txn.isIncome) {
+                      monthlySnapshots[month].income += txn.amount;
+                      monthlySnapshots[month].net += txn.amount;
+                    }
+                    if (txn.isExpense) {
+                      monthlySnapshots[month].expenses += txn.amount;
+                      monthlySnapshots[month].net -= txn.amount;
+                    }
+                  }
+                });
+
+                // Update balances for new transactions
+                if (prev?.transactions?.length > 0 && newTransactions.length > 0) {
+                  const netByAccount = {};
+                  newTransactions.forEach(txn => {
+                    if (!netByAccount[txn.account]) netByAccount[txn.account] = 0;
+                    if (txn.isIncome) netByAccount[txn.account] += txn.amount;
+                    if (txn.isExpense) netByAccount[txn.account] -= txn.amount;
+                  });
+                  Object.entries(netByAccount).forEach(([acctName, netChange]) => {
+                    if (accounts[acctName]) {
+                      const existingBal = prev?.accounts?.[acctName]?.balance || 0;
+                      accounts[acctName].balance = existingBal + netChange;
+                    }
+                  });
+                }
+
+                const dates = allTxns.map(t => t.date).filter(Boolean).sort();
+                const dateRange = {
+                  start: dates[0],
+                  end: dates[dates.length - 1],
+                };
+
+                const updated = {
                   ...prev,
                   transactions: allTxns,
+                  accounts,
+                  categories,
+                  monthlySnapshots,
+                  dateRange,
+                  transactionCount: allTxns.length,
                   lastUpdated: new Date().toISOString(),
                   lastUpload: new Date().toISOString(),
                 };
+
+                // Persist to localStorage (previously missing — data was lost on refresh)
+                try { lsSet('ecommerce_banking_v1', JSON.stringify(updated)); } catch (e) { /* ignore */ }
+
+                return updated;
               });
               setQboCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               const txnCount = data.transactions?.length || 0;
