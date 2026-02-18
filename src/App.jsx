@@ -13649,6 +13649,21 @@ const savePeriods = async (d) => {
                 const categories = {};
                 const monthlySnapshots = {};
 
+                // Build set of Bank/CC/Equity/Liability account names for filtering internal-transfer deposits
+                const nonRevenueAcctNames = new Set();
+                (data.chartOfAccounts || prev?.chartOfAccounts || []).forEach(a => {
+                  if (a.type === 'Bank' || a.type === 'Credit Card' || a.type === 'Other Current Asset' ||
+                      a.classification === 'Equity' || a.classification === 'Liability') {
+                    if (a.name) nonRevenueAcctNames.add(a.name.toLowerCase());
+                    if (a.fullName) nonRevenueAcctNames.add(a.fullName.toLowerCase());
+                  }
+                });
+                Object.entries(prev?.accounts || {}).forEach(([name, acct]) => {
+                  if (acct.type === 'checking' || acct.type === 'savings' || acct.type === 'credit_card') {
+                    nonRevenueAcctNames.add(name.toLowerCase());
+                  }
+                });
+
                 allTxns.forEach(txn => {
                   // Derive isIncome/isExpense for QBO transactions (cash basis)
                   // QBO API transactions don't have these flags — derive from qboType
@@ -13657,8 +13672,18 @@ const savePeriods = async (d) => {
                   let isExpense = txn.isExpense || false;
                   if (txn.qboType) {
                     const qt = txn.qboType.toLowerCase();
-                    isIncome = qt === 'deposit';
-                    isExpense = qt === 'purchase' || qt === 'refundreceipt';
+                    if (qt === 'deposit') {
+                      // Check if deposit is an internal transfer (line items reference bank/CC/equity accounts)
+                      const lineAccts = (txn.lineItems || []).map(l => (l.account || '').toLowerCase()).filter(Boolean);
+                      const isInternalXfer = lineAccts.length > 0 && lineAccts.every(a => nonRevenueAcctNames.has(a));
+                      const desc = ((txn.description || '') + ' ' + (txn.memo || '')).toLowerCase();
+                      const isNonRevDesc = desc.includes('transfer from') || desc.includes('transfer -') ||
+                        desc.includes('owner contribution') || desc.includes('capital contribution') ||
+                        desc.includes('loan proceed') || desc.includes('loan deposit') || desc.includes('opening balance');
+                      isIncome = !(isInternalXfer || isNonRevDesc);
+                    } else {
+                      isExpense = qt === 'purchase' || qt === 'refundreceipt';
+                    }
                     // Skip invoices, bills, payments, salesreceipts for cash-basis aggregates
                   }
 

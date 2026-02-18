@@ -177,6 +177,30 @@ const BankingView = ({
     return isCardAccount || isBankTransferAccount;
   };
   
+  // Build set of known Bank/Credit Card account names from QBO chart of accounts
+  // Used to detect internal-transfer deposits (money moved between the user's own accounts)
+  const bankCCAccountNames = useMemo(() => {
+    const names = new Set();
+    (bankingData.chartOfAccounts || []).forEach(a => {
+      if (a.type === 'Bank' || a.type === 'Credit Card' || a.type === 'Other Current Asset') {
+        if (a.name) names.add(a.name.toLowerCase());
+        if (a.fullName) names.add(a.fullName.toLowerCase());
+      }
+      // Also exclude equity accounts (owner contributions) and liability (loans)
+      if (a.classification === 'Equity' || a.classification === 'Liability') {
+        if (a.name) names.add(a.name.toLowerCase());
+        if (a.fullName) names.add(a.fullName.toLowerCase());
+      }
+    });
+    // Also add from dashboard-level accounts
+    Object.entries(bankingData.accounts || {}).forEach(([name, acct]) => {
+      if (acct.type === 'checking' || acct.type === 'savings' || acct.type === 'credit_card') {
+        names.add(name.toLowerCase());
+      }
+    });
+    return names;
+  }, [bankingData.chartOfAccounts, bankingData.accounts]);
+
   // Pre-calculate whether credit card accounts exist (for CC payment handling)
   const hasCCAccounts = (bankingData.transactions || []).some(tx => tx.accountType === 'credit_card');
   
@@ -239,8 +263,25 @@ const BankingView = ({
       
       // Cash-basis: Only count actual cash movements
       if (effectiveQboType === 'deposit') {
-        // Deposit = actual cash received in bank account
-        isIncome = true;
+        // Check if this deposit is an internal transfer or non-revenue
+        // (line items reference Bank/CC/Equity/Liability accounts instead of Revenue/AR accounts)
+        const lineAccts = (t.lineItems || []).map(l => (l.account || '').toLowerCase()).filter(Boolean);
+        const isInternalTransfer = lineAccts.length > 0 && lineAccts.every(a => bankCCAccountNames.has(a));
+
+        // Also check description for common non-revenue deposit patterns
+        const desc = ((t.description || '') + ' ' + (t.memo || '')).toLowerCase();
+        const isNonRevenueDesc = (
+          desc.includes('transfer from') || desc.includes('transfer -') ||
+          desc.includes('owner contribution') || desc.includes('capital contribution') ||
+          desc.includes('loan proceed') || desc.includes('loan deposit') ||
+          desc.includes('opening balance')
+        );
+
+        if (isInternalTransfer || isNonRevenueDesc) {
+          isTransfer = true; // Not income — internal cash movement or non-revenue
+        } else {
+          isIncome = true; // Actual revenue deposit
+        }
       } else if (effectiveQboType === 'purchase') {
         // Purchase = actual cash spent (includes CC charges, checks, etc.)
         isExpense = true;
@@ -2084,21 +2125,25 @@ const BankingView = ({
                   {(() => {
                     const currentYear = now.getFullYear();
                     const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
-                    const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.income || 0), 0);
-                    const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0);
-                    const ytdNet = ytdIncome - ytdExpenses;
-                    
+                    const txnYtdIncome = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.income || 0), 0);
+                    const txnYtdExpenses = ytdMonths.reduce((s, m) => s + (monthlySnapshots[m]?.expenses || 0), 0);
+                    // Prefer QBO P&L (excludes internal transfers, equity, loans)
+                    const qboPL = bankingData.profitAndLoss;
+                    const ytdIncome = qboPL?.totalIncome > 0 ? qboPL.totalIncome : txnYtdIncome;
+                    const ytdExpenses = qboPL ? ((qboPL.totalCOGS || 0) + (qboPL.totalExpenses || 0)) : txnYtdExpenses;
+                    const ytdNet = qboPL?.netIncome != null ? qboPL.netIncome : (ytdIncome - ytdExpenses);
+
                     // Get last year same period for comparison if available
                     const lastYear = currentYear - 1;
                     const lastYearMonths = monthKeys.filter(m => m.startsWith(String(lastYear)));
                     const lastYearSamePeriod = lastYearMonths.slice(0, ytdMonths.length);
                     const lastYearNet = lastYearSamePeriod.reduce((s, m) => s + (monthlySnapshots[m]?.net || 0), 0);
                     const yoyChange = lastYearNet !== 0 ? ((ytdNet - lastYearNet) / Math.abs(lastYearNet)) * 100 : 0;
-                    
+
                     return (
                       <div className="space-y-4">
                         <div className="flex justify-between items-center p-3 bg-emerald-900/20 border border-emerald-500/30 rounded-lg">
-                          <span className="text-emerald-400">YTD Income (Deposits)</span>
+                          <span className="text-emerald-400">YTD Income{qboPL ? ' (QBO P&L)' : ' (Deposits)'}</span>
                           <span className="font-bold text-emerald-400">{formatCurrency(ytdIncome)}</span>
                         </div>
                         <div className="flex justify-between items-center p-3 bg-rose-900/20 border border-rose-500/30 rounded-lg">
@@ -2643,12 +2688,16 @@ const BankingView = ({
                 ? (monthOpEx / currentMonthData.income * 100) 
                 : 0;
               
-              // YTD calculations from banking
+              // YTD calculations — prefer QBO P&L (authoritative) over transaction sums
+              // Transaction sums can be inflated by internal transfers recorded as deposits
               const currentYear = now.getFullYear();
               const ytdMonths = monthKeys.filter(m => m.startsWith(String(currentYear)));
-              const ytdIncome = ytdMonths.reduce((s, m) => s + (monthlyData[m]?.income || 0), 0);
-              const ytdExpenses = ytdMonths.reduce((s, m) => s + (monthlyData[m]?.expenses || 0), 0);
-              const ytdCashFlow = ytdIncome - ytdExpenses;
+              const txnYtdIncome = ytdMonths.reduce((s, m) => s + (monthlyData[m]?.income || 0), 0);
+              const txnYtdExpenses = ytdMonths.reduce((s, m) => s + (monthlyData[m]?.expenses || 0), 0);
+              const qboPL = bankingData.profitAndLoss;
+              const ytdIncome = qboPL?.totalIncome > 0 ? qboPL.totalIncome : txnYtdIncome;
+              const ytdExpenses = qboPL ? ((qboPL.totalCOGS || 0) + (qboPL.totalExpenses || 0)) : txnYtdExpenses;
+              const ytdCashFlow = qboPL?.netIncome != null ? qboPL.netIncome : (ytdIncome - ytdExpenses);
               
               // Get actual sales profit data if available
               const currentYearForWeeks = new Date().getFullYear().toString();
