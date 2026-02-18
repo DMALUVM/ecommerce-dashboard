@@ -13752,20 +13752,28 @@ const savePeriods = async (d) => {
                     }
 
                     if (matchKey) {
-                      console.log(`[Banking] Matched QBO "${qboAcct.name}" → dashboard "${matchKey}": $${accounts[matchKey].balance} → $${qboAcct.currentBalance}`);
-                      accounts[matchKey].balance = qboAcct.currentBalance || 0;
+                      // Credit cards: QBO returns negative CurrentBalance (liability convention)
+                      // Dashboard expects positive value (amount owed)
+                      const balance = qboAcct.type === 'Credit Card'
+                        ? Math.abs(qboAcct.currentBalance || 0)
+                        : (qboAcct.currentBalance || 0);
+                      console.log(`[Banking] Matched QBO "${qboAcct.name}" → dashboard "${matchKey}": $${accounts[matchKey].balance} → $${balance} (raw: ${qboAcct.currentBalance})`);
+                      accounts[matchKey].balance = balance;
                       accounts[matchKey].qboId = qboAcct.id;
                       accounts[matchKey].type = qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || accounts[matchKey].type);
                     } else {
                       // Account exists in QBO but not in our transaction history — add it
-                      console.log(`[Banking] No match for QBO "${qboAcct.name}" ($${qboAcct.currentBalance}) — adding as new`);
+                      const newBalance = qboAcct.type === 'Credit Card'
+                        ? Math.abs(qboAcct.currentBalance || 0)
+                        : (qboAcct.currentBalance || 0);
+                      console.log(`[Banking] No match for QBO "${qboAcct.name}" ($${newBalance}) — adding as new`);
                       accounts[qboAcct.name] = {
                         name: qboAcct.name,
                         type: qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || 'bank'),
                         transactions: 0,
                         totalIn: 0,
                         totalOut: 0,
-                        balance: qboAcct.currentBalance || 0,
+                        balance: newBalance,
                         qboId: qboAcct.id,
                       };
                     }
