@@ -13712,6 +13712,29 @@ const savePeriods = async (d) => {
                   });
                 }
 
+                // Override with ACTUAL balances from QBO (authoritative source of truth)
+                // Transaction-derived balances drift because they depend on complete history
+                if (data.accounts && data.accounts.length > 0) {
+                  data.accounts.forEach(qboAcct => {
+                    if (qboAcct.name && accounts[qboAcct.name]) {
+                      accounts[qboAcct.name].balance = qboAcct.currentBalance || 0;
+                      accounts[qboAcct.name].qboId = qboAcct.id;
+                      accounts[qboAcct.name].type = qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || accounts[qboAcct.name].type);
+                    } else if (qboAcct.name) {
+                      // Account exists in QBO but not in our transaction history — add it
+                      accounts[qboAcct.name] = {
+                        name: qboAcct.name,
+                        type: qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || 'bank'),
+                        transactions: 0,
+                        totalIn: 0,
+                        totalOut: 0,
+                        balance: qboAcct.currentBalance || 0,
+                        qboId: qboAcct.id,
+                      };
+                    }
+                  });
+                }
+
                 const dates = allTxns.map(t => t.date).filter(Boolean).sort();
                 const dateRange = {
                   start: dates[0],
@@ -13728,6 +13751,12 @@ const savePeriods = async (d) => {
                   transactionCount: allTxns.length,
                   lastUpdated: new Date().toISOString(),
                   lastUpload: new Date().toISOString(),
+                  // Pass through QBO-specific data the dashboard reads
+                  ...(data.profitAndLoss ? { profitAndLoss: data.profitAndLoss } : {}),
+                  ...(data.revenueByChannel ? { revenueByChannel: data.revenueByChannel } : {}),
+                  ...(data.vendors ? { vendors: data.vendors } : {}),
+                  ...(data.chartOfAccounts ? { chartOfAccounts: data.chartOfAccounts } : {}),
+                  ...(data.summary ? { qboSummary: data.summary } : {}),
                 };
 
                 // Persist to localStorage (previously missing — data was lost on refresh)
