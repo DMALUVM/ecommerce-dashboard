@@ -13128,11 +13128,12 @@ const savePeriods = async (d) => {
                     setSelectedInvDate(targetDate);
                     saveInv(updatedHistory);
                     fbaDataMergedIntoSnapshot = true;
-                    
+                    console.log(`[AutoSync] Packiyo inventory merge complete: ${updatedItems.length} items, FBA=${newAmzTotal}, AWD=${newAwdTotal}, 3PL=${newTplTotal}, Home=${homeUnits}, Inbound=${newAmzInbound}, matched=${matchedCount}/${Object.keys(packiyoData).length} Packiyo SKUs`);
+
                   }
                 }
               } catch (procErr) {
-                devWarn('Auto-sync inventory processing error:', procErr);
+                console.warn('[AutoSync] Inventory processing error:', procErr);
                 // Non-fatal - the API sync still succeeded
               }
             } else {
