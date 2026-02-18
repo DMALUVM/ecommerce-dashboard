@@ -382,8 +382,13 @@ const InventoryView = ({
       const stockout = new Date(today);
       stockout.setDate(stockout.getDate() + newDaysOfSupply);
       newStockoutDate = stockout.toISOString().split('T')[0];
-      
-      newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - leadTimeDays;
+
+      // Match processInventory formula: use reorderPoint (includes safety stock + lead time demand)
+      const reorderPoint = item.reorderPoint || 0;
+      const reorderPointDays = reorderPoint > 0 && effectiveVel > 0
+        ? Math.round((reorderPoint / effectiveVel) * 7)
+        : leadTimeDays;
+      newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - reorderPointDays;
       const reorderBy = new Date(today);
       reorderBy.setDate(reorderBy.getDate() + newDaysUntilMustOrder);
       newReorderByDate = reorderBy.toISOString().split('T')[0];
