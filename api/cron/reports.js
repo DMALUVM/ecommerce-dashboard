@@ -11,7 +11,7 @@ const supabase = createClient(
 );
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
 // ============ CALL ANTHROPIC API ============
 async function callAnthropicAPI(userPrompt, systemPrompt, model = DEFAULT_MODEL) {

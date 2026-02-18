@@ -1351,17 +1351,9 @@ const AmazonAdsIntelModal = ({
       }
     }
     setDetectedFiles(prev => {
-      // Replace files of same detected type, keep others
+      // Allow multiple files of same type (different date ranges / time periods)
       const existing = [...prev];
-      newDetected.forEach(nd => {
-        if (nd.type) {
-          const idx = existing.findIndex(e => e.type === nd.type);
-          if (idx >= 0) existing[idx] = nd;
-          else existing.push(nd);
-        } else {
-          existing.push(nd);
-        }
-      });
+      newDetected.forEach(nd => existing.push(nd));
       return existing;
     });
     setResults(null);
@@ -1444,40 +1436,54 @@ const AmazonAdsIntelModal = ({
     const processResults = [];
 
     try {
+      // Group files by type so multiple files of the same type get merged
+      const filesByType = {};
       for (const det of detectedFiles) {
         if (!det.type || det.error) {
           processResults.push({ key: det.type || 'unknown', fileName: det.file.name, status: 'skipped', error: det.error || 'Unrecognized format' });
           continue;
         }
+        if (!filesByType[det.type]) filesByType[det.type] = [];
+        filesByType[det.type].push(det);
+      }
+
+      for (const [type, dets] of Object.entries(filesByType)) {
         try {
-          let rows;
-          if (det.file.name.endsWith('.xlsx') || det.file.name.endsWith('.xls')) {
-            rows = await parseXlsx(det.file);
-          } else {
-            const text = await det.file.text();
-            rows = parseCSV(text);
+          // Read and merge rows from all files of this type
+          let allRows = [];
+          const fileNames = [];
+          for (const det of dets) {
+            let rows;
+            if (det.file.name.endsWith('.xlsx') || det.file.name.endsWith('.xls')) {
+              rows = await parseXlsx(det.file);
+            } else {
+              const text = await det.file.text();
+              rows = parseCSV(text);
+            }
+            allRows = allRows.concat(rows);
+            fileNames.push(det.file.name);
           }
 
           let summary;
-          switch (det.type) {
-            case 'dailyOverview': summary = aggregateDailyOverview(rows); break;
-            case 'historicalDaily': summary = aggregateDailyOverview(rows); break;
-            case 'spSearchTerms': summary = aggregateSPSearchTerms(rows); break;
-            case 'spAdvertised': summary = aggregateSPAdvertised(rows); break;
-            case 'spPlacement': summary = aggregateSPPlacement(rows); break;
-            case 'spTargeting': summary = aggregateSPTargeting(rows); break;
-            case 'sbSearchTerms': summary = aggregateSBSearchTerms(rows); break;
-            case 'sdCampaign': summary = aggregateSDCampaign(rows); break;
-            case 'businessReport': summary = aggregateBusinessReport(rows); break;
-            case 'searchQueryPerf': summary = aggregateSearchQueryPerf(rows); break;
-            case 'skuEconomics': summary = aggregateSkuEconomics(rows); break;
+          switch (type) {
+            case 'dailyOverview': summary = aggregateDailyOverview(allRows); break;
+            case 'historicalDaily': summary = aggregateDailyOverview(allRows); break;
+            case 'spSearchTerms': summary = aggregateSPSearchTerms(allRows); break;
+            case 'spAdvertised': summary = aggregateSPAdvertised(allRows); break;
+            case 'spPlacement': summary = aggregateSPPlacement(allRows); break;
+            case 'spTargeting': summary = aggregateSPTargeting(allRows); break;
+            case 'sbSearchTerms': summary = aggregateSBSearchTerms(allRows); break;
+            case 'sdCampaign': summary = aggregateSDCampaign(allRows); break;
+            case 'businessReport': summary = aggregateBusinessReport(allRows); break;
+            case 'searchQueryPerf': summary = aggregateSearchQueryPerf(allRows); break;
+            case 'skuEconomics': summary = aggregateSkuEconomics(allRows); break;
           }
 
-          newIntel[det.type] = summary;
-          processResults.push({ key: det.type, fileName: det.file.name, status: 'success', rows: rows.length });
+          newIntel[type] = summary;
+          processResults.push({ key: type, fileName: fileNames.join(', '), status: 'success', rows: allRows.length });
         } catch (err) {
-          console.error(`Error processing ${det.file.name}:`, err);
-          processResults.push({ key: det.type, fileName: det.file.name, status: 'error', error: err.message });
+          console.error(`Error processing ${type}:`, err);
+          processResults.push({ key: type, fileName: dets.map(d => d.file.name).join(', '), status: 'error', error: err.message });
         }
       }
 

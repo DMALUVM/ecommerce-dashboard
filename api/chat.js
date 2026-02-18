@@ -149,7 +149,7 @@ export default async function handler(req, res) {
       return res.status(413).json({ error: `Request too large (${Math.round(rawBody.length / 1024)}KB). Max ${Math.round(MAX_PAYLOAD_BYTES / 1024)}KB.` });
     }
 
-    const { system, messages, model = 'claude-sonnet-4-5-20250929', max_tokens = 4000 } = req.body || {};
+    const { system, messages, model = 'claude-sonnet-4-6', max_tokens = 4000 } = req.body || {};
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages array required and must not be empty' });

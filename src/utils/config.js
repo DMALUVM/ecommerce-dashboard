@@ -14,8 +14,9 @@
 
 const AI_MODELS = {
   // Anthropic
+  'claude-sonnet-4-6':           { label: 'Claude Sonnet 4.6',  provider: 'anthropic', cost: '~$0.04/report', tier: 'Balanced', desc: 'Latest — fast, smart, best value' },
   'claude-opus-4-6':             { label: 'Claude Opus 4.6',    provider: 'anthropic', cost: '~$0.25/report', tier: 'Premium',  desc: 'Most intelligent, deepest analysis' },
-  'claude-sonnet-4-5-20250929':  { label: 'Claude Sonnet 4.5',  provider: 'anthropic', cost: '~$0.04/report', tier: 'Balanced', desc: 'Best value — fast, smart, cheap' },
+  'claude-sonnet-4-5-20250929':  { label: 'Claude Sonnet 4.5',  provider: 'anthropic', cost: '~$0.04/report', tier: 'Balanced', desc: 'Previous generation Sonnet' },
   'claude-opus-4-5-20250918':    { label: 'Claude Opus 4.5',    provider: 'anthropic', cost: '~$0.20/report', tier: 'Premium',  desc: 'Deep analysis, 5x cost' },
   'claude-haiku-4-5-20251001':   { label: 'Claude Haiku 4.5',   provider: 'anthropic', cost: '~$0.01/report', tier: 'Fast',     desc: 'Cheapest, shorter reports' },
   // OpenAI
@@ -25,7 +26,7 @@ const AI_MODELS = {
 };
 
 // Default model used for reports, forecasts, and new chat sessions
-const AI_DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+const AI_DEFAULT_MODEL = 'claude-sonnet-4-6';
 
 // Token budgets per model tier (used by ads chat & report generation)
 const AI_TOKEN_BUDGETS = {

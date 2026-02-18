@@ -63,7 +63,7 @@ const ReportHistoryPanel = ({ reportHistory, onSelect, onCompare, selectedId, th
                 </div>
                 <div className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'} mt-0.5`}>
                   {d.toLocaleDateString()} at {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  {report.model && <span className="ml-2 opacity-60">· {report.model.includes('opus') ? 'Opus' : report.model.includes('haiku') ? 'Haiku' : 'Sonnet'}</span>}
+                  {report.model && <span className="ml-2 opacity-60">· {report.model.includes('opus') ? 'Opus' : report.model.includes('haiku') ? 'Haiku' : report.model.includes('4-6') ? 'Sonnet 4.6' : 'Sonnet'}</span>}
                 </div>
               </div>
               <div className="flex items-center gap-2">
