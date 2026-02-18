@@ -4684,7 +4684,7 @@ useEffect(() => {
   }
 }, [qboCredentials]);
 
-const loadFromCloud = useCallback(async (storeId = null) => {
+const loadFromCloud = useCallback(async (storeId = null, _noTimeout = false) => {
   if (!supabase || !session?.user?.id) {
     console.warn('[LoadCloud] Skipped — supabase:', !!supabase, 'session:', !!session?.user?.id);
     return { ok: false, reason: 'no_session', stores: [] };
@@ -4699,7 +4699,9 @@ const loadFromCloud = useCallback(async (storeId = null) => {
 
   // Timeout helper — prevents infinite hang if Supabase is truly unreachable
   // Use generous timeouts (60s+) since large data payloads legitimately take time
+  // _noTimeout=true skips the race so the retry attempt can complete naturally
   const withTimeout = (promise, ms = 60000, label = 'query') => {
+    if (_noTimeout) return promise;
     let timer;
     return Promise.race([
       promise,
@@ -5133,13 +5135,13 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   } catch (err) {
     const isTimeout = err?.message?.includes('Timeout');
     console.error('[LoadCloud]', isTimeout ? 'TIMEOUT' : 'ERROR', err?.message || err);
-    if (isTimeout) {
+    if (isTimeout && !_noTimeout) {
       // Retry the full load once with no timeout cap (let it complete naturally)
       try {
         console.log('[LoadCloud] Timed out — retrying without timeout cap…');
         setCloudStatus('Connection slow — retrying…');
         loadFromCloudLockRef.current = false;
-        return await loadFromCloud(storeId);
+        return await loadFromCloud(storeId, true);
       } catch (retryErr) {
         console.warn('[LoadCloud] Retry also failed:', retryErr?.message);
       }
