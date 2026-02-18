@@ -13727,13 +13727,38 @@ const savePeriods = async (d) => {
                 // Override with ACTUAL balances from QBO (authoritative source of truth)
                 // Transaction-derived balances drift because they depend on complete history
                 if (data.accounts && data.accounts.length > 0) {
+                  console.log('[Banking] QBO accounts:', data.accounts.map(a => `${a.name}: $${a.currentBalance}`));
+                  console.log('[Banking] Dashboard accounts:', Object.keys(accounts));
+
+                  // Build lowercase lookup for fuzzy matching
+                  const accountKeysLower = {};
+                  Object.keys(accounts).forEach(k => { accountKeysLower[k.toLowerCase()] = k; });
+
                   data.accounts.forEach(qboAcct => {
-                    if (qboAcct.name && accounts[qboAcct.name]) {
-                      accounts[qboAcct.name].balance = qboAcct.currentBalance || 0;
-                      accounts[qboAcct.name].qboId = qboAcct.id;
-                      accounts[qboAcct.name].type = qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || accounts[qboAcct.name].type);
-                    } else if (qboAcct.name) {
+                    if (!qboAcct.name) return;
+
+                    // Try exact match first, then case-insensitive, then partial match
+                    let matchKey = accounts[qboAcct.name] ? qboAcct.name : null;
+                    if (!matchKey) matchKey = accountKeysLower[qboAcct.name.toLowerCase()] || null;
+                    if (!matchKey) {
+                      // Partial match: QBO name might be substring of dashboard account name or vice versa
+                      const qboLower = qboAcct.name.toLowerCase();
+                      for (const [dashLower, dashOriginal] of Object.entries(accountKeysLower)) {
+                        if (dashLower.includes(qboLower) || qboLower.includes(dashLower)) {
+                          matchKey = dashOriginal;
+                          break;
+                        }
+                      }
+                    }
+
+                    if (matchKey) {
+                      console.log(`[Banking] Matched QBO "${qboAcct.name}" → dashboard "${matchKey}": $${accounts[matchKey].balance} → $${qboAcct.currentBalance}`);
+                      accounts[matchKey].balance = qboAcct.currentBalance || 0;
+                      accounts[matchKey].qboId = qboAcct.id;
+                      accounts[matchKey].type = qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || accounts[matchKey].type);
+                    } else {
                       // Account exists in QBO but not in our transaction history — add it
+                      console.log(`[Banking] No match for QBO "${qboAcct.name}" ($${qboAcct.currentBalance}) — adding as new`);
                       accounts[qboAcct.name] = {
                         name: qboAcct.name,
                         type: qboAcct.type === 'Credit Card' ? 'credit_card' : (qboAcct.type || 'bank'),
@@ -13745,6 +13770,8 @@ const savePeriods = async (d) => {
                       };
                     }
                   });
+                } else {
+                  console.log('[Banking] No QBO account balances in API response');
                 }
 
                 const dates = allTxns.map(t => t.date).filter(Boolean).sort();
