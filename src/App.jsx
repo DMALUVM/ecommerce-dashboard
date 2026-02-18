@@ -7732,6 +7732,8 @@ const savePeriods = async (d) => {
     // Daily data (from localStorage) covers last 28 days - great for fast sellers
     // Weekly data covers ALL weeks - catches slow-moving products that may not sell in any 28-day window
     const useWeeklyAsPrimary = velocityDataSource !== 'direct-localStorage';
+    let dailyDaysCount = 0; // Hoisted outside block scope so velocity note can reference it
+    let periodsCount = 0; // Hoisted outside block scope so velocity note can reference it
     if (true) { // Always run - supplement slow movers even if daily data exists
     // SOURCE 1: Weekly sales data
     if (weeksCount > 0) {
@@ -7834,7 +7836,7 @@ const savePeriods = async (d) => {
       const dayData = allDaysData[d];
       return dayData && (dayData.amazon?.units > 0 || dayData.shopify?.units > 0);
     }).sort().reverse();
-    let dailyDaysCount = dailyDates.length; // Track at function level for later use
+    dailyDaysCount = dailyDates.length; // Track for later use in velocity note
     
     if (dailyDates.length > 0) {
       if (velocityDataSource === 'none') velocityDataSource = 'daily';
@@ -7922,7 +7924,7 @@ const savePeriods = async (d) => {
     // SOURCE 3: Monthly/Period data - use for SKUs not covered by weekly or daily
     const WEEKS_PER_MONTH = 4.33;
     const sortedPeriods = Object.keys(allPeriodsData).sort().reverse().slice(0, 3);
-    const periodsCount = sortedPeriods.length;
+    periodsCount = sortedPeriods.length;
     
     if (periodsCount > 0) {
       if (velocityDataSource === 'none') velocityDataSource = 'monthly';
