@@ -18480,6 +18480,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setUploadTab={setUploadTab}
       showAddRecurring={showAddRecurring}
       showMergeModal={showMergeModal}
+      getProfit={getProfit}
       theme={theme}
       best={best}
       breakdown={breakdown}

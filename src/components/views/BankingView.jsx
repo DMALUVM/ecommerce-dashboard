@@ -24,6 +24,7 @@ const BankingView = ({
   editingAccountBalance,
   editingTransaction,
   files,
+  getProfit,
   globalModals,
   invHistory,
   navDropdown,
