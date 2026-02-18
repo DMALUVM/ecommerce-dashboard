@@ -1233,11 +1233,188 @@ const AdsView = ({
             {/* Generate */}
             <button onClick={() => {
               const prompts = {
-                all: `Generate a COMPREHENSIVE CROSS-PLATFORM ADVERTISING AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 EXECUTIVE SUMMARY — Health score 1-10, total spend/revenue/ROAS per platform, #1 urgent issue, #1 opportunity\n## 🚫 CUT WASTE — Exact campaign/keyword names, spend amounts, $0 sales, specific actions\n## 🏆 PROTECT WINNERS — Top performers, defend/scale strategy\n## 📈 SCALE OPPORTUNITIES — Current metrics, scaling math, launch plan\n## 📍 PLACEMENT OPTIMIZATION — TOS vs Product Pages vs RoS with bid modifier %\n## 💰 CROSS-PLATFORM BUDGET REALLOCATION — Current → Recommended split with math\n## 📊 TREND DIAGNOSIS — MoM trajectory, TACOS trend direction\n## 🎯 THIS WEEK: Top 5 Priority Actions — action → $ impact → minutes → click-path`,
-                amazon: `Generate a DEEP-DIVE AMAZON ADS AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 AMAZON AD HEALTH — Score 1-10, spend, ACOS, TACOS, organic split\n## 🔍 SEARCH TERM ANALYSIS — Top 10 profitable, top 10 wasteful, negative keyword list with match types\n## 📋 CAMPAIGN PERFORMANCE — Every campaign with full KPIs, flag ROAS<1.5x or ACOS>40%\n## 🎯 TARGETING ANALYSIS — Broad vs Phrase vs Exact efficiency, auto vs manual\n## 📍 PLACEMENT OPTIMIZATION — TOS vs Product Pages vs RoS: ROAS, CPC, bid modifier %\n## 💡 SKU-LEVEL PERFORMANCE — Which products profitable to advertise vs burning budget?\n## 🎯 THIS WEEK: Top 5 Amazon Actions`,
-                dtc: `Generate a DTC ADVERTISING AUDIT (Google + Meta).\n\nREQUIRED SECTIONS:\n## 📊 DTC AD HEALTH — Combined score, total DTC spend, ROAS, CPA, vs Amazon efficiency\n## 🔍 GOOGLE DEEP DIVE — Campaigns, search terms, CPC, conversion rate\n## 📱 META DEEP DIVE — Creative fatigue, audiences, placements, CPA, frequency\n## 💰 GOOGLE vs META — Side-by-side CPC/CTR/CPA/ROAS comparison\n## 🔄 BUDGET REALLOCATION — Current → Recommended Google/Meta split with math\n## 🎯 THIS WEEK: Top 5 DTC Actions`,
-                google: `Generate a DEEP-DIVE GOOGLE ADS AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 GOOGLE ADS HEALTH — Score 1-10, spend, clicks, CPC, CTR, conversions, cost/conversion\n## 🔍 SEARCH TERM ANALYSIS — Top performers, wasteful terms, match type efficiency\n## 📋 CAMPAIGN PERFORMANCE — Every campaign with recommendations\n## 💡 KEYWORD OPPORTUNITIES — Missing keywords, competitor gaps, long-tail\n## 🎯 THIS WEEK: Top 5 Google Actions`,
-                meta: `Generate a DEEP-DIVE META ADS AUDIT.\n\nREQUIRED SECTIONS:\n## 📊 META ADS HEALTH — Score 1-10, spend, impressions, CTR, CPC, purchases, CPA, ROAS\n## 🎨 CREATIVE PERFORMANCE — Which ads performing, fatigue indicators\n## 👥 AUDIENCE ANALYSIS — Best converting audiences, lookalike vs interest vs retargeting\n## 📍 PLACEMENT BREAKDOWN — Feed vs Stories vs Reels: CPC, CTR, CPA\n## 🎯 THIS WEEK: Top 5 Meta Actions`,
+                all: `Generate a COMPREHENSIVE CROSS-PLATFORM ADVERTISING AUDIT.
+
+ANALYSIS RULES:
+- Every recommendation MUST cite the exact campaign/keyword name, current metrics, and dollar impact from the data
+- Show bid formula math: Target Bid = Target ACOS × AOV × Conv Rate
+- Cross-reference: tie Amazon search terms to campaigns, Google keywords to landing pages, Meta ads to purchase data
+- Rank everything by dollar impact (biggest money first)
+- Label all Google/Meta numbers as "Platform ROAS" — use TACOS (Total Ad Spend / Total Revenue) as ground truth
+
+REQUIRED SECTIONS:
+
+## 📊 EXECUTIVE SUMMARY
+Health score 1-10 with specific justification. Total spend, revenue, TACOS. Per-platform: spend, Platform ROAS, contribution. Revenue equation diagnosis: Traffic × Conv Rate × AOV — which lever is broken? #1 problem costing money NOW (with $ amount). #1 untapped opportunity (with $ estimate).
+
+## 🚫 KILL LIST — Cut Waste Immediately
+| Campaign/Keyword | Platform | Spend | Sales/Conv | ROAS | Action (neg exact/phrase, pause, reduce bid to $X.XX) |
+Minimum 10 items. Threshold: $10+ spend with $0 sales on Amazon, $15+ on Google, $30+ on Meta. For each negative keyword: specify EXACT vs PHRASE and which campaign.
+BOTTOM LINE: "Total monthly savings from cuts: $X"
+
+## 🏆 PROTECT & SCALE — Winners
+| Campaign/Keyword | Platform | Spend | ROAS | Conv Rate | Action |
+For each winner: is it budget-capped? Target bid calculation. Scaling math: "Currently $X/day at Y ROAS → scale to $Z/day, projecting $W additional revenue." Minimum 8 items.
+
+## 📍 PLACEMENT OPTIMIZATION (Amazon)
+TOS vs Product Pages vs RoS: ROAS, CPC, Conv Rate comparison. For each campaign with 50+ clicks on TOS: calculate recommended modifier % = (TOS ROAS / Rest ROAS - 1) × 100.
+
+## 💰 CROSS-PLATFORM BUDGET REALLOCATION
+| Channel | Current $/Day | Platform ROAS | Est True ROAS (discount 30-50%) | Recommended $/Day | $ Change |
+Total budget stays same. Account for attribution overlap. Meta drives demand → Google captures it. BOTTOM LINE: "Reallocation improves estimated TACOS from X% to Y%."
+
+## 📊 TREND DIAGNOSIS
+WoW and MoM trajectory for spend, revenue, ACOS/TACOS. Is ad dependency growing or shrinking? Seasonal patterns? Any campaigns showing declining ROAS trend?
+
+## 🎯 THIS WEEK: Top 5 Priority Actions
+Ranked by dollar impact. For each: (1) exact action, (2) where in which ad console, (3) current metric → target metric, (4) expected $/week impact, (5) minutes to implement.`,
+
+                amazon: `Generate a DEEP-DIVE AMAZON ADS AUDIT.
+
+ANALYSIS RULES:
+- ONLY cite numbers from the data. Never fabricate campaign names or metrics.
+- Show bid formula math on EVERY bid recommendation: Target Bid = Target ACOS × AOV × Conv Rate
+- Cross-reference: search terms → campaigns → placements → product profitability
+- Rank by dollar impact. Minimum data thresholds: $10+ spend for negatives, 50+ clicks for placement modifiers.
+
+REQUIRED SECTIONS:
+
+## 📊 AMAZON AD HEALTH
+Score 1-10 with specific justification. Total: spend, sales, ROAS, ACOS, TACOS. Brand vs non-brand split: % of spend on branded keywords and efficiency difference. Match type comparison: Exact vs Phrase vs Broad ROAS. Funnel: Impressions → Clicks (CTR) → Orders (Conv Rate) — where's the biggest drop-off?
+
+## 🔍 SEARCH TERM DEEP DIVE
+### Top 10 Profitable Terms
+| Search Term | Spend | Sales | ROAS | ACOS | Conv% | Match Type | Action (increase bid to $X.XX — show math) |
+### Top 10 Wasteful Terms
+| Search Term | Spend Wasted | Clicks | Orders | Campaign | Action (neg EXACT or PHRASE — specify which and why) |
+### Search Term Isolation Candidates
+Terms converting in broad/phrase that aren't exact-targeted yet. For each: source campaign → destination campaign → negative to add → bid to set.
+BOTTOM LINE: "Negating waste saves ~$X/month. Isolating winners captures ~$X/month additional."
+
+## 📋 CAMPAIGN-BY-CAMPAIGN AUDIT
+| Campaign | Type | Status | Spend | Sales | ROAS | ACOS | CPC | Conv% | Budget |
+Flag any with ROAS<1.5x (🔴) or ACOS>40% (⚠️). For EACH flagged campaign: 2-3 specific fixes (keywords to negate, bid adjustments with amounts, budget verdict). Check for budget-capped winners — campaigns hitting budget with strong ROAS need budget increases.
+
+## 🎯 TARGETING & MATCH TYPE ANALYSIS
+Broad vs Phrase vs Exact efficiency table. Auto vs Manual comparison. Which match types are discovering winners vs burning cash? Specific recommendations: terms to graduate from broad → exact, terms to negate in auto.
+
+## 📍 PLACEMENT OPTIMIZATION
+| Campaign | TOS ROAS | TOS Conv% | Product Pages ROAS | Rest ROAS | Current Modifier | Recommended Modifier (show math) |
+Only for campaigns with 50+ clicks on TOS. Formula: (TOS ROAS / Baseline ROAS - 1) × 100. Cap at +900%.
+
+## 💡 SKU-LEVEL AD PROFITABILITY
+| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Ad Conv% | Organic Conv% (if available) | Verdict |
+Flag: ACOS > margin → unprofitable. Ad conv << organic conv → listing problem. Low spend + high ROAS → under-invested. Spending on ads but losing Buy Box → stop until Buy Box fixed.
+
+## 🎯 THIS WEEK: Top 5 Amazon Actions
+Ranked by dollar impact. For each: (1) exact action, (2) Seller Central click-path, (3) current metric → target, (4) expected $/week, (5) minutes.
+Total estimated impact: "$X/month from all 5 actions combined."`,
+
+                dtc: `Generate a DTC ADVERTISING AUDIT (Google + Meta combined).
+
+ANALYSIS RULES:
+- Label ALL Google/Meta revenue as "Platform ROAS" — it overstates true performance by 20-50% due to attribution overlap
+- TACOS (Total Ad Spend / Total Shopify Revenue) is the real metric. MER (Revenue / Ad Spend) is the inverse.
+- Cross-reference: Google keywords → landing pages, Meta ads → purchase data, both → Shopify conversion funnel
+- Every recommendation: exact name, current metrics, specific action, dollar impact
+
+REQUIRED SECTIONS:
+
+## 📊 DTC AD HEALTH
+Score 1-10. Total DTC spend, Shopify revenue, TACOS, MER. Per-platform: spend, Platform ROAS (labeled clearly). Attribution caveat: "Combined platform-reported revenue is $X vs Shopify revenue of $Y — overlap factor of Z." Revenue equation: sessions × conv rate × AOV = revenue. Which lever is weakest?
+
+## 🔍 GOOGLE DEEP DIVE
+### Campaign Performance
+| Campaign | Type | Cost | Conv Value | Platform ROAS | CPC | Conv Rate | Impression Share | Verdict |
+Brand search: is impression share >85%? If not, increase bids. PMax: what % is brand cannibalization? Calculate true non-brand PMax ROAS.
+### Search Term Quality
+Top 5 converters (scale), Top 5 wasters (negate — specify EXACT vs PHRASE). Total monthly waste.
+### Bid Optimization
+For top campaigns: Target Bid = Target CPA × Conv Rate. Show exact new bid amounts.
+
+## 📱 META DEEP DIVE
+### Campaign/Ad Performance
+| Name | Type | Spend | Purchases | Platform ROAS | CPP | CTR | Frequency | Verdict |
+Kill rule: CPP > 2x account avg after $30 spend. Fatigue check: frequency > 3.0 + declining CTR.
+### Creative Analysis
+Which ad formats/angles winning? Hook rate and CTR patterns? 3 specific new creative briefs based on winners: format, hook concept, CTA, testing budget.
+### Audience/Placement
+Best demographics if available. Feed vs Reels vs Stories vs Audience Network — kill any placement with $30+ spend and 0 purchases.
+
+## 💰 GOOGLE vs META Side-by-Side
+| Metric | Google | Meta | Winner |
+CPC, CTR, CPA, Platform ROAS, estimated true ROAS (discounted). Which channel has better marginal efficiency? Budget shift recommendation.
+
+## 🔄 BUDGET REALLOCATION
+| Channel | Current $/Day | Platform ROAS | Recommended $/Day | $ Change | Why |
+Remember: Meta creates demand, Google captures it. Cutting Meta hurts Google non-brand in 2-4 weeks.
+BOTTOM LINE: "Reallocation saves/generates ~$X/month."
+
+## 🎯 THIS WEEK: Top 5 DTC Actions
+Ranked by dollar impact. For each: platform, exact action, current → target metric, $/week impact, minutes.`,
+
+                google: `Generate a DEEP-DIVE GOOGLE ADS AUDIT.
+
+ANALYSIS RULES:
+- Label all revenue as "Platform ROAS" — Google over-attributes by 20-30%
+- Show bid math: Target Bid = Target CPA × Conv Rate. Exact amounts, not "increase bids."
+- Specify NEGATIVE EXACT vs NEGATIVE PHRASE for every negative keyword and explain why
+
+REQUIRED SECTIONS:
+
+## 📊 GOOGLE ADS HEALTH
+Score 1-10. Total: cost, conversions, conv value, Platform ROAS, avg CPC, CTR. Brand vs non-brand split (if identifiable). Campaign type breakdown: Search vs PMax vs Display vs Demand Gen.
+
+## 🔍 SEARCH TERM ANALYSIS
+### Top 10 Performers (by conv value)
+| Search Term | Campaign | Cost | Conv | Conv Value | ROAS | CPC | Action (scale: increase bid to $X.XX — show math) |
+### Top 10 Wasters ($0 conversions)
+| Search Term | Campaign | Cost | Clicks | Action (neg EXACT or PHRASE — specify which) |
+### Match Type Efficiency
+Exact vs Phrase vs Broad: CPC, CTR, Conv Rate, ROAS comparison. Is broad match + Smart Bidding working or bleeding money?
+BOTTOM LINE: "Negating waste saves ~$X/month."
+
+## 📋 CAMPAIGN PERFORMANCE
+| Campaign | Type | Cost | Conv | Conv Value | ROAS | CPC | CTR | Imp Share | Verdict |
+Flag underperformers (ROAS < 2x) and budget-capped winners. For each: specific action with exact bid/budget numbers.
+PMax audit: estimated brand cannibalization %. True non-brand PMax ROAS.
+
+## 💡 KEYWORD OPPORTUNITIES
+Gaps: converting search terms not yet targeted as keywords. Competitor terms worth testing. Long-tail opportunities from search term data.
+
+## 🎯 THIS WEEK: Top 5 Google Actions
+Ranked by dollar impact. Exact action, Google Ads click-path, expected $/week, minutes to implement.`,
+
+                meta: `Generate a DEEP-DIVE META ADS AUDIT.
+
+ANALYSIS RULES:
+- Label ALL revenue as "Platform ROAS" — Meta over-attributes by 20-50% vs actual Shopify
+- Kill rule: CPP > 2x account avg after $30 spend → OFF. No exceptions.
+- Creative is the #1 lever. Analyze hooks, formats, and angles, not just spend/ROAS.
+
+REQUIRED SECTIONS:
+
+## 📊 META ADS HEALTH
+Score 1-10. Total: spend, purchases, purchase value, Platform ROAS, avg CPP, avg CPC, avg CPM. Account frequency check — is the audience saturating? Prospecting vs retargeting split.
+
+## 🎨 CREATIVE & AD PERFORMANCE
+| Ad Name | Campaign | Spend | Purchases | Platform ROAS | CPP | CTR | CPC | Frequency | Verdict |
+### Kill List (CPP > 2x avg OR ROAS < 0.5x avg after $30 spend)
+For each: current metrics, why it's failing, monthly savings from pausing.
+### Scale List (ROAS > 1.5x avg)
+For each: current budget, recommended daily increase (max 20% every 3 days), projected additional purchases.
+### Creative Patterns
+What formats/hooks/angles are winning vs losing? Video vs static? UGC vs polished? 3 new creative briefs: format, hook (first 3 seconds), body points, CTA, product, testing budget.
+
+## 👥 AUDIENCE & DEMOGRAPHIC ANALYSIS
+Best age/gender segment (the "golden cohort") — how much better than average? Worst segment to exclude. Advantage+ signal assessment.
+
+## 📍 PLACEMENT BREAKDOWN
+| Placement | Spend | Purchases | Platform ROAS | CPP | Verdict (Scale/Keep/Kill) |
+Feed vs Reels vs Stories vs Audience Network. Kill any with $30+ spend and 0 purchases. Is Audience Network wasting money?
+
+## 🎯 THIS WEEK: Top 5 Meta Actions
+Ranked by dollar impact. For each: Meta Ads Manager navigation path, exact action, expected $/week, minutes.`,
               };
               setShowAdsAIChat(true);
               setTimeout(() => sendAdsAIMessage(prompts[reportMode]), 200);
@@ -1248,10 +1425,10 @@ const AdsView = ({
             {/* Quick Actions */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
               {[
-                { label: 'Negative Keywords', emoji: '🚫', prompt: "Top 20 negative keywords to add TODAY with match types, campaigns, and monthly savings." },
-                { label: 'Scale Opps', emoji: '📈', prompt: "Top 10 scaling opportunities: campaign/keyword, current spend, ROAS, recommended spend, projected revenue." },
-                { label: 'Organic vs Paid', emoji: '🔄', prompt: "Where am I paying for organic clicks? Where to increase paid? Specific keywords with $ impact." },
-                { label: 'Weekly Plan', emoji: '📋', prompt: "Weekly PPC maintenance checklist: what to check every Monday, bid adjustments, thresholds." },
+                { label: 'Negative Keywords', emoji: '🚫', prompt: "Top 20 negative keywords to add TODAY. For each: the exact search term, which campaign to negate in, EXACT vs PHRASE match type, spend wasted, clicks with 0 orders. Show total monthly savings. Only include terms with $10+ spend and $0 sales." },
+                { label: 'Scale Opps', emoji: '📈', prompt: "Top 10 scaling opportunities ranked by revenue potential. For each: keyword/campaign name, current spend, ROAS, conv rate, AOV. Calculate target bid using formula: Target Bid = Target ACOS × AOV × Conv Rate. Show projected additional revenue if bid is increased. Flag budget-capped campaigns." },
+                { label: 'Bid Calculator', emoji: '🧮', prompt: "For my top 15 converting search terms, calculate optimal bids using: Target Bid = Target ACOS × AOV × Conv Rate. Show current CPC vs target bid at 25% ACOS and 30% ACOS. Flag terms where current CPC is >20% above or below target. Show the math for each." },
+                { label: 'Weekly Plan', emoji: '📋', prompt: "Build my specific weekly PPC action plan based on the data. Monday: exact negatives to add (list them). Tuesday: exact bid adjustments (list amounts). Wednesday: placement modifier changes. Thursday: budget reallocations (exact amounts). Friday: search term isolation moves. Include the specific campaign names, keywords, and dollar amounts from my data." },
               ].map((a, i) => (
                 <button key={i} onClick={() => { setShowAdsAIChat(true); setTimeout(() => sendAdsAIMessage(a.prompt), 200); }}
                   className="px-3 py-2.5 bg-slate-700/40 hover:bg-slate-700 rounded-lg text-white text-xs flex items-center gap-1.5 border border-slate-600/30 transition-colors">
