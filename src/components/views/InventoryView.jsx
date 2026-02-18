@@ -350,8 +350,9 @@ const InventoryView = ({
   
   const recalculatedItems = deduplicatedItems.map(item => {
     const weeklyVel = item.weeklyVel || 0;
-    // Use correctedVel (from forecast learning) if available, matching processInventory's dos calculation
-    const effectiveVel = item.correctedVel || weeklyVel;
+    // Use raw weeklyVel for DOS — this is the SAME velocity displayed in the table
+    // Using correctedVel caused mismatches where DOS didn't match the visible velocity
+    const effectiveVel = weeklyVel;
     const dailyVel = effectiveVel / 7;
     
     // Only adjust quantities if data is old (daysElapsed > 0)

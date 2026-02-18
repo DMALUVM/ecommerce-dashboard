@@ -1493,69 +1493,63 @@ const SettingsView = ({
                           const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
                           const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
                           
-                          // Use CORRECTED velocity for DOS calculation (includes learning adjustments)
-                          // But display RAW velocity in the UI for clarity (Tot Vel = AMZ + Shop)
-                          const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
-                          const correctionApplied = velocityData.correctionApplied;
+                          // Use raw velocity for DOS — matches what's displayed in the table
                           const velocityTrend = velocityData.trend;
-                          
-                          // Display RAW total velocity (AMZ + Shop), but use corrected for DOS
-                          const weeklyVel = rawWeeklyVel; // Show raw in UI
+                          const weeklyVel = rawWeeklyVel;
                           
                           // Debug: Log velocity lookup for first few items
                           if (matchedCount <= 5) {
                           }
                           
-                          // Use CORRECTED velocity for Days of Supply calculation
-                          const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
+                          // Use raw velocity for DOS — matches displayed velocity
+                          const dos = rawWeeklyVel > 0 ? Math.round((newTotalQty / rawWeeklyVel) * 7) : 999;
                           const leadTimeDays = item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
-                          
-                          // Recalculate stockout and reorder dates using CORRECTED velocity
+
                           let stockoutDate = null;
                           let reorderByDate = null;
                           let daysUntilMustOrder = null;
-                          
+
                           // Get demand stats for safety stock, seasonality, CV
                           const demandStats = skuDemandStatsRef.current[normalizeSkuKey(item.sku)] || null;
                           const leadTimeWeeks = leadTimeDays / 7;
-                          const safetyStock = demandStats 
+                          const safetyStock = demandStats
                             ? Math.ceil(1.65 * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks))
                             : 0;
                           const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
-                          const seasonalVel = correctedVelForDOS * seasonalFactor;
+                          const seasonalVel = rawWeeklyVel * seasonalFactor;
                           const dailyVelForReorder = seasonalVel / 7;
                           const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
-                          
-                          if (correctedVelForDOS > 0 && dos < 999) {
+
+                          if (rawWeeklyVel > 0 && dos < 999) {
                             const stockout = new Date(today);
                             stockout.setDate(stockout.getDate() + dos);
                             stockoutDate = stockout.toISOString().split('T')[0];
-                            
+
                             const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
                             daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
                             const reorderBy = new Date(today);
                             reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
                             reorderByDate = reorderBy.toISOString().split('T')[0];
                           }
-                          
+
                           return {
                             ...item,
                             threeplQty: newTplQty,
                             threeplInbound: newTplInbound,
                             totalQty: newTotalQty,
                             totalValue: newTotalQty * (item.cost || 0),
-                            weeklyVel, // RAW total velocity (AMZ + Shop) - displayed in UI
-                            rawWeeklyVel, // Same as weeklyVel for clarity
-                            correctedVel: correctedVelForDOS, // Corrected velocity - used for DOS
-                            amzWeeklyVel, // Amazon-only velocity
-                            shopWeeklyVel, // Shopify-only velocity
-                            correctionApplied, // Whether forecast correction was applied
-                            velocityTrend, // % trend (positive = accelerating)
+                            weeklyVel,
+                            rawWeeklyVel,
+                            correctedVel: rawWeeklyVel,
+                            amzWeeklyVel,
+                            shopWeeklyVel,
+                            correctionApplied: false,
+                            velocityTrend,
                             daysOfSupply: dos,
                             stockoutDate,
                             reorderByDate,
                             daysUntilMustOrder,
-                            suggestedOrderQty: correctedVelForDOS > 0 ? Math.ceil(correctedVelForDOS * minOrderWeeks) + safetyStock : 0,
+                            suggestedOrderQty: rawWeeklyVel > 0 ? Math.ceil(rawWeeklyVel * minOrderWeeks) + safetyStock : 0,
                             safetyStock,
                             reorderPoint,
                             seasonalFactor: Math.round(seasonalFactor * 100) / 100,

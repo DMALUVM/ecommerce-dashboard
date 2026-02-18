@@ -8515,7 +8515,9 @@ const savePeriods = async (d) => {
         }
       }
       
-      const dos = correctedVel > 0 ? Math.round((totalQty / correctedVel) * 7) : 999;
+      // Use raw totalVel for DOS — matches the velocity displayed in the Inventory table
+      // Previously used correctedVel which diverged from the visible velocity, causing confusing mismatches
+      const dos = totalVel > 0 ? Math.round((totalQty / totalVel) * 7) : 999;
       let health = 'unknown';
       if (totalVel > 0) {
         if (dos < criticalThreshold) { health = 'critical'; critical++; }
@@ -8548,7 +8550,7 @@ const savePeriods = async (d) => {
       
       // Seasonally-adjusted velocity (current month's factor)
       const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
-      const seasonalVel = correctedVel * seasonalFactor;
+      const seasonalVel = totalVel * seasonalFactor;
       
       // Reorder point = (daily velocity × lead time) + safety stock
       const dailyVelForReorder = seasonalVel / 7;
@@ -8573,8 +8575,8 @@ const savePeriods = async (d) => {
         reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
         reorderByDate = reorderBy.toISOString().split('T')[0];
         
-        // Suggested order = minOrderWeeks of supply + safety stock (use corrected velocity)
-        suggestedOrderQty = Math.ceil(correctedVel * minOrderWeeks) + safetyStock;
+        // Suggested order = minOrderWeeks of supply + safety stock
+        suggestedOrderQty = Math.ceil(totalVel * minOrderWeeks) + safetyStock;
       }
       
       items.push({ 
@@ -12930,9 +12932,8 @@ const savePeriods = async (d) => {
                       const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
                       const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
                       const weeklyVel = rawWeeklyVel; // Display raw in UI
-                      const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
-                      
-                      const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
+                      // Use raw velocity for DOS — matches what's displayed in the inventory table
+                      const dos = rawWeeklyVel > 0 ? Math.round((newTotalQty / rawWeeklyVel) * 7) : 999;
                       // Lead time: per-SKU → category → item stored → global default
                       const itemSkuCat = leadTimeSettings.skuCategories?.[item.sku] || leadTimeSettings.skuCategories?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || '';
                       const itemCatLT = itemSkuCat && leadTimeSettings.categoryLeadTimes?.[itemSkuCat];
@@ -12950,11 +12951,11 @@ const savePeriods = async (d) => {
                         ? Math.ceil(1.65 * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks))
                         : 0;
                       const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
-                      const seasonalVel = correctedVelForDOS * seasonalFactor;
+                      const seasonalVel = rawWeeklyVel * seasonalFactor;
                       const dailyVelForReorder = seasonalVel / 7;
                       const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
-                      
-                      if (correctedVelForDOS > 0 && dos < 999) {
+
+                      if (rawWeeklyVel > 0 && dos < 999) {
                         const stockout = new Date(today);
                         stockout.setDate(stockout.getDate() + dos);
                         stockoutDate = stockout.toISOString().split('T')[0];
@@ -12989,17 +12990,17 @@ const savePeriods = async (d) => {
                         totalValue: newTotalQty * (item.cost || 0),
                         weeklyVel,
                         rawWeeklyVel,
-                        correctedVel: correctedVelForDOS,
+                        correctedVel: rawWeeklyVel,
                         amzWeeklyVel,
                         shopWeeklyVel,
-                        correctionApplied: velocityData.correctionApplied,
+                        correctionApplied: false,
                         velocityTrend: velocityData.trend,
                         daysOfSupply: dos,
                         stockoutDate,
                         reorderByDate,
                         daysUntilMustOrder,
                         health,
-                        suggestedOrderQty: correctedVelForDOS > 0 ? Math.ceil(correctedVelForDOS * minOrderWeeks) + safetyStock : 0,
+                        suggestedOrderQty: rawWeeklyVel > 0 ? Math.ceil(rawWeeklyVel * minOrderWeeks) + safetyStock : 0,
                         safetyStock,
                         reorderPoint,
                         seasonalFactor: Math.round(seasonalFactor * 100) / 100,
@@ -13020,8 +13021,8 @@ const savePeriods = async (d) => {
                         const velData = getAutoVelocity(normSku);
                         const shopVel = velData.shopify || 0;
                         const totalVel = shopVel + (velData.amazon || 0);
-                        const correctedVel = velData.corrected > 0 ? velData.corrected : totalVel;
-                        const dos = correctedVel > 0 ? Math.round((homeItem.homeQty / correctedVel) * 7) : 999;
+                        // Use raw totalVel for DOS — matches displayed velocity
+                        const dos = totalVel > 0 ? Math.round((homeItem.homeQty / totalVel) * 7) : 999;
                         let health = 'unknown';
                         if (totalVel > 0) {
                           if (dos < liveCriticalThreshold) health = 'critical';
@@ -13029,11 +13030,11 @@ const savePeriods = async (d) => {
                           else if (dos <= liveOverstockThreshold) health = 'healthy';
                           else health = 'overstock';
                         }
-                        const stockoutDate = correctedVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null;
+                        const stockoutDate = totalVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null;
                         const homeLtDays = leadTimeSettings.defaultLeadTimeDays || 14;
-                        const homeReorderPoint = correctedVel > 0 ? Math.ceil(correctedVel * (homeLtDays / 7)) : 0;
-                        const homeReorderPointDays = correctedVel > 0 ? Math.round((homeReorderPoint / correctedVel) * 7) : homeLtDays;
-                        const homeDumo = correctedVel > 0 ? dos - (leadTimeSettings.reorderTriggerDays || 60) - homeReorderPointDays : null;
+                        const homeReorderPoint = totalVel > 0 ? Math.ceil(totalVel * (homeLtDays / 7)) : 0;
+                        const homeReorderPointDays = totalVel > 0 ? Math.round((homeReorderPoint / totalVel) * 7) : homeLtDays;
+                        const homeDumo = totalVel > 0 ? dos - (leadTimeSettings.reorderTriggerDays || 60) - homeReorderPointDays : null;
                         const homeReorderBy = homeDumo !== null ? new Date(Date.now() + homeDumo * 86400000).toISOString().split('T')[0] : null;
                         updatedItems.push({
                           sku: normSku + 'Shop',
@@ -13043,10 +13044,10 @@ const savePeriods = async (d) => {
                           awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
                           totalQty: homeItem.homeQty, cost,
                           totalValue: homeItem.homeQty * cost,
-                          weeklyVel: totalVel, correctedVel, amzWeeklyVel: velData.amazon || 0,
+                          weeklyVel: totalVel, correctedVel: totalVel, amzWeeklyVel: velData.amazon || 0,
                           shopWeeklyVel: shopVel, daysOfSupply: dos, health, stockoutDate,
                           reorderByDate: homeReorderBy, daysUntilMustOrder: homeDumo,
-                          suggestedOrderQty: correctedVel > 0 ? Math.ceil(correctedVel * (leadTimeSettings.minOrderWeeks || 22)) : 0,
+                          suggestedOrderQty: totalVel > 0 ? Math.ceil(totalVel * (leadTimeSettings.minOrderWeeks || 22)) : 0,
                           leadTimeDays: homeLtDays,
                           category: '', safetyStock: 0, reorderPoint: homeReorderPoint,
                           seasonalFactor: 1, seasonalVel: totalVel, cv: 0, demandClass: 'unknown',
@@ -13221,29 +13222,27 @@ const savePeriods = async (d) => {
               const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
               const shopWeeklyVel = velocityData.shopify > 0 ? velocityData.shopify : (item.shopWeeklyVel || 0);
               const rawWeeklyVel = amzWeeklyVel + shopWeeklyVel;
-              const correctedVelForDOS = velocityData.corrected > 0 ? velocityData.corrected : rawWeeklyVel;
-              
-              const dos = correctedVelForDOS > 0 ? Math.round((newTotalQty / correctedVelForDOS) * 7) : 999;
+              // Use raw velocity for DOS — matches displayed velocity
+              const dos = rawWeeklyVel > 0 ? Math.round((newTotalQty / rawWeeklyVel) * 7) : 999;
               // Lead time: per-SKU → category → item stored → global default
               const fbaSkuCat = leadTimeSettings.skuCategories?.[item.sku] || leadTimeSettings.skuCategories?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || '';
               const fbaCatLT = fbaSkuCat && leadTimeSettings.categoryLeadTimes?.[fbaSkuCat];
               const leadTimeDays = leadTimeSettings.skuSettings?.[item.sku]?.leadTime || fbaCatLT?.leadTimeDays || item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14;
-              
+
               let stockoutDate = null, reorderByDate = null, daysUntilMustOrder = null;
-              if (correctedVelForDOS > 0 && dos < 999) {
+              if (rawWeeklyVel > 0 && dos < 999) {
                 const stockout = new Date(today);
                 stockout.setDate(stockout.getDate() + dos);
                 stockoutDate = stockout.toISOString().split('T')[0];
-                // Match manual snapshot builder: use reorderPoint + seasonal velocity for accuracy
                 const reorderPoint = item.reorderPoint || 0;
-                const seasonalVel = correctedVelForDOS; // Best available velocity
+                const seasonalVel = rawWeeklyVel;
                 const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
                 daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
                 const reorderBy = new Date(today);
                 reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
                 reorderByDate = reorderBy.toISOString().split('T')[0];
               }
-              
+
               let health = 'unknown';
               if (rawWeeklyVel > 0) {
                 if (daysUntilMustOrder !== null && daysUntilMustOrder < 0) health = 'critical';
@@ -13252,7 +13251,7 @@ const savePeriods = async (d) => {
                 else if (dos <= liveOverstockThreshold) health = 'healthy';
                 else health = 'overstock';
               }
-              
+
               return {
                 ...item,
                 amazonQty: newAmazonQty,
@@ -13263,7 +13262,7 @@ const savePeriods = async (d) => {
                 totalQty: newTotalQty,
                 totalValue: newTotalQty * (item.cost || 0),
                 weeklyVel: rawWeeklyVel,
-                correctedVel: correctedVelForDOS,
+                correctedVel: rawWeeklyVel,
                 amzWeeklyVel,
                 shopWeeklyVel,
                 daysOfSupply: dos,
@@ -13285,8 +13284,8 @@ const savePeriods = async (d) => {
                 const velData = getStandaloneVelocity(normSku);
                 const shopVel = velData.shopify || 0;
                 const totalVel = shopVel + (velData.amazon || 0);
-                const correctedVel = velData.corrected > 0 ? velData.corrected : totalVel;
-                const dos = correctedVel > 0 ? Math.round((homeItem.homeQty / correctedVel) * 7) : 999;
+                // Use raw totalVel for DOS — matches displayed velocity
+                const dos = totalVel > 0 ? Math.round((homeItem.homeQty / totalVel) * 7) : 999;
                 let health = 'unknown';
                 if (totalVel > 0) {
                   if (dos < liveCriticalThreshold) health = 'critical';
@@ -13294,10 +13293,10 @@ const savePeriods = async (d) => {
                   else if (dos <= liveOverstockThreshold) health = 'healthy';
                   else health = 'overstock';
                 }
-                const stockoutDate = correctedVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null;
-                const homeReorderPt = correctedVel > 0 ? Math.ceil(correctedVel * (liveLeadTimeDays / 7)) : 0;
-                const homeRpDays = correctedVel > 0 ? Math.round((homeReorderPt / correctedVel) * 7) : liveLeadTimeDays;
-                const homeDumo2 = correctedVel > 0 ? dos - reorderTriggerDays - homeRpDays : null;
+                const stockoutDate = totalVel > 0 ? new Date(Date.now() + dos * 86400000).toISOString().split('T')[0] : null;
+                const homeReorderPt = totalVel > 0 ? Math.ceil(totalVel * (liveLeadTimeDays / 7)) : 0;
+                const homeRpDays = totalVel > 0 ? Math.round((homeReorderPt / totalVel) * 7) : liveLeadTimeDays;
+                const homeDumo2 = totalVel > 0 ? dos - reorderTriggerDays - homeRpDays : null;
                 const homeReorderBy2 = homeDumo2 !== null ? new Date(Date.now() + homeDumo2 * 86400000).toISOString().split('T')[0] : null;
                 updatedItems.push({
                   sku: normSku + 'Shop',
@@ -13307,10 +13306,10 @@ const savePeriods = async (d) => {
                   awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
                   totalQty: homeItem.homeQty, cost,
                   totalValue: homeItem.homeQty * cost,
-                  weeklyVel: totalVel, correctedVel, amzWeeklyVel: velData.amazon || 0,
+                  weeklyVel: totalVel, correctedVel: totalVel, amzWeeklyVel: velData.amazon || 0,
                   shopWeeklyVel: shopVel, daysOfSupply: dos, health, stockoutDate,
                   reorderByDate: homeReorderBy2, daysUntilMustOrder: homeDumo2,
-                  suggestedOrderQty: correctedVel > 0 ? Math.ceil(correctedVel * (minOrderWeeks || 22)) : 0,
+                  suggestedOrderQty: totalVel > 0 ? Math.ceil(totalVel * (minOrderWeeks || 22)) : 0,
                   leadTimeDays: liveLeadTimeDays,
                   category: '', safetyStock: 0, reorderPoint: homeReorderPt,
                   seasonalFactor: 1, seasonalVel: totalVel, cv: 0, demandClass: 'unknown',
