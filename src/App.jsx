@@ -12596,6 +12596,7 @@ const savePeriods = async (d) => {
       
       // Fetch fresh Amazon FBA+AWD inventory for snapshot updates
       let freshAmazonFbaData = null;
+      let freshPackiyoInvData = null; // Packiyo data saved at parent scope for new snapshot creation
       let fbaDataMergedIntoSnapshot = false;
       
       // Velocity lookups - built from daily+weekly data, used by both Packiyo and standalone FBA merge
@@ -12823,7 +12824,12 @@ const savePeriods = async (d) => {
               setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
               console.log(`[AutoSync] Packiyo: ${data.summary?.skuCount || data.products?.length || 0} SKUs synced`);
-              
+
+              // Save Packiyo data at parent scope so new snapshot creation can use it
+              if (data.inventoryBySku) {
+                freshPackiyoInvData = data.inventoryBySku;
+              }
+
               // ========== AUTO-SYNC: INVENTORY UPDATE ==========
               // Velocity lookups are now built at parent scope (before Packiyo)
               try {
@@ -12866,11 +12872,13 @@ const savePeriods = async (d) => {
                 
                 // Update inventory snapshot with Packiyo data + recalculated velocities
                 if (data.inventoryBySku) {
+                  console.log('[AutoSync] Packiyo inventoryBySku available, looking for existing snapshot to merge into...');
                   const todayStr = new Date().toISOString().split('T')[0];
                   const targetDate = invHistory[todayStr] ? todayStr :
                     (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
                     Object.keys(invHistory).sort().reverse()[0];
-                  
+                  console.log('[AutoSync] Inventory merge target:', { targetDate, invHistoryDates: Object.keys(invHistory), snapshotExists: !!(targetDate && invHistory[targetDate]) });
+
                   if (targetDate && invHistory[targetDate]) {
                     const currentSnapshot = invHistory[targetDate];
                     const packiyoData = data.inventoryBySku;
@@ -13142,12 +13150,14 @@ const savePeriods = async (d) => {
       // Merges fresh Amazon FBA/AWD data AND/OR fresh home inventory + velocity updates
       // into the snapshot. Only runs if Packiyo didn't already handle the merge.
       if ((freshAmazonFbaData || freshHomeInvData) && !fbaDataMergedIntoSnapshot) {
+        console.log('[AutoSync] Standalone inventory merge: FBA=', !!freshAmazonFbaData, 'Home=', !!freshHomeInvData, 'Packiyo=', !!freshPackiyoInvData, 'merged=', fbaDataMergedIntoSnapshot);
         try {
           const todayStr = new Date().toISOString().split('T')[0];
           const targetDate = invHistory[todayStr] ? todayStr :
             (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
             Object.keys(invHistory).sort().reverse()[0];
-          
+          console.log('[AutoSync] Standalone merge target:', { targetDate, invHistoryDates: Object.keys(invHistory), exists: !!(targetDate && invHistory[targetDate]) });
+
           if (targetDate && invHistory[targetDate]) {
             const currentSnapshot = invHistory[targetDate];
             const today = new Date();
@@ -13381,44 +13391,104 @@ const savePeriods = async (d) => {
             console.log(`[AutoSync] Standalone merge complete (no Packiyo): ${updatedItems.length} items, FBA=${!!freshAmazonFbaData}, Home=${!!freshHomeInvData}`);
             } // end if (!abortMerge)
           } else {
-            // No existing snapshot — create a minimal one from available data
+            // No existing snapshot — create one from ALL available sources
+            console.log('[AutoSync] No existing inventory snapshot — creating new one from all sources');
             const todayStr2 = new Date().toISOString().split('T')[0];
             const cogsLookup = getCogsLookup();
             const newItems = [];
             const seenSkus = new Set();
-            
+
+            // Build Packiyo lookup (case-insensitive)
+            const packiyoLookup2 = {};
+            if (freshPackiyoInvData) {
+              Object.entries(freshPackiyoInvData).forEach(([sku, item]) => {
+                const base = sku.replace(/shop$/i, '').toUpperCase();
+                packiyoLookup2[base] = item;
+                packiyoLookup2[sku.toUpperCase()] = item;
+                packiyoLookup2[sku.toLowerCase()] = item;
+              });
+            }
+
+            // Collect ALL SKUs from all sources
+            const allNewSkus = new Set();
             if (freshAmazonFbaData) {
-            Object.entries(freshAmazonFbaData).forEach(([sku, entry]) => {
-              const normalizedSku = sku.replace(/shop$/i, '').toUpperCase();
+              Object.keys(freshAmazonFbaData).forEach(sku => {
+                allNewSkus.add(sku.replace(/shop$/i, '').toUpperCase());
+              });
+            }
+            if (freshPackiyoInvData) {
+              Object.keys(freshPackiyoInvData).forEach(sku => {
+                allNewSkus.add(sku.replace(/shop$/i, '').toUpperCase());
+              });
+            }
+            if (freshHomeInvData) {
+              Object.keys(freshHomeInvData).forEach(sku => {
+                allNewSkus.add(sku.replace(/shop$/i, '').toUpperCase());
+              });
+            }
+
+            allNewSkus.forEach(normalizedSku => {
               if (seenSkus.has(normalizedSku)) return;
               seenSkus.add(normalizedSku);
-              
-              const cost = cogsLookup[sku] || cogsLookup[normalizedSku] || cogsLookup[normalizedSku.toLowerCase()] || 0;
+
+              const cost = cogsLookup[normalizedSku] || cogsLookup[normalizedSku.toLowerCase()] ||
+                           cogsLookup[normalizedSku + 'Shop'] || cogsLookup[normalizedSku.toLowerCase() + 'shop'] || 0;
               if (cost === 0) return; // Skip SKUs without COGS
-              
-              const totalQty = (entry.total || 0) + (entry.awdQty || 0) + (entry.inbound || 0) + (entry.awdInbound || 0);
-              const freshHome3 = freshHomeInvData?.[normalizedSku] || null;
-              const homeQty3 = freshHome3 ? freshHome3.homeQty : 0;
+
+              // Amazon FBA + AWD
+              const amzEntry = freshAmazonFbaData?.[normalizedSku] || freshAmazonFbaData?.[normalizedSku.toLowerCase()] ||
+                               freshAmazonFbaData?.[normalizedSku + 'Shop'] || freshAmazonFbaData?.[normalizedSku.toLowerCase() + 'shop'] || null;
+              const fbaQty = amzEntry ? (amzEntry.total || 0) : 0;
+              const fbaInbound = amzEntry ? (amzEntry.inbound || 0) : 0;
+              const awdQty = amzEntry ? (amzEntry.awdQty || 0) : 0;
+              const awdInbound = amzEntry ? (amzEntry.awdInbound || 0) : 0;
+
+              // Packiyo 3PL
+              const tplItem = packiyoLookup2[normalizedSku] || packiyoLookup2[normalizedSku.toLowerCase()] || null;
+              const tplQty = tplItem ? (tplItem.quantityOnHand || tplItem.quantity_on_hand || tplItem.totalQty || 0) : 0;
+              const tplInbound = tplItem ? (tplItem.quantityInbound || tplItem.quantity_inbound || 0) : 0;
+
+              // Home (Shopify)
+              const homeItem = freshHomeInvData?.[normalizedSku] || null;
+              const homeQty = homeItem ? (homeItem.homeQty || 0) : 0;
+
+              const totalQty = fbaQty + awdQty + tplQty + homeQty + fbaInbound + awdInbound + tplInbound;
+
+              // Velocity
+              const velData = (() => {
+                const variants = [normalizedSku, normalizedSku.toLowerCase(), normalizedSku + 'Shop', normalizedSku.toLowerCase() + 'shop'];
+                let amazon = 0, shopify = 0;
+                for (const v of variants) {
+                  if (autoAmazonVelLookup[v] > 0 && amazon === 0) amazon = autoAmazonVelLookup[v];
+                  if (autoShopifyVelLookup[v] > 0 && shopify === 0) shopify = autoShopifyVelLookup[v];
+                  if (amazon > 0 && shopify > 0) break;
+                }
+                return { amazon, shopify, total: amazon + shopify };
+              })();
+
+              const weeklyVel = velData.total;
+              const dos = weeklyVel > 0 ? Math.round((totalQty / weeklyVel) * 7) : 999;
+
               newItems.push({
                 sku: normalizedSku + 'Shop',
-                name: freshHome3?.name || normalizedSku,
-                asin: entry.asin || '',
-                amazonQty: entry.total || 0,
-                threeplQty: 0,
-                homeQty: homeQty3,
-                awdQty: entry.awdQty || 0,
-                awdInbound: entry.awdInbound || 0,
-                amazonInbound: entry.inbound || 0,
-                threeplInbound: 0,
-                totalQty: totalQty + homeQty3,
+                name: homeItem?.name || tplItem?.name || normalizedSku,
+                asin: amzEntry?.asin || '',
+                amazonQty: fbaQty,
+                threeplQty: tplQty,
+                homeQty,
+                awdQty,
+                awdInbound,
+                amazonInbound: fbaInbound,
+                threeplInbound: tplInbound,
+                totalQty,
                 cost,
                 totalValue: totalQty * cost,
-                weeklyVel: 0,
-                correctedVel: 0,
-                amzWeeklyVel: 0,
-                shopWeeklyVel: 0,
-                daysOfSupply: 999,
-                health: 'unknown',
+                weeklyVel,
+                correctedVel: weeklyVel,
+                amzWeeklyVel: velData.amazon,
+                shopWeeklyVel: velData.shopify,
+                daysOfSupply: dos,
+                health: weeklyVel > 0 ? (dos < 14 ? 'critical' : dos < 30 ? 'low' : dos <= 180 ? 'healthy' : 'overstock') : (totalQty > 0 ? 'healthy' : 'critical'),
                 stockoutDate: null,
                 reorderByDate: null,
                 daysUntilMustOrder: null,
@@ -13428,29 +13498,7 @@ const savePeriods = async (d) => {
                 reorderPoint: 0,
               });
             });
-            } // end if (freshAmazonFbaData)
-            
-            // Also add home-only SKUs (Shopify-only products not on Amazon)
-            if (freshHomeInvData) {
-              const existingSkus3 = new Set(newItems.map(i => (i.sku || '').replace(/shop$/i, '').toUpperCase()));
-              Object.entries(freshHomeInvData).forEach(([normSku, homeItem]) => {
-                if (existingSkus3.has(normSku)) return;
-                const cost = homeItem.cost || cogsLookup[normSku] || cogsLookup[normSku.toLowerCase()] || 0;
-                if (cost === 0) return;
-                newItems.push({
-                  sku: normSku + 'Shop', name: homeItem.name || normSku, asin: '',
-                  amazonQty: 0, threeplQty: 0, homeQty: homeItem.homeQty,
-                  awdQty: 0, awdInbound: 0, amazonInbound: 0, threeplInbound: 0,
-                  totalQty: homeItem.homeQty, cost, totalValue: homeItem.homeQty * cost,
-                  weeklyVel: 0, correctedVel: 0, amzWeeklyVel: 0, shopWeeklyVel: 0,
-                  daysOfSupply: 999, health: 'unknown',
-                  stockoutDate: null, reorderByDate: null, daysUntilMustOrder: null,
-                  suggestedOrderQty: 0, leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14,
-                  safetyStock: 0, reorderPoint: 0,
-                });
-              });
-            }
-            
+
             if (newItems.length > 0) {
               const snapshot = {
                 items: newItems,
@@ -13460,17 +13508,25 @@ const savePeriods = async (d) => {
                   totalValue: newItems.reduce((s, i) => s + i.totalValue, 0),
                   amazonUnits: newItems.reduce((s, i) => s + i.amazonQty, 0),
                   amazonValue: newItems.reduce((s, i) => s + (i.amazonQty * i.cost), 0),
+                  amazonInbound: newItems.reduce((s, i) => s + (i.amazonInbound || 0), 0),
                   awdUnits: newItems.reduce((s, i) => s + (i.awdQty || 0), 0),
                   awdValue: newItems.reduce((s, i) => s + ((i.awdQty || 0) * i.cost), 0),
-                  threeplUnits: 0, threeplValue: 0,
+                  threeplUnits: newItems.reduce((s, i) => s + (i.threeplQty || 0), 0),
+                  threeplValue: newItems.reduce((s, i) => s + ((i.threeplQty || 0) * i.cost), 0),
                   homeUnits: newItems.reduce((s, i) => s + (i.homeQty || 0), 0),
                   homeValue: newItems.reduce((s, i) => s + ((i.homeQty || 0) * i.cost), 0),
-                  critical: 0, low: 0, healthy: 0, overstock: 0,
+                  critical: newItems.filter(i => i.health === 'critical').length,
+                  low: newItems.filter(i => i.health === 'low').length,
+                  healthy: newItems.filter(i => i.health === 'healthy').length,
+                  overstock: newItems.filter(i => i.health === 'overstock').length,
                 },
                 sources: {
-                  amazon: 'amazon-fba-auto-sync',
-                  lastAmazonFbaSync: new Date().toISOString(),
-                  ...(freshHomeInvData && { lastHomeSync: new Date().toISOString(), homeSource: 'shopify-auto-sync' }),
+                  amazon: freshAmazonFbaData ? 'amazon-fba-auto-sync' : 'none',
+                  threepl: freshPackiyoInvData ? 'packiyo-auto-sync' : 'none',
+                  home: freshHomeInvData ? 'shopify-auto-sync' : 'none',
+                  lastAmazonFbaSync: freshAmazonFbaData ? new Date().toISOString() : null,
+                  lastPackiyoSync: freshPackiyoInvData ? new Date().toISOString() : null,
+                  lastHomeSync: freshHomeInvData ? new Date().toISOString() : null,
                 },
               };
               const updatedHistory = { ...invHistory, [todayStr2]: snapshot };
@@ -13478,7 +13534,7 @@ const savePeriods = async (d) => {
               setSelectedInvDate(todayStr2);
               saveInv(updatedHistory);
               fbaDataMergedIntoSnapshot = true;
-              console.log(`[AutoSync] Created new inventory snapshot: ${newItems.length} SKUs, FBA=${!!freshAmazonFbaData}, Home=${!!freshHomeInvData}`);
+              console.log(`[AutoSync] Created new inventory snapshot: ${newItems.length} SKUs, FBA=${newItems.reduce((s,i)=>s+i.amazonQty,0)}, AWD=${newItems.reduce((s,i)=>s+(i.awdQty||0),0)}, 3PL=${newItems.reduce((s,i)=>s+i.threeplQty,0)}, Home=${newItems.reduce((s,i)=>s+(i.homeQty||0),0)}`);
             }
           }
         } catch (e) {
