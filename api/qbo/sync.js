@@ -222,7 +222,11 @@ export default async function handler(req, res) {
         qboType: 'Invoice',
         date: inv.TxnDate,
         dueDate: inv.DueDate,
-        type: 'income',
+        // Cash basis: invoices are NOT income until paid — mark as 'invoice' not 'income'
+        // Payments (fetched separately) record the actual cash received
+        type: 'invoice',
+        isIncome: false,
+        isExpense: false,
         amount: Math.abs(inv.TotalAmt || 0),
         description: inv.DocNumber ? `Invoice #${inv.DocNumber}` : `Invoice to ${inv.CustomerRef?.name || 'Customer'}`,
         account: 'Accounts Receivable',
@@ -303,7 +307,10 @@ export default async function handler(req, res) {
         qboType: 'Bill',
         date: b.TxnDate,
         dueDate: b.DueDate,
+        // Cash basis: bills are NOT expenses until paid via BillPayment
         type: 'bill',
+        isIncome: false,
+        isExpense: false,
         amount: -Math.abs(b.TotalAmt || 0),
         description: b.DocNumber ? `Bill #${b.DocNumber}` : `Bill from ${b.VendorRef?.name || 'Vendor'}`,
         account: 'Accounts Payable',
@@ -426,7 +433,7 @@ export default async function handler(req, res) {
     
     let profitAndLoss = null;
     try {
-      const plUrl = `${baseUrl}/v3/company/${realmId}/reports/ProfitAndLoss?start_date=${ytdStart}&end_date=${ytdEnd}&minorversion=65`;
+      const plUrl = `${baseUrl}/v3/company/${realmId}/reports/ProfitAndLoss?start_date=${ytdStart}&end_date=${ytdEnd}&accounting_method=Cash&minorversion=65`;
       console.log('Fetching P&L report...');
       
       const plResponse = await fetch(plUrl, {

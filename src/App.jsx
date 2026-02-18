@@ -13650,6 +13650,18 @@ const savePeriods = async (d) => {
                 const monthlySnapshots = {};
 
                 allTxns.forEach(txn => {
+                  // Derive isIncome/isExpense for QBO transactions (cash basis)
+                  // QBO API transactions don't have these flags — derive from qboType
+                  // Cash basis: only Deposits are income, only Purchases/Refunds are expenses
+                  let isIncome = txn.isIncome || false;
+                  let isExpense = txn.isExpense || false;
+                  if (txn.qboType) {
+                    const qt = txn.qboType.toLowerCase();
+                    isIncome = qt === 'deposit';
+                    isExpense = qt === 'purchase' || qt === 'refundreceipt';
+                    // Skip invoices, bills, payments, salesreceipts for cash-basis aggregates
+                  }
+
                   // Account aggregates
                   if (!accounts[txn.account]) {
                     const existingBalance = prev?.accounts?.[txn.account]?.balance;
@@ -13670,28 +13682,28 @@ const savePeriods = async (d) => {
                     }
                   }
                   accounts[txn.account].transactions++;
-                  if (txn.isIncome) accounts[txn.account].totalIn += txn.amount;
-                  if (txn.isExpense) accounts[txn.account].totalOut += txn.amount;
+                  if (isIncome) accounts[txn.account].totalIn += Math.abs(txn.amount);
+                  if (isExpense) accounts[txn.account].totalOut += Math.abs(txn.amount);
 
                   // Category aggregates
-                  const cat = txn.topCategory || 'Uncategorized';
+                  const cat = txn.topCategory || txn.category || 'Uncategorized';
                   if (!categories[cat]) categories[cat] = { totalIn: 0, totalOut: 0, count: 0, subcategories: {} };
-                  categories[cat].count++;
-                  if (txn.isIncome) categories[cat].totalIn += txn.amount;
-                  if (txn.isExpense) categories[cat].totalOut += txn.amount;
+                  if (isIncome || isExpense) categories[cat].count++;
+                  if (isIncome) categories[cat].totalIn += Math.abs(txn.amount);
+                  if (isExpense) categories[cat].totalOut += Math.abs(txn.amount);
 
                   // Monthly snapshots
                   const month = txn.date?.substring(0, 7);
                   if (month) {
                     if (!monthlySnapshots[month]) monthlySnapshots[month] = { income: 0, expenses: 0, net: 0, transactions: 0 };
-                    monthlySnapshots[month].transactions++;
-                    if (txn.isIncome) {
-                      monthlySnapshots[month].income += txn.amount;
-                      monthlySnapshots[month].net += txn.amount;
+                    if (isIncome || isExpense) monthlySnapshots[month].transactions++;
+                    if (isIncome) {
+                      monthlySnapshots[month].income += Math.abs(txn.amount);
+                      monthlySnapshots[month].net += Math.abs(txn.amount);
                     }
-                    if (txn.isExpense) {
-                      monthlySnapshots[month].expenses += txn.amount;
-                      monthlySnapshots[month].net -= txn.amount;
+                    if (isExpense) {
+                      monthlySnapshots[month].expenses += Math.abs(txn.amount);
+                      monthlySnapshots[month].net -= Math.abs(txn.amount);
                     }
                   }
                 });
