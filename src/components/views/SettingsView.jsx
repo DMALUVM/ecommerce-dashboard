@@ -1483,9 +1483,10 @@ const SettingsView = ({
                           
                           newTplTotal += newTplQty;
                           newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
-                          
-                          const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
-                          
+
+                          const newTotalQty = (item.amazonQty || 0) + (item.awdQty || 0) + newTplQty + (item.homeQty || 0)
+                            + (item.amazonInbound || 0) + (item.awdInbound || 0) + newTplInbound;
+
                           // Get velocities from lookup with corrections applied
                           const velocityData = getVelocitiesForSku(item.sku);
                           const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
@@ -1762,8 +1763,8 @@ const SettingsView = ({
                             ...currentSnapshot.summary,
                             threeplUnits: newTplTotal,
                             threeplValue: newTplValue,
-                            totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
-                            totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
+                            totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + (currentSnapshot.summary?.awdUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0) + (currentSnapshot.summary?.inboundUnits || 0),
+                            totalValue: (currentSnapshot.summary?.amazonValue || 0) + (currentSnapshot.summary?.awdValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
                             skuCount: updatedItems.length,
                             critical: critical2, low: low2, healthy: healthy2, overstock: overstock2,
                             avgTurnover: Math.round(avgTurnover2 * 10) / 10,
@@ -1814,9 +1815,10 @@ const SettingsView = ({
                             
                             newTplTotal += newTplQty;
                             newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || savedCogs[normalizedItemSku] || 0);
-                            
-                            const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
-                            
+
+                            const newTotalQty = (item.amazonQty || 0) + (item.awdQty || 0) + newTplQty + (item.homeQty || 0)
+                              + (item.amazonInbound || 0) + (item.awdInbound || 0) + newTplInbound;
+
                             return {
                               ...item, // PRESERVE Amazon data!
                               threeplQty: newTplQty,
@@ -1835,8 +1837,8 @@ const SettingsView = ({
                               ...existingTodaySnapshot.summary,
                               threeplUnits: newTplTotal,
                               threeplValue: newTplValue,
-                              totalUnits: (existingTodaySnapshot.summary?.amazonUnits || 0) + newTplTotal + (existingTodaySnapshot.summary?.homeUnits || 0),
-                              totalValue: (existingTodaySnapshot.summary?.amazonValue || 0) + newTplValue + (existingTodaySnapshot.summary?.homeValue || 0),
+                              totalUnits: (existingTodaySnapshot.summary?.amazonUnits || 0) + (existingTodaySnapshot.summary?.awdUnits || 0) + newTplTotal + (existingTodaySnapshot.summary?.homeUnits || 0) + (existingTodaySnapshot.summary?.inboundUnits || 0),
+                              totalValue: (existingTodaySnapshot.summary?.amazonValue || 0) + (existingTodaySnapshot.summary?.awdValue || 0) + newTplValue + (existingTodaySnapshot.summary?.homeValue || 0),
                               skuCount: updatedItems.length,
                             },
                             sources: {
@@ -2127,10 +2129,164 @@ const SettingsView = ({
                       
                       const fbaUnits = data.summary?.fbaUnits || data.summary?.totalUnits || 0;
                       const awdUnits = data.summary?.awdUnits || 0;
-                      setToast({ 
-                        message: `Synced ${fbaUnits.toLocaleString()} FBA units${awdUnits > 0 ? ` + ${awdUnits.toLocaleString()} AWD units` : ''}`, 
-                        type: 'success' 
-                      });
+
+                      // ===== MERGE FBA/AWD INTO INVENTORY SNAPSHOT =====
+                      // Previously this button only stored display data — now it actually updates the snapshot
+                      const amzInvBySku = data.inventoryBySku || {};
+                      const today = new Date().toISOString().split('T')[0];
+                      const targetDate = invHistory[today] ? today :
+                        (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+                        Object.keys(invHistory).sort().reverse()[0];
+
+                      if (targetDate && invHistory[targetDate] && Object.keys(amzInvBySku).length > 0) {
+                        const currentSnapshot = invHistory[targetDate];
+
+                        // Build normalized Amazon lookup
+                        const amzLookup = {};
+                        Object.entries(amzInvBySku).forEach(([sku, item]) => {
+                          amzLookup[normalizeSkuKey(sku)] = item;
+                        });
+
+                        let newFbaTotal = 0, newFbaValue = 0, newAwdTotal = 0, newInboundTotal = 0;
+
+                        const updatedItems = currentSnapshot.items.map(item => {
+                          const normalizedSku = normalizeSkuKey(item.sku);
+                          const amzItem = amzLookup[normalizedSku];
+
+                          if (amzItem) {
+                            const fbaQty = (amzItem.fbaFulfillable || 0) + (amzItem.fbaReserved || 0);
+                            const awdQty = amzItem.awdQuantity || 0;
+                            const fbaInbound = amzItem.fbaInbound || 0;
+                            const awdInbound = amzItem.awdInbound || 0;
+                            const cost = item.cost || savedCogs[item.sku] || 0;
+
+                            newFbaTotal += fbaQty;
+                            newFbaValue += fbaQty * cost;
+                            newAwdTotal += awdQty;
+                            newInboundTotal += fbaInbound + awdInbound;
+
+                            const newTotalQty = fbaQty + awdQty + (item.threeplQty || 0) + (item.homeQty || 0)
+                              + fbaInbound + awdInbound + (item.threeplInbound || 0);
+
+                            // Recalculate DOS with existing velocity
+                            const vel = item.weeklyVel || item.correctedVel || 0;
+                            const dos = vel > 0 ? Math.round((newTotalQty / vel) * 7) : (item.daysOfSupply || 999);
+
+                            // Recalculate stockout + reorder dates
+                            let stockoutDate = item.stockoutDate;
+                            let reorderByDate = item.reorderByDate;
+                            let daysUntilMustOrder = item.daysUntilMustOrder;
+
+                            if (vel > 0 && dos < 999) {
+                              const now = new Date();
+                              const stockout = new Date(now);
+                              stockout.setDate(stockout.getDate() + dos);
+                              stockoutDate = stockout.toISOString().split('T')[0];
+
+                              const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+                              const reorderPointDays = item.reorderPoint > 0 && vel > 0
+                                ? Math.round((item.reorderPoint / vel) * 7)
+                                : (item.leadTimeDays || leadTimeSettings.defaultLeadTimeDays || 14);
+                              daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
+                              const reorderBy = new Date(now);
+                              reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+                              reorderByDate = reorderBy.toISOString().split('T')[0];
+                            }
+
+                            return {
+                              ...item,
+                              amazonQty: fbaQty,
+                              awdQty,
+                              amazonInbound: fbaInbound,
+                              awdInbound,
+                              totalQty: newTotalQty,
+                              totalValue: newTotalQty * cost,
+                              daysOfSupply: dos,
+                              stockoutDate,
+                              reorderByDate,
+                              daysUntilMustOrder,
+                            };
+                          } else {
+                            // Keep existing Amazon data from this item
+                            newFbaTotal += (item.amazonQty || 0);
+                            newFbaValue += (item.amazonQty || 0) * (item.cost || 0);
+                            newAwdTotal += (item.awdQty || 0);
+                            newInboundTotal += (item.amazonInbound || 0) + (item.awdInbound || 0);
+                            return item;
+                          }
+                        });
+
+                        // Add Amazon SKUs that aren't in the snapshot yet
+                        const existingSkus = new Set(currentSnapshot.items.map(i => normalizeSkuKey(i.sku)));
+                        const newAmzItems = Object.entries(amzInvBySku)
+                          .filter(([sku]) => !existingSkus.has(normalizeSkuKey(sku)))
+                          .filter(([, item]) => (item.fbaFulfillable || 0) + (item.fbaReserved || 0) + (item.awdQuantity || 0) > 0)
+                          .map(([sku, item]) => {
+                            const fbaQty = (item.fbaFulfillable || 0) + (item.fbaReserved || 0);
+                            const awdQty = item.awdQuantity || 0;
+                            const cost = savedCogs[sku] || savedCogs[normalizeSkuKey(sku)] || 0;
+                            const totalQty = fbaQty + awdQty + (item.fbaInbound || 0) + (item.awdInbound || 0);
+                            newFbaTotal += fbaQty;
+                            newFbaValue += fbaQty * cost;
+                            newAwdTotal += awdQty;
+                            newInboundTotal += (item.fbaInbound || 0) + (item.awdInbound || 0);
+                            return {
+                              sku: normalizeSkuKey(sku),
+                              name: item.name || savedProductNames[sku] || savedProductNames[normalizeSkuKey(sku)] || sku,
+                              amazonQty: fbaQty,
+                              awdQty,
+                              amazonInbound: item.fbaInbound || 0,
+                              awdInbound: item.awdInbound || 0,
+                              threeplQty: 0,
+                              homeQty: 0,
+                              totalQty,
+                              cost,
+                              totalValue: totalQty * cost,
+                              source: 'amazon-sync',
+                              weeklyVel: 0,
+                              daysOfSupply: 999,
+                              leadTimeDays: leadTimeSettings.defaultLeadTimeDays || 14,
+                            };
+                          });
+
+                        if (newAmzItems.length > 0) updatedItems.push(...newAmzItems);
+                        updatedItems.sort((a, b) => b.totalValue - a.totalValue);
+
+                        const updatedSnapshot = {
+                          ...currentSnapshot,
+                          items: updatedItems,
+                          summary: {
+                            ...currentSnapshot.summary,
+                            amazonUnits: newFbaTotal,
+                            amazonValue: newFbaValue,
+                            awdUnits: newAwdTotal,
+                            inboundUnits: newInboundTotal,
+                            totalUnits: newFbaTotal + newAwdTotal + (currentSnapshot.summary?.threeplUnits || 0) + (currentSnapshot.summary?.homeUnits || 0) + newInboundTotal,
+                            totalValue: newFbaValue + (currentSnapshot.summary?.threeplValue || 0) + (currentSnapshot.summary?.homeValue || 0),
+                            skuCount: updatedItems.length,
+                          },
+                          sources: {
+                            ...currentSnapshot.sources,
+                            amazon: 'sp-api-direct',
+                            lastAmazonSync: new Date().toISOString(),
+                          },
+                        };
+
+                        const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                        setInvHistory(updatedHistory);
+                        setSelectedInvDate(targetDate);
+                        saveInv(updatedHistory);
+
+                        setToast({
+                          message: `Updated inventory: ${fbaUnits.toLocaleString()} FBA${awdUnits > 0 ? ` + ${awdUnits.toLocaleString()} AWD` : ''} units merged into snapshot`,
+                          type: 'success'
+                        });
+                      } else {
+                        setToast({
+                          message: `Synced ${fbaUnits.toLocaleString()} FBA units${awdUnits > 0 ? ` + ${awdUnits.toLocaleString()} AWD units` : ''} (no snapshot to merge — use Upload → Sync Now to create one)`,
+                          type: 'success'
+                        });
+                      }
                     } catch (err) {
                       setAmazonInventoryStatus({ loading: false, error: err.message, lastSync: null });
                       setToast({ message: 'Amazon sync failed: ' + err.message, type: 'error' });
