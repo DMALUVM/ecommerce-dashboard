@@ -4697,8 +4697,9 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   }
   loadFromCloudLockRef.current = true;
 
-  // Timeout helper — prevents infinite hang if Supabase is unreachable
-  const withTimeout = (promise, ms = 15000, label = 'query') => {
+  // Timeout helper — prevents infinite hang if Supabase is truly unreachable
+  // Use generous timeouts (60s+) since large data payloads legitimately take time
+  const withTimeout = (promise, ms = 60000, label = 'query') => {
     let timer;
     return Promise.race([
       promise,
@@ -4724,7 +4725,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
       .select('data')
       .eq('user_id', session.user.id)
       .eq('store_id', '_legacy')
-      .maybeSingle(), 15000, 'legacy check');
+      .maybeSingle(), 30000, 'legacy check');
     
     if (legacyRow?.data?.storeData) {
       console.log('[Migration] Splitting legacy nested blob into per-store rows…');
@@ -4767,7 +4768,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
       .select('data')
       .eq('user_id', session.user.id)
       .eq('store_id', '_meta')
-      .maybeSingle(), 15000, 'meta row');
+      .maybeSingle(), 30000, 'meta row');
     
     if (metaError) {
       devError('Cloud meta load error:', metaError);
@@ -4823,7 +4824,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
       .select('data, updated_at')
       .eq('user_id', session.user.id)
       .eq('store_id', targetStoreId)
-      .maybeSingle(), 20000, 'store data');
+      .maybeSingle(), 60000, 'store data');
     
     if (storeError) {
       devError('Cloud store load error:', storeError);
@@ -5132,30 +5133,19 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   } catch (err) {
     const isTimeout = err?.message?.includes('Timeout');
     console.error('[LoadCloud]', isTimeout ? 'TIMEOUT' : 'ERROR', err?.message || err);
-    setCloudStatus(isTimeout ? 'Connection timed out — retrying…' : '');
     if (isTimeout) {
-      // Auto-retry once after timeout, then fall back to localStorage
+      // Retry the full load once with no timeout cap (let it complete naturally)
       try {
-        console.log('[LoadCloud] Retrying after timeout…');
-        const { data: retryMeta } = await supabase
-          .from('app_data').select('data')
-          .eq('user_id', session.user.id).eq('store_id', '_meta')
-          .maybeSingle();
-        if (retryMeta?.data) {
-          console.log('[LoadCloud] Retry succeeded — restarting load');
-          loadFromCloudLockRef.current = false;
-          return loadFromCloud(storeId);
-        }
+        console.log('[LoadCloud] Timed out — retrying without timeout cap…');
+        setCloudStatus('Connection slow — retrying…');
+        loadFromCloudLockRef.current = false;
+        return await loadFromCloud(storeId);
       } catch (retryErr) {
         console.warn('[LoadCloud] Retry also failed:', retryErr?.message);
       }
-      // Fall back to localStorage so the app isn't stuck
-      console.log('[LoadCloud] Falling back to localStorage');
-      setCloudStatus('Offline mode — using cached data');
-      loadFromLocal();
-      return { ok: false, reason: 'timeout', stores: [] };
     }
-    return { ok: false, reason: 'error', stores: [] };
+    setCloudStatus('Load failed — please refresh');
+    return { ok: false, reason: isTimeout ? 'timeout' : 'error', stores: [] };
   } finally {
     loadFromCloudLockRef.current = false; // Release concurrency lock
     isLoadingDataRef.current = false; setDataLoading(false);
