@@ -4,7 +4,11 @@ import { Check, AlertTriangle, X, Info } from 'lucide-react';
 const Toast = ({ toast, setToast, showSaveConfirm }) => {
   const [toastQueue, setToastQueue] = useState([]);
   const queueRef = useRef([]);
-  
+  const timersRef = useRef(new Map());
+
+  // Cleanup all timers on unmount
+  useEffect(() => () => timersRef.current.forEach(t => clearTimeout(t)), []);
+
   // Track toast changes and build a queue
   useEffect(() => {
     if (toast) {
@@ -12,20 +16,21 @@ const Toast = ({ toast, setToast, showSaveConfirm }) => {
       const newToast = { ...toast, id };
       queueRef.current = [...queueRef.current, newToast].slice(-4); // Keep max 4
       setToastQueue([...queueRef.current]);
-      
+
       const duration = toast.duration || (toast.action ? 10000 : 3500);
-      const timer = setTimeout(() => {
+      // Each toast gets its own independent timer (no effect cleanup —
+      // cleaning up here would cancel prior toasts' timers when a new one arrives)
+      timersRef.current.set(id, setTimeout(() => {
+        timersRef.current.delete(id);
         queueRef.current = queueRef.current.filter(t => t.id !== id);
         setToastQueue([...queueRef.current]);
-        // Clear the toast prop if it was the last one
         if (queueRef.current.length === 0) setToast(null);
-      }, duration);
-      
-      return () => clearTimeout(timer);
+      }, duration));
     }
   }, [toast]);
   
   const dismissToast = (id) => {
+    if (timersRef.current.has(id)) { clearTimeout(timersRef.current.get(id)); timersRef.current.delete(id); }
     queueRef.current = queueRef.current.filter(t => t.id !== id);
     setToastQueue([...queueRef.current]);
     if (queueRef.current.length === 0) setToast(null);
