@@ -7568,7 +7568,7 @@ const savePeriods = async (d) => {
   };
 
   const processInventory = useCallback(async () => {
-    
+   try {
     // DIRECT READ from localStorage to get SKU velocity data
     // Use lsGet to handle LZ compression properly
     let legacyDailyData = {};
@@ -8210,6 +8210,7 @@ const savePeriods = async (d) => {
           
           // Update Amazon last sync time
           setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+          console.log('[Inventory] FBA extraction:', { fbaSkuCount: Object.keys(amzInv).length, fbaTotal: amzTotal, fbaValue: amzValue.toFixed(2), fbaInbound: amzInbound, sampleFbaItem: Object.values(amzInv)[0] || 'none' });
           console.log('[Inventory] AWD extraction:', { awdSkuCount: Object.keys(awdData).length, awdTotal, awdValue: awdValue.toFixed(2) });
         }
       } catch (err) {
@@ -8775,8 +8776,128 @@ const savePeriods = async (d) => {
       ? ` + AI-corrected (${forecastCorrections.confidence.toFixed(0)}% confidence)`
       : '';
     
+    // ===== SOURCE-FAILURE FALLBACK =====
+    // If a source returned 0 items but the previous snapshot had data for that source,
+    // carry forward the old data so syncing one source doesn't wipe out another
+    const prevSnapshot = Object.values(invHistory).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
+    const prevItems = prevSnapshot?.items || [];
+
+    if (amzTotal === 0 && prevSnapshot?.summary?.amazonUnits > 0) {
+      console.warn('[Inventory] FBA returned 0 but previous snapshot had', prevSnapshot.summary.amazonUnits, 'units — carrying forward FBA data');
+      // Restore FBA data from previous items
+      prevItems.forEach(pi => {
+        if ((pi.amazonQty || 0) > 0 && pi.sku) {
+          const skuUpper = pi.sku.toUpperCase();
+          if (!amzInv[skuUpper]) {
+            amzInv[skuUpper] = { sku: skuUpper, name: pi.name || pi.sku, total: pi.amazonQty, inbound: pi.amazonInbound || 0, cost: pi.cost || 0, amzWeeklyVel: pi.amzWeeklyVel || 0 };
+          }
+          amzTotal += pi.amazonQty;
+          amzValue += (pi.amazonQty || 0) * (pi.cost || 0);
+          amzInbound += (pi.amazonInbound || 0);
+        }
+      });
+      amzSource = prevSnapshot.sources?.amazon || 'carried-forward';
+    }
+
+    if (awdTotal === 0 && prevSnapshot?.summary?.awdUnits > 0) {
+      console.warn('[Inventory] AWD returned 0 but previous snapshot had', prevSnapshot.summary.awdUnits, 'units — carrying forward AWD data');
+      prevItems.forEach(pi => {
+        if ((pi.awdQty || 0) > 0 && pi.sku) {
+          const skuUpper = pi.sku.toUpperCase();
+          if (!awdData[skuUpper]) {
+            awdData[skuUpper] = { sku: skuUpper, awdQuantity: pi.awdQty, awdInbound: pi.awdInbound || 0, awdReplenishment: 0 };
+          }
+          awdTotal += pi.awdQty;
+          awdValue += (pi.awdQty || 0) * (pi.cost || 0);
+        }
+      });
+    }
+
+    if (tplTotal === 0 && prevSnapshot?.summary?.threeplUnits > 0) {
+      console.warn('[Inventory] 3PL returned 0 but previous snapshot had', prevSnapshot.summary.threeplUnits, 'units — carrying forward 3PL data');
+      prevItems.forEach(pi => {
+        if ((pi.threeplQty || 0) > 0 && pi.sku) {
+          const skuUpper = pi.sku.toUpperCase();
+          if (!tplInv[skuUpper]) {
+            tplInv[skuUpper] = { sku: skuUpper, name: pi.name || pi.sku, total: pi.threeplQty, inbound: pi.threeplInbound || 0, cost: pi.cost || 0 };
+          }
+          tplTotal += pi.threeplQty;
+          tplValue += (pi.threeplQty || 0) * (pi.cost || 0);
+          tplInbound += (pi.threeplInbound || 0);
+        }
+      });
+      tplSource = prevSnapshot.sources?.threepl || 'carried-forward';
+    }
+
+    if (homeTotal === 0 && prevSnapshot?.summary?.homeUnits > 0) {
+      console.warn('[Inventory] Home returned 0 but previous snapshot had', prevSnapshot.summary.homeUnits, 'units — carrying forward Home data');
+      prevItems.forEach(pi => {
+        if ((pi.homeQty || 0) > 0 && pi.sku) {
+          const skuUpper = pi.sku.toUpperCase();
+          if (!homeInv[skuUpper]) {
+            homeInv[skuUpper] = { sku: skuUpper, name: pi.name || pi.sku, total: pi.homeQty, cost: pi.cost || 0 };
+          }
+          homeTotal += pi.homeQty;
+          homeValue += (pi.homeQty || 0) * (pi.cost || 0);
+        }
+      });
+      homeSource = prevSnapshot.sources?.home || 'carried-forward';
+    }
+
+    // REBUILD allSkus / physicalSkus after fallback restoration
+    // (need to re-run the combining logic since we may have added items)
+    const allSkusAfterFallback = new Set([...Object.keys(amzInv), ...Object.keys(tplInv), ...Object.keys(homeInv)]);
+    const seenSkusLowerFallback = new Set();
+    const uniqueSkusFallback = [];
+    allSkusAfterFallback.forEach(sku => {
+      const skuLower = sku.toLowerCase();
+      if (!seenSkusLowerFallback.has(skuLower)) {
+        seenSkusLowerFallback.add(skuLower);
+        uniqueSkusFallback.push(sku);
+      }
+    });
+
+    // If physicalSkus was filtered but fallback added new SKUs, include them
+    const physicalSkusFallback = cogsSkuSet.size > 0
+      ? uniqueSkusFallback.filter(sku => cogsSkuSet.has(sku.toLowerCase()) || cogsSkuSet.has(sku.replace(/shop$/i, '').toLowerCase()))
+      : uniqueSkusFallback;
+
+    // Add any new physical SKUs that weren't in the original items array
+    const existingItemSkus = new Set(items.map(i => i.sku?.toUpperCase()));
+    physicalSkusFallback.forEach(sku => {
+      if (!existingItemSkus.has(sku.toUpperCase())) {
+        const skuLower = sku.toLowerCase();
+        const a = amzInv[sku] || amzInv[sku.toUpperCase()] || {};
+        const t = tplInv[sku] || tplInv[sku.toUpperCase()] || {};
+        const h = homeInv[sku] || homeInv[sku.toUpperCase()] || {};
+        const awdItem = awdData[sku] || awdData[sku.toUpperCase()] || {};
+        const aQty = a.total || 0;
+        const tQty = t.total || 0;
+        const hQty = h.total || 0;
+        const awdQtyVal = awdItem.awdQuantity || 0;
+        const totalQty = aQty + tQty + hQty + awdQtyVal;
+        const cost = a.cost || t.cost || h.cost || cogsLookup[sku] || cogsLookup[skuLower] || 0;
+        items.push({
+          sku, name: a.name || t.name || h.name || sku, asin: a.asin || '',
+          amazonQty: aQty, threeplQty: tQty, homeQty: hQty, awdQty: awdQtyVal,
+          awdInbound: awdItem.awdInbound || 0, totalQty, cost, totalValue: totalQty * cost,
+          weeklyVel: 0, correctedVel: 0, velocitySource: 'none', amzWeeklyVel: 0, shopWeeklyVel: 0,
+          daysOfSupply: 999, health: totalQty > 0 ? 'healthy' : 'critical',
+          stockoutDate: null, reorderByDate: null, daysUntilMustOrder: null,
+          suggestedOrderQty: 0, leadTimeDays: globalLeadTimeDays, category: '',
+          amazonInbound: a.inbound || 0, threeplInbound: t.inbound || 0,
+          safetyStock: 0, reorderPoint: 0, seasonalFactor: 1, seasonalVel: 0,
+          cv: 0, demandClass: 'unknown', weeksOfData: 0,
+        });
+      }
+    });
+
+    items.sort((a, b) => (b.totalValue || 0) - (a.totalValue || 0));
+
+    console.log('[Inventory] Final totals:', { fba: amzTotal, awd: awdTotal, threepl: tplTotal, home: homeTotal, itemCount: items.length, physicalSkuCount: physicalSkusFallback.length });
+
     const sourceNote = `Amazon: ${amzSource}${awdTotal > 0 ? ` (AWD: ${awdTotal} units)` : ''}, 3PL: ${tplSource}${homeSource !== 'none' ? `, Home: ${homeSource}` : ''}`;
-    
+
     const snapshot = {
       date: snapshotDate, 
       createdAt: new Date().toISOString(), 
@@ -8829,19 +8950,24 @@ const savePeriods = async (d) => {
     };
 
     const updated = { ...invHistory, [snapshotDate]: snapshot };
-    setInvHistory(updated); 
-    saveInv(updated); 
-    setSelectedInvDate(snapshotDate); 
-    setView('inventory'); 
-    setIsProcessing(false);
-    setInvFiles({ amazon: null, threepl: null, cogs: null }); 
-    setInvFileNames({ amazon: '', threepl: '', cogs: '' }); 
+    setInvHistory(updated);
+    saveInv(updated);
+    setSelectedInvDate(snapshotDate);
+    setView('inventory');
+    setInvFiles({ amazon: null, threepl: null, cogs: null });
+    setInvFileNames({ amazon: '', threepl: '', cogs: '' });
     setInvSnapshotDate('');
     
-    setToast({ 
-      message: `Inventory snapshot saved (3PL: ${tplSource}, ${items.length} SKUs)`, 
-      type: 'success' 
+    setToast({
+      message: `Inventory snapshot saved (FBA: ${amzTotal}, AWD: ${awdTotal}, 3PL: ${tplTotal}, ${items.length} SKUs)`,
+      type: 'success'
     });
+   } catch (err) {
+    console.error('[Inventory] processInventory FAILED:', err);
+    setToast({ message: `Inventory sync error: ${err.message}`, type: 'error' });
+   } finally {
+    setIsProcessing(false);
+   }
   }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, allPeriodsData, allDaysData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials, leadTimeSettings]);
 
   const deleteWeek = (k) => { 
