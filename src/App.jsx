@@ -4697,6 +4697,15 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   }
   loadFromCloudLockRef.current = true;
 
+  // Timeout helper — prevents infinite hang if Supabase is unreachable
+  const withTimeout = (promise, ms = 15000, label = 'query') => {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`[LoadCloud] Timeout after ${ms}ms: ${label}`)), ms); }),
+    ]).finally(() => clearTimeout(timer));
+  };
+
   // HARD REDIRECT: If we already loaded a store, force any rogue caller to load that same store.
   // switchStore/deleteStore set activeStoreIdRef BEFORE calling loadFromCloud, so they pass naturally.
   if (storeId && activeStoreIdRef.current && storeId !== activeStoreIdRef.current) {
@@ -4710,12 +4719,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   
   try {
     // ---- LEGACY MIGRATION: one-time split of nested blob into per-store rows ----
-    const { data: legacyRow } = await supabase
+    const { data: legacyRow } = await withTimeout(supabase
       .from('app_data')
       .select('data')
       .eq('user_id', session.user.id)
       .eq('store_id', '_legacy')
-      .maybeSingle();
+      .maybeSingle(), 15000, 'legacy check');
     
     if (legacyRow?.data?.storeData) {
       console.log('[Migration] Splitting legacy nested blob into per-store rows…');
@@ -4753,12 +4762,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // ---- END MIGRATION ----
     
     // Load meta row (stores list + activeStoreId)
-    const { data: metaRow, error: metaError } = await supabase
+    const { data: metaRow, error: metaError } = await withTimeout(supabase
       .from('app_data')
       .select('data')
       .eq('user_id', session.user.id)
       .eq('store_id', '_meta')
-      .maybeSingle();
+      .maybeSingle(), 15000, 'meta row');
     
     if (metaError) {
       devError('Cloud meta load error:', metaError);
@@ -4809,12 +4818,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     try { writeToLocal('ecommerce_active_store_id', targetStoreId); } catch (e) {}
 
     // Load the specific store's row
-    const { data: storeRow, error: storeError } = await supabase
+    const { data: storeRow, error: storeError } = await withTimeout(supabase
       .from('app_data')
       .select('data, updated_at')
       .eq('user_id', session.user.id)
       .eq('store_id', targetStoreId)
-      .maybeSingle();
+      .maybeSingle(), 20000, 'store data');
     
     if (storeError) {
       devError('Cloud store load error:', storeError);
@@ -5121,8 +5130,31 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setCloudStatus('');
     return { ok: true, reason: 'success', stores: loadedStores };
   } catch (err) {
-    devError('Cloud load unexpected error:', err);
-    setCloudStatus('');
+    const isTimeout = err?.message?.includes('Timeout');
+    console.error('[LoadCloud]', isTimeout ? 'TIMEOUT' : 'ERROR', err?.message || err);
+    setCloudStatus(isTimeout ? 'Connection timed out — retrying…' : '');
+    if (isTimeout) {
+      // Auto-retry once after timeout, then fall back to localStorage
+      try {
+        console.log('[LoadCloud] Retrying after timeout…');
+        const { data: retryMeta } = await supabase
+          .from('app_data').select('data')
+          .eq('user_id', session.user.id).eq('store_id', '_meta')
+          .maybeSingle();
+        if (retryMeta?.data) {
+          console.log('[LoadCloud] Retry succeeded — restarting load');
+          loadFromCloudLockRef.current = false;
+          return loadFromCloud(storeId);
+        }
+      } catch (retryErr) {
+        console.warn('[LoadCloud] Retry also failed:', retryErr?.message);
+      }
+      // Fall back to localStorage so the app isn't stuck
+      console.log('[LoadCloud] Falling back to localStorage');
+      setCloudStatus('Offline mode — using cached data');
+      loadFromLocal();
+      return { ok: false, reason: 'timeout', stores: [] };
+    }
     return { ok: false, reason: 'error', stores: [] };
   } finally {
     loadFromCloudLockRef.current = false; // Release concurrency lock
