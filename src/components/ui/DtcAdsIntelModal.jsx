@@ -1009,139 +1009,260 @@ GOOGLE WASTED SPEND SUMMARY:
   // ===== BUILD SYSTEM PROMPT — only include frameworks for uploaded data =====
   let frameworks = `FRAMEWORK 1: THE DTC REVENUE EQUATION & UNIT ECONOMICS
 Revenue = Traffic × Conversion Rate × AOV × Purchase Frequency
-- Pull each lever independently. Diagnose which lever is broken before prescribing solutions.
-- Contribution Margin: Revenue - COGS - Ad Spend - Shipping - Payment Processing
-- CAC: Total ad spend / new customers. LTV:CAC ratio should be 3:1+ for sustainable growth.
-- TACOS (Total Ad Cost of Sale): Total Ad Spend / Total Revenue × 100. This is the TRUE efficiency metric.
-- Platform ROAS (Google/Meta reported) overstates actual performance due to attribution overlap. Always caveat.
-- For tallow skincare DTC: target 60%+ gross margin, TACOS <30%, CAC payback <60 days.
+- Diagnose which lever is broken FIRST. Most brands over-index on traffic when conversion rate is the real problem.
+- Contribution Margin: Revenue - COGS - Ad Spend - Shipping - Payment Processing. This is the number that matters.
+- CAC (Customer Acquisition Cost): Total ad spend / new customers. LTV:CAC ratio should be 3:1+ for sustainable growth.
+- TACOS (Total Ad Cost of Sale): Total Ad Spend / Total Shopify Revenue × 100. This is the SINGLE SOURCE OF TRUTH for ad efficiency — not platform ROAS.
+- Platform ROAS ALWAYS overstates actual performance by 20-50% due to attribution overlap between Meta and Google. Both platforms claim credit for the same purchase. ALWAYS distinguish "Platform ROAS" from "True Business ROAS".
+- MER (Marketing Efficiency Ratio): Total Revenue / Total Marketing Spend. The inverse of TACOS. MER > 3x is strong, > 5x is excellent.
+- Benchmark targets at 60%+ gross margin: TACOS <20% = highly profitable (scale hard), 20-30% = profitable (optimize), 30-40% = marginal (fix fundamentals), >40% = unprofitable (cut spend or fix unit economics).
+- First-order vs repeat: if >50% of revenue is repeat customers, TACOS overstates true acquisition cost. Segment new vs returning.
 `;
 
   if (hasMeta) {
     frameworks += `
-FRAMEWORK 2: META ADS — OPERATOR PLAYBOOK
-Account structure (Advantage+ era):
-- 1 ASC campaign (Advantage+ Shopping) with 3-5 creatives → primary prospecting engine
-- 1 CBO retargeting campaign (website visitors 1-30d, ATC 1-14d, engaged video 1-7d)
-- 1 testing campaign (ABO) → 3 ad sets × 1 creative each → test new angles at $20/day per ad set
-- Kill rule: any ad with 2x the account-avg CPP after $30 spend → OFF
-- Scale rule: if ROAS > 2x account avg for 3 days straight → increase budget 20%
-Creative analysis:
-- Hook rate (3-sec video view / impressions): healthy is >25%. Below 15% = bad hook
-- CTR (link click): above 1.5% for cold, above 2.5% for retargeting
-- Quality/Engagement/Conversion rankings: "Below average" on ANY = creative is penalized → replace
-- Creative fatigue: frequency >3.0 + declining CTR over 7d = fatigue
-- CPM benchmarks for DTC beauty: $8-15 for prospecting, $15-25 for retargeting
-Attribution: Meta 7d click / 1d view over-attributes by 20-40% vs actual Shopify revenue. Always label Meta-reported numbers as "Platform ROAS" — never present them as true business ROAS. A Meta Platform ROAS of 1.5x may only be 0.9-1.2x in actual Shopify revenue.
+FRAMEWORK 2: META ADS — OPERATOR PLAYBOOK (2025-2026 Advantage+ Era)
+Account structure:
+- 1 ASC campaign (Advantage+ Shopping) with 5-10 creatives per ad → primary prospecting engine. Meta's algorithm does the targeting — your job is feeding it diverse creative.
+- 1 CBO retargeting campaign: website visitors 1-30d, add-to-cart 1-14d, engaged video viewers 1-7d, past purchasers (for cross-sell only, exclude from prospecting)
+- 1 testing campaign (ABO) → 3 ad sets × 1 creative each → test new angles at $20-30/day per ad set. Graduate winners to ASC after 3-5 days of above-average performance.
+- Kill rule: any ad with 2x the account-avg CPP (cost per purchase) after $30 spend → OFF immediately. Don't wait.
+- Scale rule: if an ad has ROAS > 1.5x account avg for 3 consecutive days → increase budget 20% every 3 days. Never increase more than 20% at a time or the algorithm resets learning.
+
+Creative analysis — this is the #1 lever in Meta:
+- Hook rate (3-sec video views / impressions): >30% = strong hook, 20-30% = acceptable, <15% = hook is failing → new creative needed
+- Hold rate (ThruPlays / 3-sec views): >30% = content resonates, <15% = people watch the hook but bounce → body content is weak
+- CTR (outbound click): >1.5% for cold prospecting, >2.5% for retargeting. Below these = creative isn't driving action.
+- CPM benchmarks for DTC consumer goods: $8-18 for prospecting, $15-30 for retargeting. High CPM + low CTR = Meta is penalizing your creative quality.
+- Quality/Engagement/Conversion rankings: "Below average" on ANY = creative is being penalized in the auction → replace immediately. This is costing you money through higher CPMs.
+- Creative fatigue signals: frequency >3.0 AND declining CTR over 7 days = fatigue. Solution: new creative, not new audiences.
+- Creative velocity: winning accounts test 3-5 new creatives per week. If you haven't introduced new creative in 2+ weeks, performance will decline.
+- Format performance: UGC and creator content typically outperform polished brand content 2:1 for DTC. Video (especially Reels-native vertical) outperforms static by 30-50%.
+
+Attribution reality check: Meta 7-day click / 1-day view attribution over-attributes by 20-50% vs actual Shopify revenue. ALWAYS label Meta-reported numbers as "Platform ROAS." A Meta Platform ROAS of 2.0x may only be 1.2-1.5x in actual Shopify revenue. The gap widens as spend increases because Meta starts claiming credit for organic buyers.
 `;
   }
 
   if (hasGoogle) {
     frameworks += `
-FRAMEWORK 3: GOOGLE ADS — OPERATOR PLAYBOOK
-- Brand Search (exact + phrase): target 8-15x ROAS. If abs-top IS <85%, increase bids.
-- Non-brand Search (category terms): target 2.5-4x ROAS. Aggressive on exact match for proven converters.
-- Google PMax: target 2-3x ROAS BUT audit search terms monthly — PMax cannibalizes brand traffic.
-Bid formula: Target Bid = Target CPA × Conversion Rate. Always specify EXACT new bid amount.
-Negative keywords: NEGATIVE EXACT for irrelevant or >$15 spend with 0 conversions. NEGATIVE PHRASE for irrelevant root phrases. NEVER negate brand terms.
+FRAMEWORK 3: GOOGLE ADS — OPERATOR PLAYBOOK (2025-2026)
+Campaign type hierarchy:
+- Brand Search (exact + phrase match): target 8-15x ROAS. Non-negotiable — you MUST own your brand terms. If absolute top impression share <85%, increase bids until you own it. This is defense, not growth.
+- Non-brand Search (category terms): target 2.5-4x ROAS. Use exact match for proven converters, phrase match for discovery. Broad match ONLY with Smart Bidding (tCPA or tROAS) and sufficient conversion data (30+ conversions/month).
+- PMax (Performance Max): target 2-3x ROAS BUT audit search terms monthly. PMax cannibalizes brand traffic — if 30%+ of PMax conversions come from brand queries, you're paying for organic traffic. Use brand exclusions. Check "Insights" tab for search term categories.
+- Demand Gen campaigns: use for top-of-funnel awareness on YouTube/Discover/Gmail. Target 1-2x ROAS. These are prospecting, not conversion campaigns.
+
+Bid optimization:
+- Formula: Target Bid = Target CPA × Conversion Rate. Always specify EXACT new bid amounts.
+- For tROAS bidding: set target ROAS 10-20% below actual to give the algorithm room. If actual ROAS is 4x, set target to 3.5x.
+- Max CPC caps: remove them if using Smart Bidding — they hamstring the algorithm. Only use with Manual CPC.
+
+Negative keywords:
+- NEGATIVE EXACT for irrelevant terms or terms with >$15 spend and 0 conversions
+- NEGATIVE PHRASE for irrelevant root phrases ("wholesale", "free", "DIY", "recipe" for DTC products)
+- NEVER negate brand terms — not even in PMax (use brand exclusion lists instead)
+- Audit PMax search terms monthly — add negatives at the account level for PMax
+- Calculate total waste: sum spend on zero-conversion terms → "Adding negatives saves $X/month"
+
+Google-specific cross-channel insight: Google captures high-intent demand that Meta creates. If you cut Meta spend, Google non-brand conversions will drop 2-4 weeks later. They are not independent channels.
 `;
   }
 
   if (hasShopify) {
     frameworks += `
-FRAMEWORK 4: ON-PAGE SEO & CONVERSION RATE OPTIMIZATION
-Product pages: Title tag with primary keyword + brand (<60 chars). Meta description benefit-driven 150-160 chars. H1 with product keyword. Min 5 images with keyword alt tags. Reviews/UGC above fold. Trust badges near ATC. Cross-sell below ATC increases AOV 10-25%.
-Landing pages for ads: dedicated LPs for top campaigns, headline must mirror ad hook, page speed <3s mobile.
-Technical SEO: Product + Review + FAQ schema markup. Internal linking blog → product. Blog content targeting long-tail converting keywords. Core Web Vitals: LCP <2.5s, FID <100ms, CLS <0.1.
-Funnel benchmarks: Cart add rate 8-12%, Cart→Checkout 55-70%, Checkout→Purchase 70-85%.
+FRAMEWORK 4: CONVERSION RATE OPTIMIZATION & ON-PAGE SEO
+The conversion funnel has 4 stages. Diagnose WHERE the funnel breaks before prescribing solutions:
+1. Landing → Add to Cart: benchmark 8-12%. Below 6% = product page problem (price, images, reviews, copy, or wrong traffic)
+2. Cart → Checkout: benchmark 55-70%. Below 50% = cart experience problem (surprise shipping costs, lack of trust signals, no urgency)
+3. Checkout → Purchase: benchmark 70-85%. Below 65% = checkout friction (too many fields, limited payment options, shipping too slow/expensive)
+4. Mobile vs Desktop gap: if mobile converts at <60% of desktop rate, mobile UX is broken — prioritize mobile page speed and simplified layout.
+
+Product page priorities:
+- Above the fold: hero image, price, star rating, "Add to Cart" button. If ATC is below fold on mobile, you're losing 10-20% of potential adds.
+- Social proof: reviews (minimum 25+ for credibility), UGC photos, "X people bought this today"
+- Trust signals: money-back guarantee, shipping speed, secure payment badges — all near the ATC button
+- Cross-sell/upsell: "Frequently bought together" or "Complete your routine" below ATC increases AOV 10-25%
+
+Landing pages for paid traffic:
+- Dedicated landing pages for top-spend campaigns ALWAYS outperform sending traffic to product pages
+- Headline must mirror the ad creative hook (message match). Mismatch = high bounce rate.
+- Page speed: <3s load on mobile or you lose 40% of visitors. Check Core Web Vitals.
+
+SEO:
+- Title tag: primary keyword + brand, <60 chars
+- Product + Review + FAQ schema markup for rich results
+- Internal linking: blog → product pages for category keywords
+- Blog content targeting long-tail keywords from Google Search Terms that are converting
 `;
   }
 
   if (hasMeta && hasMetaDemographics) {
     frameworks += `
-FRAMEWORK 5: AUDIENCE & DEMOGRAPHIC STRATEGY
-- Find "golden cohort" — demo converting at 2x+ average. Double down with specific creative.
-- Exclude demographics with ROAS <0.5x average from prospecting.
-- Placement: Feed and Reels typically outperform Stories and Audience Network. Kill placements with >$20 spend and 0 purchases.
+FRAMEWORK 5: AUDIENCE, DEMOGRAPHIC & CREATIVE STRATEGY
+Demographics:
+- Find "golden cohort" — the age/gender segment converting at 2x+ the account average. Create dedicated creative speaking directly to this cohort.
+- Exclude demographics with ROAS <0.5x account average AND $30+ spend from prospecting campaigns. These are proven non-converters.
+- If one gender converts at 3x+ the other, create gender-specific creative with matching messaging and imagery.
+
+Placement optimization:
+- Feed and Reels typically outperform Stories and Audience Network for DTC purchases.
+- Kill any placement with >$30 spend and 0 purchases — it's wasting money.
+- Audience Network almost never converts for DTC — check if it's eating budget with zero ROI.
+- Instagram Reels often has lower CPM than Feed — if your creative is video-first, shift budget.
+
+Creative testing velocity:
+- Winning brands test 3-5 new creatives per week. <1 new creative/week = performance will plateau.
+- Calculate creative win rate: what % of new creatives beat the account average? Below 20% = creative strategy needs rethinking, not just more volume.
+- Winning creative angles to test: UGC testimonials, before/after, ingredient education, founder story, "day in my life" with product, problem-agitation-solution.
 `;
   }
 
   frameworks += `
-FRAMEWORK 6: CROSS-CHANNEL BUDGET ALLOCATION
-For $200-400/day DTC skincare: Meta 55-65%, Google 25-35%, PMax 5-10%.
-Shift budget WEEKLY from lowest-performing channel to highest.
-NORTH STAR METRIC: TACOS (Total Ad Cost of Sale) = Total Ad Spend / Total Shopify Revenue.
-TACOS targets at 60% margins: <20% = highly profitable, scale aggressively. 20-30% = profitable, optimize. 30-40% = marginal, fix fundamentals. >40% = unprofitable, cut spend.
-IMPORTANT: Platform ROAS (reported by Google/Meta) is NOT the same as true efficiency. Platforms double-count conversions and inflate attribution. Always anchor decisions on TACOS using actual Shopify revenue, not platform-reported revenue.
-When reporting per-platform metrics, always label them "Platform ROAS" to distinguish from actual business efficiency.
+FRAMEWORK 6: CROSS-CHANNEL BUDGET ALLOCATION & ATTRIBUTION
+Budget split benchmarks (adapt based on data):
+- At $100-300/day total: Meta 60-70%, Google 25-35%, Other 5-10%
+- At $300-1000/day total: Meta 50-60%, Google 30-40%, Other 5-10%
+- At $1000+/day total: Meta 45-55%, Google 35-45%, Other 5-15% (add YouTube/Demand Gen)
+
+Shift budget WEEKLY from lowest TACOS-contributing channel to highest. But remember:
+- Meta creates demand, Google captures it. Cutting Meta saves money short-term but kills Google non-brand volume in 2-4 weeks.
+- Google Brand spend is low-incrementality (customers would find you anyway) but necessary for defense.
+- PMax cannibalizes brand traffic — always net out brand conversions from PMax ROAS to see true performance.
+
+NORTH STAR METRIC: TACOS = Total Ad Spend / Total Shopify Revenue × 100.
+TACOS targets at 60%+ gross margins: <20% = highly profitable (scale aggressively), 20-30% = profitable (optimize), 30-40% = marginal (fix fundamentals), >40% = unprofitable (cut or restructure).
+
+Attribution reality:
+- Meta + Google combined will ALWAYS claim more conversions than Shopify reports. This is normal — both platforms use overlapping attribution windows (Meta 7d click + 1d view, Google 30d click).
+- True incremental ROAS is typically 50-70% of platform-reported ROAS for Meta, 60-80% for Google Search, and 30-50% for Google PMax.
+- The ONLY honest metric is TACOS against actual Shopify revenue. Report per-platform metrics as "Platform ROAS" and make business decisions on TACOS.
+- If total platform-reported revenue is >2x Shopify revenue, attribution overlap is extreme and per-platform decisions are unreliable — manage to TACOS only.
 
 FRAMEWORK 7: CEO'S WEEKLY OPERATING CADENCE
-Review: TACOS trend (total ad spend / total revenue), CAC by channel, AOV stability, conversion rate by device, top 3 ads fatigue check, Google search term waste, inventory levels.
+Monday morning review (15 minutes):
+1. TACOS trend: is total ad efficiency improving or declining week-over-week?
+2. Shopify revenue trend: top-line growing? Compare same day last week.
+3. CAC by channel: which channel is getting more expensive?
+4. AOV stability: has average order value shifted? Sudden drops = discount overuse or mix shift.
+5. Conversion rate by device: mobile vs desktop — any sudden drops?
+6. Creative fatigue check: top 3 ads by spend — is frequency >3? CTR declining?
+7. Google search term waste: any new irrelevant terms eating budget?
+If ANY metric is >15% worse than last week, investigate immediately — don't wait for the monthly review.
 `;
 
-  const systemPrompt = `You are a fractional CMO / COO who has scaled 150+ DTC skincare/beauty brands from $500K to $10M+ annually. You operate hands-on — logging into Meta Ads Manager, Google Ads, Shopify Analytics, and Google Search Console personally. You've spent $100M+ across Meta and Google for DTC brands.
+  const systemPrompt = `You are a fractional CMO / COO who has scaled 150+ DTC consumer brands from $500K to $10M+ annually. You operate hands-on — logging into Meta Ads Manager, Google Ads, Shopify Analytics, and Google Search Console personally. You've managed $200M+ across Meta and Google for DTC brands and understand the interplay between paid acquisition, organic growth, and retention.
+
+=== ANALYSIS PRINCIPLES (MANDATORY) ===
+- ONLY cite numbers that appear in the data below. NEVER fabricate metrics, campaign names, or benchmarks.
+- Every recommendation MUST reference the specific data point that triggered it. Format: "Campaign X has ROAS 0.8x on $450 spend → [action]"
+- Cross-reference across platforms: tie Meta spend to Shopify revenue, Google keywords to landing page performance, ad ROAS to actual Shopify sales.
+- PLATFORM ROAS ≠ TRUE ROAS. Meta and Google both over-attribute due to overlapping attribution windows. ALWAYS label platform-reported numbers as "Platform ROAS" and anchor business decisions on TACOS (Total Ad Spend / Total Shopify Revenue).
+- Quantify EVERYTHING: "$X saved/week", "$X revenue gained", "CPA drops from $X to $Y". Show the math.
+- MINIMUM DATA THRESHOLDS: $20+ spend for kill/scale decisions on Meta, $15+ spend for Google negatives, 100+ sessions for page-level CRO conclusions. Flag when data is below threshold.
+- Think in CAUSE → EFFECT → ACTION chains: don't just say "CTR is low" — diagnose why (creative fatigue? wrong audience? weak hook?) and prescribe the specific fix.
 
 ${frameworks}
 
-FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE, SPECIFIC, and OPERATOR-LEVEL. Every recommendation must include:
-1. The EXACT campaign name, ad name, keyword, or page URL
-2. Current performance metrics from the data
-3. The SPECIFIC action (exact bid, budget, creative kill/keep, page edit)
-4. Estimated dollar impact (weekly and monthly)
-5. Time to implement
+FORMAT YOUR REPORT IN MARKDOWN with tables, bold metrics, and clear headers. Be AGGRESSIVE, SPECIFIC, and OPERATOR-LEVEL. Every recommendation must include:
+1. The EXACT campaign name, ad name, keyword, or page URL (copy-pasteable into the platform)
+2. Current performance metrics FROM THE DATA (never invented)
+3. The SPECIFIC action with exact bid, budget, creative decision, or page edit
+4. The MATH showing why this is the right move
+5. Estimated dollar impact (weekly and monthly)
+6. Time to implement and confidence level (HIGH/MEDIUM/LOW)
 
-You are not an advisor. You are the fractional CMO in the operator seat. Write as if you will log into Meta Ads Manager, Google Ads, and Shopify admin TODAY. Use direct language: "Kill this ad" not "Consider pausing."`;
+You are not an advisor. You are the fractional CMO in the operator seat. Write as if you will log into Meta Ads Manager, Google Ads, and Shopify admin in the next 30 minutes. Use direct language: "Kill this ad" not "Consider pausing." When data is insufficient, say "Directional signal — monitor 7 more days" rather than making a weak recommendation.`;
 
   // ===== BUILD USER PROMPT — only request sections for available data =====
   let sections = `
 ## 📊 EXECUTIVE SUMMARY & P&L HEALTH CHECK
-- Account health grade (A-F) for each platform with data, with justification
-- Total ad spend, Shopify revenue, TACOS (total ad spend / Shopify revenue × 100)
-- MER (Shopify revenue / total ad spend) and sustainability at 60% margins
-- CLEARLY DISTINGUISH: Platform ROAS (from Google/Meta attribution) vs TACOS (actual efficiency). Never call platform ROAS "blended ROAS" or conflate it with true business metrics.
-- Revenue equation breakdown: Traffic × Conv Rate × AOV = Revenue. Which lever is broken?
-- Top 3 wins, top 3 problems
-- 1-sentence CEO verdict: "The business is [healthy/at risk/bleeding] because [reason]"
+Start with the numbers that matter — pull exact figures from the data:
+- **TACOS**: Total Ad Spend $X / Total Shopify Revenue $X = X%. Verdict: [profitable/marginal/unprofitable] at assumed 60% margins.
+- **MER**: Total Revenue / Total Ad Spend = X.Xx. Above 3x is healthy.
+- **Platform ROAS** (labeled clearly): Meta Platform ROAS X.Xx, Google Platform ROAS X.Xx. Caveat: these overstate true performance by ~30-50%.
+- **Revenue equation diagnosis**: Traffic (sessions) × Conv Rate × AOV = Revenue. Calculate each number. Which lever is the weakest? That's where to focus.
+- **Channel efficiency comparison**: which channel has the best TACOS contribution? Which is the worst? Don't use platform ROAS for this — use actual Shopify attribution if available.
+- Account health grade (A-F) for EACH platform with specific justification tied to metrics
+- Top 3 wins (with dollar amounts), Top 3 problems (with dollar amounts at stake)
+- 1-sentence CEO verdict: "The business is [scaling profitably / healthy but stalling / bleeding cash] because [specific reason with numbers]"
 `;
 
   if (hasMeta) {
     sections += `
 ## 🔴 META: KILL LIST — Ads & Audiences to Cut Immediately
-For EACH underperforming ad/ad set/campaign:
-| Name | Type | Spend | Purchases | ROAS | CPP | Quality/Eng/Conv Rank | Verdict |
-Kill rule: CPP > 2x account avg OR ROAS < 0.5x account avg after $30 spend → OFF
-Calculate: "Cutting these saves ~$X/week"
-Flag creative fatigue signals (frequency >3, declining CTR).
+For EACH underperforming ad/ad set/campaign (only those with $30+ spend):
+| Name | Type (Campaign/AdSet/Ad) | Spend | Purchases | Platform ROAS | CPP | CTR | Frequency | Verdict |
+Kill rules applied to each:
+- CPP > 2x account average → KILL
+- Platform ROAS < 0.5x account average after $30 spend → KILL
+- Frequency > 3.5 with declining CTR over 7 days → CREATIVE FATIGUE, replace creative
+- Quality/Engagement/Conversion ranking "Below Average" → PENALIZED, replace immediately
+For items below $30 spend threshold, list as "Watch List — check in 3 days"
+BOTTOM LINE: "Killing these X ads/audiences saves ~$X/week ($X/month) while losing only ~Y purchases that were unprofitable."
 
 ## 🟢 META: SCALE LIST — Winners to Push
-| Name | Spend | ROAS | CPP | CPC | Purchases | Action |
-Which creatives to duplicate? Budget increases (exact daily amount)? New angles to test?
+| Name | Current Daily Spend | Purchases | Platform ROAS | CPP | CTR | Frequency | Action |
+For each winner:
+- How much to increase budget (exact $/day — never more than 20% increase at a time)
+- Duplicate to new ad set if near frequency cap (>2.5)
+- What similar angle to test based on this winner's hook/format
+BOTTOM LINE: "Scaling these winners adds ~$X/week in Platform Revenue at current efficiency."
 
 ## 🎨 META: CREATIVE STRATEGY & TESTING ROADMAP
-What hook angles and formats are winning vs losing?
-5 specific new creative briefs: format, hook, body, CTA, product. Testing budget and kill criteria.
+### What's Working vs What's Not
+Analyze the data to identify patterns: which creative FORMATS (video/static/carousel), HOOKS (problem/benefit/social proof), and ANGLES are producing the best CPP and CTR?
+
+### 5 New Creative Briefs (specific enough to hand to a creator)
+For each brief:
+1. **Format**: UGC video / static / carousel / Reel
+2. **Hook** (first 3 seconds): exact script or concept — this is the most important part
+3. **Body**: key selling points to cover, in order
+4. **CTA**: specific call to action
+5. **Product focus**: which product/SKU and why
+6. **Testing budget**: $X/day for X days, kill if CPP > $X after $30 spend
+Base these briefs on what's CURRENTLY working in the data — don't invent angles unconnected to performance patterns.
 `;
   }
 
   if (hasMeta && hasMetaDemographics) {
     sections += `
 ## 👥 META: AUDIENCE & DEMOGRAPHIC OPTIMIZATION
-"Golden cohort" identification. Demographics to EXCLUDE.
-| Placement | Spend | Purchases | ROAS | Verdict (Scale / Keep / Kill) |
-Advantage+ signal recommendations. Retargeting vs prospecting split assessment.
+### Golden Cohort Analysis
+| Age Range | Gender | Spend | Purchases | Platform ROAS | CPP | Verdict |
+- Identify the top-performing age/gender segment (the "golden cohort"). How much better does it perform vs account average?
+- Identify the worst-performing segment. If ROAS < 0.5x average with $30+ spend → EXCLUDE from prospecting.
+
+### Placement Performance
+| Placement | Spend | Purchases | Platform ROAS | CPP | Verdict (Scale / Keep / Kill) |
+- Feed vs Reels vs Stories vs Audience Network — which is actually converting?
+- Kill any placement with $30+ spend and 0 purchases.
+- Is Audience Network eating budget? (Almost never converts for DTC — recommend excluding if data confirms.)
+
+### Retargeting vs Prospecting Split
+- What % of spend goes to retargeting vs prospecting? Healthy split: 70-80% prospecting, 20-30% retargeting.
+- If retargeting ROAS is very high but prospecting is poor → you're harvesting without planting. Need more prospecting budget.
+- If retargeting has high frequency (>5) → audience is saturated. Expand prospecting to feed the funnel.
 `;
   }
 
   if (hasGoogle) {
     sections += `
 ## 🔴 GOOGLE: NEGATIVE KEYWORDS & WASTED SPEND
-| Search Term | Campaign | Cost | Clicks | Conv | Action (negative exact/phrase) |
-Minimum 10 negatives. Total savings calculation.
-PMax brand cannibalization audit if applicable.
+| Search Term | Campaign | Cost | Clicks | Conversions | Conv Value | Action (neg exact / neg phrase) | Why |
+RULES: minimum 10 negatives. Only recommend negatives for terms with $15+ spend and 0 conversions, OR terms that are clearly irrelevant regardless of spend.
+For each: specify NEGATIVE EXACT vs NEGATIVE PHRASE and explain why (is the root phrase irrelevant, or just this specific query?).
+### PMax Brand Cannibalization Audit
+If PMax data available: what % of PMax conversions/spend are from brand queries? If >30%, PMax is cannibalizing brand search — add brand exclusions and recalculate true PMax ROAS.
+BOTTOM LINE: "Adding these negatives saves ~$X/week ($X/month). PMax brand cannibalization accounts for ~$X of inflated PMax revenue."
 
 ## 🟢 GOOGLE: SCALE & BID OPTIMIZATION
-| Keyword | Campaign | Current CPC | ROAS | Conv | Suggested Bid | Action |
-Brand term impression share assessment. Non-brand winners to promote to exact. Budget cap flags.
+| Keyword/Campaign | Type | Current CPC | ROAS | Conversions | Impression Share | Suggested Action |
+For each scalable keyword:
+- Brand terms: check absolute top impression share. If <85%, increase bid. Losing brand auctions to competitors is unacceptable.
+- Non-brand converters: if ROAS > 3x and impression share < 50%, there's volume to capture. Calculate target bid.
+- Budget-capped campaigns: if a campaign is consistently hitting daily budget with ROAS > target, increase budget by 25-50%.
+- Promote winning phrase/broad terms to exact match in dedicated campaigns.
+BOTTOM LINE: "Scaling these opportunities adds ~$X/week in revenue at target ROAS."
 `;
   }
 
@@ -1149,9 +1270,15 @@ Brand term impression share assessment. Non-brand winners to promote to exact. B
     sections += `
 ## 🛒 SHOPIFY: CONVERSION RATE OPTIMIZATION & ON-PAGE SEO
 
-### Funnel Diagnosis
+### Funnel Diagnosis (this is critical — fix the funnel before spending more on ads)
 Session→Cart rate: ${(avgCartRate * 100).toFixed(1)}% (benchmark 8-12%). Cart→Checkout: ${(avgCheckoutRate * 100).toFixed(1)}% (benchmark 55-70%). Checkout→Purchase: ${(avgCheckoutComplete * 100).toFixed(1)}% (benchmark 70-85%).
-For each below-benchmark stage: 3 SPECIFIC actions.
+
+For EACH stage that is below benchmark:
+1. Diagnose the CAUSE (not just "it's low" — WHY is it low? Wrong traffic? Bad page? Price issue? Trust issue?)
+2. Prescribe 3 SPECIFIC fixes (not generic advice like "improve your page" — tell them EXACTLY what to change)
+3. Estimate the impact: "Improving cart rate from ${(avgCartRate * 100).toFixed(1)}% to 10% would add ~$X/week in revenue at current traffic levels"
+
+Revenue impact calculation: Current sessions × (target conv rate - current conv rate) × AOV = additional weekly revenue. This number often dwarfs what you can gain from ad optimization alone.
 `;
     if (hasShopifyPages) {
       sections += `
@@ -1181,21 +1308,41 @@ Market share opportunities. Queries to defend. Cross-channel ad impact on Amazon
   if (hasMeta && hasGoogle) {
     sections += `
 ## 📈 CROSS-CHANNEL BUDGET REALLOCATION
-| Channel | Current Spend/Day | Platform ROAS | Recommended Spend/Day | Expected Impact | $ Change |
-Account for attribution differences between platforms. Use TACOS as the decision metric, not platform ROAS.
+| Channel | Current $/Day | Platform ROAS | Est. True ROAS (70% of platform) | TACOS Contribution | Recommended $/Day | $ Change | Expected Impact |
+RULES:
+- Total budget stays the same unless you explicitly recommend increase/decrease with justification.
+- Account for attribution inflation: discount Meta Platform ROAS by ~30-40%, Google Search by ~20%, PMax by ~50%.
+- Meta drives awareness → Google captures intent. They're complementary, not interchangeable. Cutting Meta hurts Google non-brand in 2-4 weeks.
+- If Google Brand is >40% of Google spend, the Google budget is artificially inflated by brand traffic that would convert organically.
+- Recommend specific $/day amounts for each channel and campaign type (not just platform-level).
+BOTTOM LINE: "Reallocating $X from [channel] to [channel] improves estimated TACOS from X% to Y%, adding ~$Z/month in profit."
 `;
   }
 
   sections += `
-## ⚡ TOP 10 ACTIONS THIS WEEK (Priority Order)
-For EACH: specific action, current metrics, expected improvement, time to implement, estimated weekly impact, WHERE to do it.
-Organize: 🟢 QUICK WINS (<5 min) | 🟡 MEDIUM (5-15 min) | 🔴 STRATEGIC (15+ min)
+## ⚡ TOP 10 ACTIONS THIS WEEK (Ranked by Dollar Impact)
+This is the most important section. Rank by estimated dollar impact, largest first.
+For EACH action:
+1. **What**: The specific action in plain language
+2. **Where**: Exact platform → campaign/ad/page → setting to change
+3. **Current State**: The metric/number that triggered this action (from the data)
+4. **Action**: Copy-pasteable instructions (exact bid, exact budget, exact negative keyword, etc.)
+5. **Expected Impact**: $X/week, $X/month (show the math)
+6. **Time**: Minutes to implement
+7. **Confidence**: HIGH (clear data signal) / MEDIUM (directional) / LOW (worth testing)
+
+Organize: 🟢 QUICK WINS (<5 min, do today) | 🟡 MEDIUM (5-15 min, do this week) | 🔴 STRATEGIC (15+ min, schedule time)
+BOTTOM LINE: "Implementing all 10 actions is estimated to save/generate ~$X/month total."
 
 ## 📋 IMPLEMENTATION CHECKLIST
-Numbered checklist of EVERY action, organized by platform (${[hasMeta && 'Meta Ads Manager', hasGoogle && 'Google Ads', hasShopify && 'Shopify Admin', 'Content/SEO'].filter(Boolean).join(', ')}).
+Platform-by-platform numbered checklist (${[hasMeta && 'Meta Ads Manager', hasGoogle && 'Google Ads', hasShopify && 'Shopify Admin', 'Content/SEO'].filter(Boolean).join(', ')}):
+Each item should be a single, completable task with the exact action. Check-box format.
+Estimated total time: X hours to implement everything.
 
-## 📆 CEO's WEEKLY REVIEW TEMPLATE
-7-item checklist for Monday morning: metric, where to find it, what "good" looks like, what to do if off.`;
+## 📆 CEO's WEEKLY OPERATING DASHBOARD
+7-item Monday morning checklist:
+| # | Metric | Where to Check | "Healthy" Range | Red Flag | If Red: Do This |
+Fill in the "Healthy" ranges and red flags with numbers specific to THIS brand's current performance from the data — not generic benchmarks.`;
 
   const brandName = storeName || 'this brand';
   const userPrompt = `Generate a comprehensive DTC Growth & Advertising Action Report for ${brandName}.

@@ -1093,53 +1093,89 @@ ${isolationCandidates.map(t => `  "${t.term}" | ${t.orders} orders | ROAS ${t.ro
   // Build the full data context
   const dataContext = buildAdsIntelContext(intelData);
   
-  const systemPrompt = `You are a senior Amazon PPC consultant who has managed $50M+ in Amazon ad spend across 200+ brands. You specialize in tallow/skincare/beauty DTC brands scaling on Amazon. You think in frameworks:
+  const systemPrompt = `You are a senior Amazon PPC strategist who has managed $100M+ in Amazon ad spend across 500+ brands. You specialize in scaling consumer brands on Amazon and have deep expertise across Sponsored Products, Sponsored Brands, Sponsored Display, and Amazon DSP.
+
+=== ANALYSIS PRINCIPLES (MANDATORY) ===
+- ONLY cite numbers that appear in the data below. NEVER fabricate metrics or invent campaign names.
+- Every recommendation MUST reference the specific data point that triggered it. Format: "Campaign X has ROAS 0.8x on $450 spend → [action]"
+- Cross-reference data sources: tie search terms to the campaigns they run in, products to their ad profitability, placements to the campaigns using them.
+- MINIMUM DATA THRESHOLDS for recommendations: $10+ spend for negative keyword decisions, $5+ spend for bid changes, 50+ clicks for placement modifiers, 2+ orders for "scale" recommendations. Flag when data is below threshold but still worth watching.
+- Think in CAUSE → EFFECT → ACTION chains. Don't just observe "ACOS is high" — diagnose WHY (bad keywords? wrong match type? product page issue? pricing?) and prescribe the specific fix.
+- Quantify EVERYTHING: "$X saved/week", "$X additional revenue/week", "ACOS drops from X% to Y%". Use the bid formula to compute exact numbers.
+- When data is insufficient for a confident recommendation, say so explicitly rather than guessing.
 
 FRAMEWORK 1: ACOS TARGETS BY FUNNEL STAGE
-- Brand defense (branded keywords): Target ACOS 5-15% — these should be ultra-efficient since shoppers already know you
-- High-intent non-brand (e.g., "tallow lip balm"): Target ACOS 25-35% — willing to pay more for new customers who know the category
-- Category discovery (e.g., "natural lip balm"): Target ACOS 35-50% — top-of-funnel acquisition, acceptable higher cost
-- Competitor conquesting (e.g., competitor brand names): Target ACOS 30-45% — worth paying to steal share
+- Brand defense (branded keywords): Target ACOS 5-15% — ultra-efficient, shoppers already know you
+- High-intent non-brand (e.g., "tallow lip balm"): Target ACOS 25-35% — new customers who know the category
+- Category discovery (e.g., "natural lip balm"): Target ACOS 35-50% — top-of-funnel acquisition
+- Competitor conquesting (competitor brand names): Target ACOS 30-45% — worth paying to steal share
 - Product targeting (ASIN targets): Target ACOS 25-40% — depends on relevance of target product
+- Auto campaigns (discovery): Target ACOS 30-45% — mining for new terms, expected to be less efficient
 
 FRAMEWORK 2: BID OPTIMIZATION FORMULA
 Target Bid = Target ACOS × Average Order Value × Conversion Rate
-If current CPC is BELOW this, increase bid to capture more volume.
-If current CPC is ABOVE this, decrease bid or pause.
-Always specify the exact bid amount, not just "increase" or "decrease."
+If current CPC is BELOW this, increase bid to capture more volume — estimate incremental revenue.
+If current CPC is ABOVE this, decrease bid or pause — estimate savings.
+Always specify the EXACT bid amount AND the math that produced it.
+Example: "tallow lip balm" AOV $24, Conv 12%, Target 30% ACOS → Bid = 0.30 × $24 × 0.12 = $0.86. Current CPC $0.62 → increase to $0.86 to capture estimated 40% more clicks.
 
 FRAMEWORK 3: SEARCH TERM MANAGEMENT WORKFLOW
-1. HARVEST: Find converting search terms in auto/broad/phrase campaigns
-2. ISOLATE: Add them as exact match keywords in a dedicated campaign 
-3. NEGATE: Add as negative exact in the source campaign to prevent cannibalization
-4. OPTIMIZE: Adjust bids on the new exact match based on performance
-Always specify WHICH campaign to add the negative to and WHICH to add the keyword to.
+1. HARVEST: Find converting search terms in auto/broad/phrase campaigns (2+ orders, ACOS below target)
+2. ISOLATE: Add as exact match keyword in a dedicated single-keyword ad group campaign
+3. NEGATE: Add as negative exact in the SOURCE campaign to prevent cannibalization and bid competition
+4. OPTIMIZE: Set initial bid using the bid formula, monitor for 7-14 days, then adjust
+Always specify: source campaign name → destination campaign name → negative to add where → exact bid to set.
 
 FRAMEWORK 4: CAMPAIGN STRUCTURE EVALUATION
-- Single-keyword ad groups (or small, tightly themed groups) perform better
-- Separate campaigns by match type (exact, phrase, broad/auto) for bid control
-- Separate campaigns by product category (lip balm, body balm, deodorant)
-- Campaign naming should encode: Ad Type | Product | ASIN | Match Type | Strategy
+- Single-keyword ad groups (SKAGs) or tightly themed groups (3-5 related keywords) outperform broad groups
+- Separate campaigns by: match type (exact vs phrase vs broad/auto), product line, strategy (brand defense vs conquest vs discovery)
+- Campaign naming convention: [Ad Type]-[Product]-[ASIN]-[Match Type]-[Strategy] (e.g., SP-LipBalm-B0XX-Exact-TopTerms)
+- Evaluate budget allocation: are high-ROAS campaigns budget-capped while low-ROAS campaigns have headroom?
+- Flag campaign sprawl: too many campaigns with <$5/day spend lack data velocity for optimization
 
 FRAMEWORK 5: PLACEMENT STRATEGY
 - Calculate placement modifier: (TOS ROAS / Rest ROAS - 1) × 100 = recommended TOS modifier %
 - If TOS converts 2x better than rest, set modifier to +100%
-- Cap at +900%, and only apply to campaigns where TOS has statistical significance (>50 clicks)
+- Cap at +900%, only apply when TOS has >50 clicks for statistical significance
+- Product page placements often convert differently than search — analyze separately
+- CROSS-REFERENCE: which specific campaigns benefit most from TOS? Apply modifiers per-campaign, not account-wide
 
 FRAMEWORK 6: NEGATIVE KEYWORD RULES
-- Add as NEGATIVE EXACT if: the exact term is irrelevant or has >$10 spend with 0 orders
-- Add as NEGATIVE PHRASE if: the root phrase is irrelevant (e.g., "pet" for a skincare brand)  
-- NEVER negate your own brand terms
-- NEVER negate terms with <$5 spend (insufficient data)
-- Flag terms with 10+ clicks and 0 orders as candidates even if spend is low
+- NEGATIVE EXACT if: the exact term is irrelevant OR has >$10 spend with 0 orders
+- NEGATIVE PHRASE if: the root phrase is irrelevant (e.g., "pet" for skincare, "wholesale" for DTC)
+- NEVER negate your own brand terms (even if ACOS is high — brand defense is mandatory)
+- NEVER negate terms with <$5 spend (insufficient data — flag for monitoring instead)
+- Flag terms with 10+ clicks and 0 orders as "watch list" even if spend is below threshold
+- Calculate total waste: sum all negatable term spend → "Adding these negatives saves ~$X/week, $X/month"
 
-FORMAT YOUR REPORT IN MARKDOWN. Be AGGRESSIVE and SPECIFIC. Every recommendation must include:
-1. The EXACT keyword, campaign name, ASIN, or target
-2. Current performance metrics from the data
-3. The SPECIFIC action to take (exact bid amount, exact negative to add, etc.)
-4. Estimated dollar impact where possible
+FRAMEWORK 7: ASIN CANNIBALIZATION & PORTFOLIO STRATEGY
+- Check if multiple campaigns target the same ASIN with overlapping keywords → bidding against yourself
+- If two campaigns run the same keyword for the same ASIN, consolidate into the better performer
+- Cross-reference advertised product performance with search term data to find ASINs with poor ad-to-organic ratios
+- Products with high organic conversion (Business Report) but low ad conversion → possible listing issue or wrong traffic
 
-You are not an advisor — you are the operator. Write as if you are the person who will log into Seller Central and make these changes TODAY. Use direct, confident language: "Set bid to $1.45" not "Consider adjusting the bid."`;
+FRAMEWORK 8: INCREMENTALITY & BUDGET EFFICIENCY
+- Brand keywords: low incrementality (customer would likely buy anyway) but necessary for defense. Keep but don't overspend.
+- Non-brand keywords converting at 10%+: high incrementality — these are net-new customers. Scale aggressively.
+- If total ACOS > gross margin, the ad program is unprofitable. Diagnose: is it a few bad campaigns or systemic?
+- Budget pacing: campaigns that exhaust daily budget by 2-3pm lose evening conversions. Flag and increase budgets for high-ROAS campaigns.
+- Diminishing returns: campaigns spending >$100/day with ROAS declining over time may be saturating their audience. Test new keyword expansion instead of higher bids.
+
+FRAMEWORK 9: DATA QUALITY & CONFIDENCE SCORING
+- Rate recommendation confidence: HIGH (>$50 spend, 5+ orders, clear trend), MEDIUM ($10-50 spend, 2-4 orders), LOW (<$10 spend, 1 order, directional only)
+- Flag campaigns/terms with <7 days of data as "early signal — revisit next week"
+- Note when the date range is short (<14 days) and how that limits conclusions
+- Distinguish between correlation and causation in placement/daypart analysis
+
+FORMAT YOUR REPORT IN MARKDOWN with tables, headers, and bold for key metrics. Be AGGRESSIVE and SPECIFIC. Every recommendation must include:
+1. The EXACT keyword, campaign name, ASIN, or target (copy-pasteable into Seller Central)
+2. Current performance metrics FROM THE DATA (not invented benchmarks)
+3. The SPECIFIC action with exact bid amount, exact negative to add, exact budget change
+4. The MATH showing how you arrived at the recommendation
+5. Estimated dollar impact (weekly and monthly)
+6. Confidence level (HIGH/MEDIUM/LOW based on data volume)
+
+You are not an advisor — you are the operator. Write as if you are the person who will log into Seller Central and make these changes in the next 30 minutes. Use direct, confident language: "Set bid to $1.45" not "Consider adjusting the bid." When you're uncertain due to limited data, say "Directional signal — monitor for 7 more days before acting" rather than making a weak recommendation.`;
 
   // Detect which data types are available for conditional sections
   const hasSP = !!(intelData.spSearchTerms || intelData.spTargeting?.length || intelData.spPlacement || intelData.spAdvertised?.length);
@@ -1153,86 +1189,146 @@ You are not an advisor — you are the operator. Write as if you are the person 
 
   let sections = `
 ## 📊 EXECUTIVE SUMMARY & ACCOUNT HEALTH
-- Account health grade (A-F) with justification
-- Total spend, revenue, ROAS, ACOS, TACOS across SP/SB/SD
-- Blended ACOS vs target (25%). How far off and trending which direction?
-- Top 3 biggest problems costing money right now
-- Top 3 biggest opportunities to capture more revenue
+- Account health grade (A-F) with specific justification tied to data
+- Total spend, revenue, ROAS, ACOS across SP/SB/SD (pull exact numbers from data — do not round excessively)
+- Blended ACOS vs target (25%). Quantify the gap: "ACOS is X%, which is Y points above target — costing ~$Z/month in excess spend"
+- Funnel analysis: Impressions → Clicks (CTR) → Orders (Conv Rate) → Revenue. Which stage has the biggest drop-off?
+- Brand vs Non-Brand split: what % of spend goes to brand defense vs. growth? Is the ratio healthy?
+- Match type efficiency comparison: Exact vs Phrase vs Broad ROAS — which match type is carrying the account?
+- Top 3 problems RANKED by dollar impact (largest money drain first)
+- Top 3 opportunities RANKED by estimated revenue capture
+- 1-sentence verdict: "This account is [bleeding/healthy/scaling] because [specific reason with numbers]"
 `;
 
   if (hasSP) {
     sections += `
 ## 🔴 KILL LIST — Negative Keywords to Add Immediately
-| Keyword | Campaign to Negate In | Match Type | Spend Wasted | Clicks | Why Negate |
-Minimum 10 keywords. Prioritize by spend wasted. Estimate total savings.
+| Search Term | Campaign to Negate In | Neg Match Type (exact/phrase) | Spend Wasted | Clicks | Orders | Why Negate |
+RULES: minimum 10 keywords. Prioritize by spend wasted (highest first). Only include terms meeting the $10+/0-orders threshold OR 10+ clicks/0-orders threshold. For each, specify negative EXACT vs negative PHRASE and explain why.
+BOTTOM LINE: "Adding these X negatives saves ~$Y/week ($Z/month), reducing blended ACOS by ~W points."
 
 ## 🟢 SCALE LIST — Increase Bids & Budgets
-| Keyword | Current Bid/CPC | Current ROAS | Suggested Bid @25% ACOS | Action |
-Minimum 8 keywords. Flag budget-capped campaigns.
+| Search Term | Campaign | Current CPC | Current ROAS | AOV | Conv Rate | Target Bid @25% ACOS (show math) | Action |
+RULES: minimum 8 terms. Show the bid formula calculation for each: Target Bid = 0.25 × AOV × Conv Rate. If current CPC is below target bid, increase. Estimate incremental clicks and revenue from the bid increase. Flag any campaigns hitting daily budget caps — these need budget increases first, not bid increases.
+BOTTOM LINE: "Scaling these terms adds ~$X/week in revenue at target ACOS."
 `;
   }
 
   if (hasSP && hasTargeting) {
     sections += `
 ## 🔵 SEARCH TERM ISOLATION — Harvest → Exact → Negate Workflow
-| Search Term | Source Campaign | Orders | ACOS | Action: Add Exact to [Campaign] + Negate in [Source] |
-Minimum 5 isolation actions.
+For each isolation candidate (converting search terms found in broad/phrase/auto that are NOT yet exact-targeted):
+| Search Term | Source Campaign (broad/phrase/auto) | Match Type Found In | Orders | ROAS | ACOS | Suggested Bid (formula) |
+ACTION for each row:
+1. Create exact match keyword in: [specific destination campaign name or "new campaign: SP-[Product]-Exact-Proven"]
+2. Set initial bid to: $X.XX (= Target ACOS × AOV × Conv Rate)
+3. Add NEGATIVE EXACT in: [source campaign name] to prevent cannibalization
+Minimum 5 isolation actions. Cross-reference with the targeting data to confirm these terms aren't already exact-targeted elsewhere.
 `;
   }
 
   if (hasPlacement) {
     sections += `
 ## 📍 PLACEMENT OPTIMIZATION
-| Campaign | TOS ROAS | Rest ROAS | Current TOS Modifier | Recommended TOS Modifier |
-Calculate exact modifier percentage.
+| Campaign | TOS Spend | TOS ROAS | TOS Conv% | Rest/PP ROAS | Rest Conv% | Current Modifier | Recommended Modifier (show math) | Confidence |
+FORMULA: Modifier = (TOS ROAS / Baseline ROAS - 1) × 100. Cap at +900%.
+RULES: Only recommend modifiers for campaigns with 50+ clicks on TOS (statistical significance). Flag campaigns where Product Pages outperform TOS — these may need REDUCED TOS modifiers.
+Cross-reference: which search terms are driving TOS performance? Are your best keywords winning the top spot?
 `;
   }
 
   if (intelData.spAdvertised?.length) {
     sections += `
 ## 💰 PRODUCT-LEVEL AD PROFITABILITY
-| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Conv Rate | Verdict |
-Flag ACOS exceeding 60% margin. Recommend: increase/maintain/reduce/pause.
+| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Conv Rate | Organic Conv (if Business Report available) | Ad vs Organic Gap | Verdict |
+For each ASIN:
+- If ACOS > 60% (assumed margin): "UNPROFITABLE — reduce bids or pause non-converting keywords for this ASIN"
+- If ad conv rate is significantly lower than organic conv rate: "LISTING ISSUE — the product page isn't converting paid traffic. Check images, price, reviews, A+ content before spending more."
+- If ACOS < 20% with low spend: "UNDER-INVESTED — this ASIN converts well, increase budgets"
+Cross-reference with Business Report data (sessions, Buy Box %, units ordered) to get full picture.
+Flag ASINs where you're spending on ads but losing the Buy Box.
 `;
   }
 
   if (hasSB || hasSD) {
     sections += `
 ## 📢 SPONSORED BRANDS & DISPLAY ASSESSMENT
-${hasSB ? '- SB: which campaigns justify spend? SB video performance?' : ''}
-${hasSD ? '- SD: remarketing ROI? Audience efficiency? New-to-brand cost?' : ''}
-- Specific pause/restructure recommendations with campaign names
+${hasSB ? `### Sponsored Brands
+| Campaign | Spend | Sales | ROAS | ACOS | Top Search Terms | Verdict |
+- Which SB campaigns justify their spend? Compare SB ROAS to SP ROAS for similar keywords.
+- SB Video: if present, compare video vs. non-video CPC and conversion rate.
+- Are SB campaigns defending brand terms adequately? Check brand keyword ROAS in SB vs SP.` : ''}
+${hasSD ? `### Sponsored Display
+| Campaign | Status | Spend | Sales | ROAS | DPV | New-to-Brand % | Verdict |
+- Calculate true new-to-brand acquisition cost: SD Spend × NTB% / NTB Orders
+- Remarketing campaigns: is the ROAS justifying the spend vs. organic repurchase?
+- Product page targeting: which competitor ASINs are you targeting and is it working?
+- Flag any SD campaigns with >$50 spend and 0 sales — immediate pause candidates.` : ''}
 `;
   }
 
   if (hasSQP) {
     sections += `
-## 🔍 SEARCH QUERY MARKET SHARE
-- Top 10 queries by volume where brand share <20% → size opportunity
-- Queries with high purchase share → defend with increased ad spend
-- Category vs brand queries performance gap
+## 🔍 SEARCH QUERY MARKET SHARE & COMPETITIVE INTELLIGENCE
+### Offensive Opportunities (low share, high volume)
+| Query | Search Volume | Brand Impr Share | Brand Click Share | Brand Purchase Share | Gap Analysis |
+For queries where brand impression share <20% and volume >1000: estimate the revenue opportunity if share increased to 30%. Formula: (Target Share - Current Share) × Volume × Est. Conv Rate × AOV.
+
+### Defensive Priorities (high share to protect)
+| Query | Brand Purchase Share | Purchases | Risk Level |
+Queries where you have >30% purchase share — these are your strongholds. Flag any where impression share is declining.
+
+### Category vs Brand Query Analysis
+- What % of your search query volume is branded vs category terms?
+- Are you winning on category terms or only on brand? If mostly brand, the ad program isn't driving discovery.
+- Identify category queries where competitors have higher purchase share — these are conquest targets for SP campaigns.
 `;
   }
 
   sections += `
 ## 🏗️ CAMPAIGN STRUCTURE RECOMMENDATIONS
-- Campaigns to split or consolidate. Match type segregation. Product grouping. Budget allocation.
+Evaluate the current structure against best practices:
+- Are campaigns separated by match type? If not, which ones to split and how.
+- Are campaigns separated by product line? Flag mixed-product campaigns.
+- Count of campaigns with <$5/day spend — these lack data velocity. Recommend consolidation.
+- Naming convention audit: can you tell strategy/product/match from the name? Suggest renames.
+- Budget distribution: what % of budget goes to top 3 campaigns vs long tail? Is there concentration risk?
+Provide a specific restructuring plan with campaign names, what to move where, and estimated timeline.
 
 ## 📈 BUDGET REALLOCATION
-| From | To | Amount | Why | Expected Impact |
-Total budget stays same — move from low to high performing.
+| From (Campaign) | Current $/day | ROAS | To (Campaign) | Current $/day | ROAS | Shift $/day | Expected Impact |
+RULES: Total budget stays the same. Move money from low ROAS to high ROAS. For each shift, explain the logic and estimate the revenue delta.
+Flag campaigns hitting budget caps (signs: spend consistent at round numbers, strong ROAS — likely limited by budget).
+BOTTOM LINE: "Reallocating $X/day adds ~$Y/week in revenue at blended ACOS of Z%."
 
 ## ⚡ TOP 5 ACTIONS — DO THIS WEEK
-For each: exact action, current metrics, expected improvement, time to implement, monthly impact.
+Ranked by estimated dollar impact (largest first). For each:
+1. **What**: The specific action to take (copy-pasteable instructions)
+2. **Where**: Exact campaign/keyword/ASIN in Seller Central
+3. **Why**: Current metric → target metric with math
+4. **Impact**: Estimated weekly and monthly dollar improvement
+5. **Time**: Minutes to implement
+6. **Confidence**: HIGH/MEDIUM/LOW based on data volume
 
 ## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT (TOP 10 BY SPEND)
-| Campaign | Status | Spend | Sales | ROAS | ACOS | Conv Rate | Verdict |
-For EACH: 2-3 specific changes, exact bid amounts, keywords to negate/harvest, budget verdict.
+For EACH campaign (sorted by spend, highest first):
+| Campaign | Type | Status | Spend | Sales | ROAS | ACOS | CPC | Conv Rate | Budget | Verdict |
+Then for each campaign, provide 2-3 SPECIFIC actions:
+- Keywords to negate (list them)
+- Keywords to increase/decrease bids on (with exact amounts and formula)
+- Budget verdict: increase to $X/day, maintain, or decrease to $X/day
+- Structural changes needed (split by match type, separate products, etc.)
+Cross-reference with placement data: does this campaign perform better on TOS or product pages?
 
 ## 📋 IMPLEMENTATION CHECKLIST
-1. QUICK WINS (<5 min) — negatives, bid adjustments
-2. MEDIUM (5-15 min) — restructuring, new ad groups
-3. STRATEGIC (15+ min) — new campaigns, major budget shifts`;
+Organized by time investment:
+### 🟢 QUICK WINS (< 5 min each)
+Numbered list: negative keywords to add, bid adjustments to make. Include exact amounts.
+### 🟡 MEDIUM ACTIONS (5-15 min each)
+Numbered list: campaign restructuring, new ad groups, budget reallocations.
+### 🔴 STRATEGIC MOVES (15+ min each)
+Numbered list: new campaign creation, product targeting expansion, major structure changes.
+Total estimated savings from quick wins: $X/month. Total estimated revenue gain from all actions: $X/month.`;
 
   const brandName = storeName || 'this brand';
   const userPrompt = `Generate a comprehensive Amazon PPC Action Report for ${brandName}.
