@@ -2249,10 +2249,12 @@ tbody tr:nth-child(even) { background: #f9fafb; }
   <p>Amazon PPC Audit &middot; ${dateStr}</p>
   <p style="margin-top:6px;font-size:6.5pt;color:#d1d5db;">AI-generated analysis. Validate recommendations before implementation.</p>
 </div></body></html>`;
-    const w = window.open('', '_blank', 'width=900,height=700');
-    if (!w) { setToast({ message: 'Please allow popups to export PDF', type: 'error' }); return; }
-    w.document.write(printDoc);
-    w.document.close();
+    const blob = new Blob([printDoc], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if (!w) { setToast({ message: 'Please allow popups to export PDF', type: 'error' }); URL.revokeObjectURL(url); return; }
+    // Clean up blob URL after page loads
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const validFiles = detectedFiles.filter(d => d.type && !d.error);

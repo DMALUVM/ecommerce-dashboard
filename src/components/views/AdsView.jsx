@@ -1671,9 +1671,11 @@ ${kpiHtml}
   <p>${modeLabel} Audit &middot; ${dateStr} &middot; ${modelName}</p>
   <p style="margin-top:6px;font-size:6.5pt;color:#d1d5db;">AI-generated analysis. Validate recommendations before implementation. ID: ${Date.now().toString(36).toUpperCase()}</p>
 </div></body></html>`;
-                    const w = window.open('', '_blank', 'width=900,height=700');
-                    if (!w) { setToast({ message: 'Please allow popups to export PDF', type: 'error' }); return; }
-                    w.document.write(printDoc); w.document.close();
+                    const blob = new Blob([printDoc], { type: 'text/html' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    const w = window.open(blobUrl, '_blank');
+                    if (!w) { setToast({ message: 'Please allow popups to export PDF', type: 'error' }); URL.revokeObjectURL(blobUrl); return; }
+                    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
                   }} className="px-3 py-1.5 bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-lg text-white text-[10px] font-medium hover:from-orange-500 hover:to-amber-500 flex items-center gap-1">📊 Export PDF</button>
                 </div>
               </div>
