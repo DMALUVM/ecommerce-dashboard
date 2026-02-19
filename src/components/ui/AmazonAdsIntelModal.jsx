@@ -1091,7 +1091,8 @@ ${camps.slice(0, 25).map(c => `  [${c.type}] ${c.name.substring(0, 55)} | ${c.st
   }
 
   // API-sourced raw report data (provides granular row-level detail the AI can reference)
-  if (intelData._apiSpSearchTerms?.length > 0) {
+  // Skip API search terms if CSV version exists (more detailed, already aggregated)
+  if (intelData._apiSpSearchTerms?.length > 0 && !intelData.spSearchTerms) {
     const terms = intelData._apiSpSearchTerms;
     // Group by search term and compute totals
     const byTerm = {};
@@ -1115,7 +1116,8 @@ WASTED SPEND: ${wasteful.map(t => `"${t.term}" $${t.spend.toFixed(2)} wasted (${
 `;
   }
 
-  if (intelData._apiSpTargeting?.length > 0) {
+  // Skip API targeting if CSV version exists
+  if (intelData._apiSpTargeting?.length > 0 && !(intelData.spTargeting?.length > 0)) {
     const targets = intelData._apiSpTargeting;
     const byTarget = {};
     targets.forEach(r => {
@@ -1136,7 +1138,8 @@ TOP: ${topT.map(t => `"${t.target}" ROAS ${t.roas.toFixed(1)} TOS ${t.avgTos.toF
 `;
   }
 
-  if (intelData._apiSpPlacement?.length > 0) {
+  // Skip API placement if CSV version exists
+  if (intelData._apiSpPlacement?.length > 0 && !intelData.spPlacement) {
     const placements = intelData._apiSpPlacement;
     const byP = {};
     placements.forEach(r => {
@@ -1152,11 +1155,13 @@ ${Object.values(byP).map(p => `  ${p.placement}: Spend $${Math.round(p.spend)} |
 `;
   }
 
-  if (intelData._apiSbSearchTerms?.length > 0) {
+  // Skip API SB search terms if CSV version exists
+  if (intelData._apiSbSearchTerms?.length > 0 && !(intelData.sbSearchTerms?.length > 0)) {
     context += `\n--- SB SEARCH TERMS (${intelData._apiSbSearchTerms.length} rows, API-sourced) ---\n`;
   }
 
-  if (intelData._apiSdCampaign?.length > 0) {
+  // Skip API SD campaigns if CSV version exists
+  if (intelData._apiSdCampaign?.length > 0 && !(intelData.sdCampaign?.length > 0)) {
     context += `\n--- SD CAMPAIGNS (${intelData._apiSdCampaign.length} rows, API-sourced) ---\n`;
   }
 
@@ -1677,7 +1682,7 @@ FRAMEWORK 9: DATA QUALITY & CONFIDENCE SCORING
 - Note when the date range is short (<14 days) and how that limits conclusions
 - Distinguish between correlation and causation in placement/daypart analysis
 
-FORMAT YOUR REPORT IN MARKDOWN with tables, headers, and bold for key metrics. Be AGGRESSIVE and SPECIFIC. Every recommendation must include:
+FORMAT YOUR REPORT IN MARKDOWN with tables, headers, and bold for key metrics. CRITICAL TABLE RULES: In markdown tables, NEVER use pipe characters (|) or backslash-pipe (\\|) inside cell content — they break column alignment. For campaign names with backslashes like "SP \\ Brand \\ Exact", replace \\ separators with " - " (e.g. "SP - Brand - Exact"). Keep each table row to EXACTLY the same number of columns as the header. Be AGGRESSIVE and SPECIFIC. Every recommendation must include:
 1. The EXACT keyword, campaign name, ASIN, or target (copy-pasteable into Seller Central)
 2. Current performance metrics FROM THE DATA (not invented benchmarks)
 3. The SPECIFIC action with exact bid amount, exact negative to add, exact budget change
@@ -1876,8 +1881,8 @@ Total estimated savings from quick wins: $X/month. Total estimated revenue gain 
 ## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT — EVERY CAMPAIGN, NO EXCEPTIONS
 ⚠️ CRITICAL: You MUST audit EVERY campaign in the data, not just the top 10. Do not stop early. Do not summarize remaining campaigns as "similar pattern." Each campaign gets its own entry.
 
-Sort by spend (highest first). For EACH campaign, provide this table row:
-| Campaign | Type (SP/SB/SD) | Status | Spend | Sales | ROAS | ACOS | CPC | Conv Rate | Impressions | Clicks | Orders | Budget/day | Verdict |
+Sort by spend (highest first). For EACH campaign, provide this table row (IMPORTANT — campaign names must NOT contain | or \\ characters; replace \\ separators with " - "):
+| Campaign | Type | Status | Spend | Sales | ROAS | ACOS | CPC | Conv% | Impressions | Clicks | Orders | Budget | Verdict |
 
 Then for EACH campaign (not just the top ones), provide ALL of the following:
 
@@ -1971,6 +1976,12 @@ const renderMarkdown = (md) => {
   var tLines = html.split('\n');
   var tOut = [];
   var ti = 0;
+  // Helper: split a markdown table row on unescaped pipes, respecting \| escapes
+  var splitTableCells = function(line) {
+    var esc = line.replace(/\\\|/g, '\x01PIPE\x01');
+    esc = esc.replace(/^\|/, '').replace(/\|$/, '');
+    return esc.split('|').map(function(c) { return c.replace(/\x01PIPE\x01/g, '|').trim(); });
+  };
   while (ti < tLines.length) {
     if (tLines[ti].includes('|') && ti + 1 < tLines.length && /^\|?\s*[-:]+[-|\s:]+$/.test(tLines[ti + 1])) {
       var hLine = tLines[ti];
@@ -1981,8 +1992,10 @@ const renderMarkdown = (md) => {
         if (t.charAt(t.length - 1) === ':') return 'right';
         return 'left';
       });
-      var hCells = hLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return c.trim(); });
-      var tHtml = '&lt;div class="table-wrap"&gt;&lt;table&gt;&lt;thead&gt;&lt;tr&gt;';
+      var hCells = splitTableCells(hLine);
+      var colCount = hCells.length;
+      var isWide = colCount > 8;
+      var tHtml = '&lt;div class="table-wrap"&gt;&lt;table' + (isWide ? ' class="wide-table"' : '') + '&gt;&lt;thead&gt;&lt;tr&gt;';
       hCells.forEach(function(cell, ci) {
         var a = aligns[ci] || 'left';
         tHtml += '&lt;th style="text-align:' + a + '"&gt;' + cell + '&lt;/th&gt;';
@@ -1990,7 +2003,30 @@ const renderMarkdown = (md) => {
       tHtml += '&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;';
       ti += 2;
       while (ti < tLines.length && tLines[ti].includes('|') && !/^\|?\s*[-:]+[-|\s:]+$/.test(tLines[ti])) {
-        var rCells = tLines[ti].replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return c.trim(); });
+        var rCells = splitTableCells(tLines[ti]);
+        // Enforce column count: if data row has more cells than header (pipe chars in text content),
+        // anchor from the right (numeric cells are reliable) and merge overflow into the left text cells
+        if (rCells.length > colCount && colCount > 1) {
+          var overflow = rCells.length - colCount;
+          // Keep rightmost (colCount - 2) cells intact (numbers/short values)
+          // Keep first cell intact, merge overflow into the second slot
+          var rightKeep = Math.max(1, colCount - 2);
+          var rightCells = rCells.slice(rCells.length - rightKeep);
+          var leftCells = rCells.slice(0, rCells.length - rightKeep);
+          var leftTarget = colCount - rightKeep;
+          // Merge excess left cells: keep first (leftTarget-1), merge the rest into one
+          if (leftCells.length > leftTarget && leftTarget > 1) {
+            var keep = leftCells.slice(0, leftTarget - 1);
+            var merge = leftCells.slice(leftTarget - 1).join(' - ');
+            leftCells = keep.concat([merge]);
+          } else if (leftCells.length > leftTarget) {
+            leftCells = [leftCells.join(' - ')];
+          }
+          rCells = leftCells.concat(rightCells);
+        }
+        // Pad if fewer columns than header
+        while (rCells.length < colCount) rCells.push('');
+        rCells = rCells.slice(0, colCount);
         tHtml += '&lt;tr&gt;';
         rCells.forEach(function(cell, ci) {
           var a = aligns[ci] || 'left';
@@ -2442,10 +2478,13 @@ em { color: #6366f1; }
 code { background: #f1f5f9; padding: 1px 6px; border-radius: 3px; font-size: 9pt; font-family: 'SF Mono', 'Fira Code', monospace; color: #7c3aed; }
 hr { border: none; border-top: 1px solid #e5e7eb; margin: 28px 0; }
 .table-wrap { overflow-x: auto; margin: 14px 0 18px; }
-table { width: 100%; border-collapse: collapse; font-size: 8.5pt; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
-th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 9px 10px; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 2px solid #e94560; white-space: nowrap; }
-td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; font-size: 8.5pt; color: #374151; vertical-align: top; }
+table { width: 100%; border-collapse: collapse; font-size: 8pt; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; table-layout: fixed; }
+th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 7px 6px; font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 2px solid #e94560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td { padding: 5px 6px; border-bottom: 1px solid #f3f4f6; font-size: 7.5pt; color: #374151; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
 tbody tr:nth-child(even) { background: #f9fafb; }
+table.wide-table { font-size: 6.5pt; }
+table.wide-table th { font-size: 5.5pt; padding: 5px 4px; }
+table.wide-table td { font-size: 6.5pt; padding: 4px 4px; }
 .footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #0f172a; text-align: center; }
 .footer p { font-size: 7.5pt; color: #9ca3af; margin-bottom: 2px; }
 .footer .brand-line { font-size: 8.5pt; font-weight: 700; color: #1e293b; letter-spacing: 0.5px; margin-bottom: 4px; }

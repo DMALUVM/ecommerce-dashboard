@@ -1391,6 +1391,12 @@ const renderMarkdown = (md) => {
   var tLines = html.split('\n');
   var tOut = [];
   var ti = 0;
+  // Helper: split a markdown table row on unescaped pipes, respecting \| escapes
+  var splitTableCells = function(line) {
+    var esc = line.replace(/\\\|/g, '\x01PIPE\x01');
+    esc = esc.replace(/^\|/, '').replace(/\|$/, '');
+    return esc.split('|').map(function(c) { return c.replace(/\x01PIPE\x01/g, '|').trim(); });
+  };
   while (ti < tLines.length) {
     if (tLines[ti].includes('|') && ti + 1 < tLines.length && /^\|?\s*[-:]+[-|\s:]+$/.test(tLines[ti + 1])) {
       var hLine = tLines[ti];
@@ -1401,8 +1407,10 @@ const renderMarkdown = (md) => {
         if (t.charAt(t.length - 1) === ':') return 'right';
         return 'left';
       });
-      var hCells = hLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return c.trim(); });
-      var tHtml = '&lt;div class="table-wrap"&gt;&lt;table&gt;&lt;thead&gt;&lt;tr&gt;';
+      var hCells = splitTableCells(hLine);
+      var colCount = hCells.length;
+      var isWide = colCount > 8;
+      var tHtml = '&lt;div class="table-wrap"&gt;&lt;table' + (isWide ? ' class="wide-table"' : '') + '&gt;&lt;thead&gt;&lt;tr&gt;';
       hCells.forEach(function(cell, ci) {
         var a = aligns[ci] || 'left';
         tHtml += '&lt;th style="text-align:' + a + '"&gt;' + cell + '&lt;/th&gt;';
@@ -1410,7 +1418,25 @@ const renderMarkdown = (md) => {
       tHtml += '&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;';
       ti += 2;
       while (ti < tLines.length && tLines[ti].includes('|') && !/^\|?\s*[-:]+[-|\s:]+$/.test(tLines[ti])) {
-        var rCells = tLines[ti].replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return c.trim(); });
+        var rCells = splitTableCells(tLines[ti]);
+        // Enforce column count: anchor from right (numeric cells are reliable), merge overflow into left text cells
+        if (rCells.length > colCount && colCount > 1) {
+          var rightKeep = Math.max(1, colCount - 2);
+          var rightCells = rCells.slice(rCells.length - rightKeep);
+          var leftCells = rCells.slice(0, rCells.length - rightKeep);
+          var leftTarget = colCount - rightKeep;
+          if (leftCells.length > leftTarget && leftTarget > 1) {
+            var keep = leftCells.slice(0, leftTarget - 1);
+            var merge = leftCells.slice(leftTarget - 1).join(' - ');
+            leftCells = keep.concat([merge]);
+          } else if (leftCells.length > leftTarget) {
+            leftCells = [leftCells.join(' - ')];
+          }
+          rCells = leftCells.concat(rightCells);
+        }
+        // Pad if fewer columns than header
+        while (rCells.length < colCount) rCells.push('');
+        rCells = rCells.slice(0, colCount);
         tHtml += '&lt;tr&gt;';
         rCells.forEach(function(cell, ci) {
           var a = aligns[ci] || 'left';
@@ -1792,10 +1818,13 @@ em { color: #6366f1; }
 code { background: #f1f5f9; padding: 1px 6px; border-radius: 3px; font-size: 9pt; color: #7c3aed; }
 hr { border: none; border-top: 1px solid #e5e7eb; margin: 28px 0; }
 .table-wrap { overflow-x: auto; margin: 14px 0 18px; }
-table { width: 100%; border-collapse: collapse; font-size: 8.5pt; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
-th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 9px 10px; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 2px solid #e94560; white-space: nowrap; }
-td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; font-size: 8.5pt; color: #374151; vertical-align: top; }
+table { width: 100%; border-collapse: collapse; font-size: 8pt; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; table-layout: fixed; }
+th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 7px 6px; font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 2px solid #e94560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td { padding: 5px 6px; border-bottom: 1px solid #f3f4f6; font-size: 7.5pt; color: #374151; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
 tbody tr:nth-child(even) { background: #f9fafb; }
+table.wide-table { font-size: 6.5pt; }
+table.wide-table th { font-size: 5.5pt; padding: 5px 4px; }
+table.wide-table td { font-size: 6.5pt; padding: 4px 4px; }
 .footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #0f172a; text-align: center; }
 .footer p { font-size: 7.5pt; color: #9ca3af; margin-bottom: 2px; }
 .footer .brand-line { font-size: 8.5pt; font-weight: 700; color: #1e293b; }
