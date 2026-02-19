@@ -12216,6 +12216,7 @@ const savePeriods = async (d) => {
           (async () => {
             try {
               console.log('[AutoSync] Amazon Ads: starting background sync (non-blocking)...');
+              setToast({ message: '📊 Syncing Amazon Ads data...', type: 'info', duration: 10000 });
               const adsSyncBody = {
                 syncType: 'daily',
                 daysBack: 60,
@@ -12238,7 +12239,10 @@ const savePeriods = async (d) => {
                 adsData = await adsRes.json();
 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 10s...`);
+                  const done = adsData.completedCount || 0;
+                  const total = adsData.totalCount || 8;
+                  console.log(`[AutoSync] Amazon Ads: ${done}/${total} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 10s...`);
+                  setToast({ message: `📊 Amazon Ads: ${done}/${total} reports ready (attempt ${adsRetries + 1}/${maxAdsRetries})...`, type: 'info', duration: 12000 });
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
                   await new Promise(r => setTimeout(r, 10000));
@@ -12340,13 +12344,17 @@ const savePeriods = async (d) => {
                 queueCloudSave({ ...combinedData });
                 setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString() }));
                 console.log(`[AutoSync] Amazon Ads COMPLETE: ${adsData.summary?.daysWithData} days, $${adsData.summary?.totalSpend?.toFixed(0)} spend, ${adsData.summary?.campaignCount} campaigns, ${adsData.summary?.skuCount} SKUs`);
+                setToast({ message: `✅ Amazon Ads synced — ${adsData.summary?.daysWithData || 0} days, ${adsData.summary?.campaignCount || 0} campaigns`, type: 'success' });
               } else if (adsData?.status === 'pending') {
                 console.log('[AutoSync] Amazon Ads: reports still generating — will complete on next sync');
+                setToast({ message: '⏳ Amazon Ads reports still generating — will retry on next sync', type: 'info' });
               } else {
                 devWarn('Amazon Ads auto-sync failed:', adsData?.error);
+                setToast({ message: '⚠️ Amazon Ads sync failed — check Settings', type: 'error' });
               }
             } catch (err) {
               devWarn('Amazon Ads auto-sync error:', err.message);
+              setToast({ message: '⚠️ Amazon Ads sync error — check connection', type: 'error' });
             }
           })(); // Fire and forget — don't await this IIFE
         }
