@@ -20,8 +20,8 @@
       "memory": 1024
     },
     "api/chat.js": {
-      "maxDuration": 60,
-      "memory": 512
+      "maxDuration": 300,
+      "memory": 1024
     }
   },
   "crons": [

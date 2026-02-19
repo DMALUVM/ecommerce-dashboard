@@ -6,7 +6,7 @@
 // BE-201: SSE buffer fix
 
 export const config = {
-  maxDuration: 60,
+  maxDuration: 300,  // Pro plan allows up to 300s — long reports need 3-5 min to stream 32K tokens
 };
 
 // === Provider Configuration ===

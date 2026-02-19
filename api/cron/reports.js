@@ -223,6 +223,10 @@ async function notifySlack(webhookUrl, reportType, storeName, actionCount) {
   });
 }
 
+export const config = {
+  maxDuration: 300,  // Pro plan: 32K token reports take 3-5 min via non-streaming API
+};
+
 // ============ MAIN HANDLER ============
 export default async function handler(req, res) {
   // Auth check

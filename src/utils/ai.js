@@ -7,7 +7,7 @@ import { AI_DEFAULT_MODEL } from './config';
 const AI_CONFIG = {
   model: AI_DEFAULT_MODEL,
   maxTokens: 16000,  // Default for chat/quick actions; reports override higher
-  maxDuration: 60,  // Pro plan 60-second timeout
+  maxDuration: 300,  // Pro plan 300-second timeout (action reports need 3-5 min)
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
 
   // Forecast calculation weights (data-driven, not AI-generated)
@@ -69,7 +69,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 90000);
+  const timeoutId = setTimeout(() => controller.abort(), 360000); // 6 min — long reports stream 32K tokens over ~4-5 min
 
   try {
     const response = await fetch('/api/chat', {
@@ -124,7 +124,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      throw new Error('AI request timed out after 90 seconds');
+      throw new Error('AI request timed out after 6 minutes — report may be too large');
     }
     throw err;
   }
