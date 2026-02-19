@@ -57,6 +57,14 @@ const REPORT_SIGNATURES = [
 
   // ── TIER 2: Amazon Sponsored Products ──
   {
+    id: 'sp_campaign',
+    tier: 2,
+    platform: 'amazon',
+    label: 'SP Campaign Report',
+    required: ['Campaign Name', 'Campaign Daily Budget', 'Spend'],
+    optional: ['Campaign Status', 'Impressions', 'Clicks', '7 Day Total Sales', 'Bidding Strategy', 'Portfolio name'],
+  },
+  {
     id: 'sp_search_terms',
     tier: 2,
     platform: 'amazon',
@@ -71,6 +79,14 @@ const REPORT_SIGNATURES = [
     label: 'SP Advertised Product',
     required: ['Advertised ASIN', 'Advertised SKU', 'Spend'],
     optional: ['Campaign Name', 'Impressions', 'Clicks', '7 Day Total Sales'],
+  },
+  {
+    id: 'sp_purchased_product',
+    tier: 2,
+    platform: 'amazon',
+    label: 'SP Purchased Product',
+    required: ['Advertised ASIN', 'Purchased ASIN', 'Campaign Name'],
+    optional: ['7 Day Total Sales', '7 Day Total Orders (#)', '7 Day Total Units (#)', 'Advertised SKU'],
   },
   {
     id: 'sp_targeting',
@@ -90,6 +106,14 @@ const REPORT_SIGNATURES = [
   },
 
   // ── TIER 2: Amazon Sponsored Brands ──
+  {
+    id: 'sb_campaign',
+    tier: 2,
+    platform: 'amazon',
+    label: 'SB Campaign Report',
+    required: ['Campaign Name', 'Campaign Daily Budget', '14 Day Total Sales'],
+    optional: ['Campaign Status', 'Impressions', 'Clicks', 'Spend', 'New-to-brand Orders (#)', 'Portfolio name'],
+  },
   {
     id: 'sb_campaign_placement',
     tier: 2,
@@ -292,7 +316,7 @@ const REPORT_SIGNATURES = [
     platform: 'amazon',
     label: 'SKU Economics Report',
     required: ['ASIN', 'MSKU', 'Average sales price'],
-    optional: ['Units sold', 'Sales', 'FBA Fulfillment Fee per unit'],
+    optional: ['Units sold', 'Sales', 'FBA Fulfillment Fee per unit', 'FBA fees', 'Referral fee', 'Advertising spend', 'Cost of goods per unit', 'Contribution profit', 'Contribution margin'],
   },
 ];
 

@@ -744,12 +744,12 @@ const aggregateSkuEconomics = (rows) => {
       netUnits: num(r['Net units sold']),
       sales: num(r['Sales']),
       netSales: num(r['Net sales']),
-      fbaFees: num(r['FBA fees']),
-      referralFee: num(r['Referral fee']),
-      adSpend: num(r['Advertising spend']),
-      cogsPerUnit: num(r['Cost of goods per unit']),
-      contributionProfit: num(r['Contribution profit']),
-      contributionMargin: num(r['Contribution margin']),
+      fbaFees: num(r['FBA fees'] || r['FBA Fulfillment Fee per unit'] || r['FBA fulfillment fees']),
+      referralFee: num(r['Referral fee'] || r['Referral fees'] || r['Referral Fee']),
+      adSpend: num(r['Advertising spend'] || r['Ad Spend'] || r['Advertising Spend']),
+      cogsPerUnit: num(r['Cost of goods per unit'] || r['Cost of Goods per unit'] || r['COGS per unit']),
+      contributionProfit: num(r['Contribution profit'] || r['Contribution Profit']),
+      contributionMargin: num(r['Contribution margin'] || r['Contribution Margin']),
     };
   }).filter(r => r.asin && (r.unitsSold > 0 || r.sales > 0)).sort((a, b) => b.sales - a.sales);
 };
@@ -1054,11 +1054,19 @@ ${sq.filter(q => q.brandPurchaseShare > 30).sort((a, b) => b.brandPurchaseShare 
 `;
   }
 
-  // SKU Economics
+  // SKU Economics — full profitability data
   if (intelData.skuEconomics?.length > 0) {
     const sku = intelData.skuEconomics;
-    context += `\n--- SKU ECONOMICS / PROFITABILITY ---
-${sku.slice(0, 15).map(s => `  ${s.asin} (${s.msku || s.fnsku || '?'}) | Sales $${Math.round(s.sales)} | Units ${s.unitsSold} | Avg Price $${s.avgPrice.toFixed(2)} | Returns ${s.unitsReturned} (${s.unitsSold > 0 ? ((s.unitsReturned / s.unitsSold) * 100).toFixed(1) : 0}%) | Contrib Profit $${Math.round(s.contributionProfit)} | Margin ${(s.contributionMargin * 100).toFixed(1)}%`).join('\n')}
+    const totalSkuSales = sku.reduce((s, k) => s + k.sales, 0);
+    const totalContrib = sku.reduce((s, k) => s + k.contributionProfit, 0);
+    const avgMargin = totalSkuSales > 0 ? (totalContrib / totalSkuSales * 100) : 0;
+    const totalAdSpend = sku.reduce((s, k) => s + (k.adSpend || 0), 0);
+    const totalFbaFees = sku.reduce((s, k) => s + (k.fbaFees || 0), 0);
+    const totalRefFees = sku.reduce((s, k) => s + (k.referralFee || 0), 0);
+    context += `\n--- SKU ECONOMICS / PROFITABILITY (${sku.length} SKUs) ---
+PORTFOLIO SUMMARY: Total Sales $${Math.round(totalSkuSales)} | Total Contribution Profit $${Math.round(totalContrib)} | Avg Contribution Margin ${avgMargin.toFixed(1)}% | Total FBA Fees $${Math.round(totalFbaFees)} | Total Referral Fees $${Math.round(totalRefFees)} | Total Ad Spend (per SKU Econ) $${Math.round(totalAdSpend)}
+⚠️ Use ACTUAL margins below for profitability thresholds — do NOT use hardcoded assumptions.
+${sku.slice(0, 30).map(s => `  ${s.asin} (${s.msku || s.fnsku || '?'}) | Sales $${Math.round(s.sales)} | Net Sales $${Math.round(s.netSales || s.sales)} | Units ${s.unitsSold} | Avg Price $${s.avgPrice.toFixed(2)} | Returns ${s.unitsReturned} (${s.unitsSold > 0 ? ((s.unitsReturned / s.unitsSold) * 100).toFixed(1) : 0}%) | COGS/unit $${(s.cogsPerUnit || 0).toFixed(2)} | FBA Fees $${Math.round(s.fbaFees || 0)} | Referral Fee $${Math.round(s.referralFee || 0)} | Ad Spend $${Math.round(s.adSpend || 0)} | Contrib Profit $${Math.round(s.contributionProfit)} | Margin ${(s.contributionMargin * 100).toFixed(1)}%`).join('\n')}
 `;
   }
 
@@ -1562,7 +1570,7 @@ FRAMEWORK 7: ASIN CANNIBALIZATION & PORTFOLIO STRATEGY
 FRAMEWORK 8: INCREMENTALITY & BUDGET EFFICIENCY
 - Brand keywords: low incrementality (customer would likely buy anyway) but necessary for defense. Keep but don't overspend.
 - Non-brand keywords converting at 10%+: high incrementality — these are net-new customers. Scale aggressively.
-- If total ACOS > gross margin, the ad program is unprofitable. Diagnose: is it a few bad campaigns or systemic?
+- If SKU Economics data is available, use the ACTUAL contribution margin per ASIN as the break-even ACOS. If total ACOS > actual contribution margin, the ad program is unprofitable. Diagnose: is it a few bad campaigns or systemic?
 - Budget pacing: campaigns that exhaust daily budget by 2-3pm lose evening conversions. Flag and increase budgets for high-ROAS campaigns.
 - Diminishing returns: campaigns spending >$100/day with ROAS declining over time may be saturating their audience. Test new keyword expansion instead of higher bids.
 
@@ -1662,11 +1670,14 @@ Cross-reference: which search terms are driving TOS performance? Are your best k
   if (intelData.spAdvertised?.length) {
     sections += `
 ## 💰 PRODUCT-LEVEL AD PROFITABILITY
-| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Conv Rate | Organic Conv (if Business Report available) | Ad vs Organic Gap | Verdict |
+| ASIN/SKU | Ad Spend | Ad Revenue | ACOS | Actual Margin (from SKU Economics) | Break-Even ACOS | Conv Rate | Organic Conv (if Business Report available) | Verdict |
 For each ASIN:
-- If ACOS > 60% (assumed margin): "UNPROFITABLE — reduce bids or pause non-converting keywords for this ASIN"
+- Look up the ASIN's ACTUAL contribution margin in the SKU ECONOMICS section. The break-even ACOS = contribution margin %.
+- If ACOS > actual margin: "UNPROFITABLE — ACOS X% exceeds margin Y%. Reduce bids or pause non-converting keywords for this ASIN. Each $100 in ad spend loses $Z."
+- If no SKU Economics data available for this ASIN, note "margin unknown" — do NOT assume 60%.
 - If ad conv rate is significantly lower than organic conv rate: "LISTING ISSUE — the product page isn't converting paid traffic. Check images, price, reviews, A+ content before spending more."
-- If ACOS < 20% with low spend: "UNDER-INVESTED — this ASIN converts well, increase budgets"
+- If ACOS < half of actual margin with low spend: "UNDER-INVESTED — this ASIN converts profitably at ACOS X% vs Y% margin, increase budgets"
+- Show FBA fees + referral fees + COGS breakdown if available from SKU Economics.
 Cross-reference with Business Report data (sessions, Buy Box %, units ordered) to get full picture.
 Flag ASINs where you're spending on ads but losing the Buy Box.
 `;
