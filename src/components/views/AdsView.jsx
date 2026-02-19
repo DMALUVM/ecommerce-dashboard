@@ -1850,14 +1850,13 @@ ${kpiHtml}
             </div>
             {(() => {
               const ALL_REPORTS = [
-                { platform: 'amazon', key: 'sp_campaign', label: 'SP Campaign Report', source: 'CSV only' },
+                { platform: 'amazon', key: 'sp_campaigns', label: 'SP Campaigns', source: 'API + CSV' },
                 { platform: 'amazon', key: 'sp_search_terms', label: 'SP Search Terms', source: 'API + CSV' },
                 { platform: 'amazon', key: 'sp_advertised_product', label: 'SP Advertised Product', source: 'API + CSV' },
                 { platform: 'amazon', key: 'sp_purchased_product', label: 'SP Purchased Product', source: 'CSV only' },
                 { platform: 'amazon', key: 'sp_targeting', label: 'SP Targeting', source: 'API + CSV' },
                 { platform: 'amazon', key: 'sp_placement', label: 'SP Placement', source: 'API + CSV' },
-                { platform: 'amazon', key: 'sp_campaigns', label: 'SP Campaigns (API)', source: 'API' },
-                { platform: 'amazon', key: 'sb_campaign', label: 'SB Campaign Report', source: 'CSV only' },
+                { platform: 'amazon', key: 'sb_campaigns', label: 'SB Campaigns', source: 'API + CSV' },
                 { platform: 'amazon', key: 'sb_search_terms', label: 'SB Search Terms', source: 'API + CSV' },
                 { platform: 'amazon', key: 'sb_campaign_placement', label: 'SB Campaign Placement', source: 'CSV only' },
                 { platform: 'amazon', key: 'sd_campaigns', label: 'SD Campaigns', source: 'API + CSV' },

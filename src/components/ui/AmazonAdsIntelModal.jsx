@@ -1082,8 +1082,8 @@ ${skus.slice(0, 20).map(s => `  ${s.asin}${s.sku ? ` (${s.sku})` : ''} | Spend $
 `;
   }
 
-  // Campaign summary from API
-  if (intelData.campaignSummary?.length > 0) {
+  // Campaign summary from API — skip if CSV campaign data already present (same data, CSV is more detailed)
+  if (intelData.campaignSummary?.length > 0 && !intelData.spCampaign) {
     const camps = intelData.campaignSummary;
     context += `\n--- CAMPAIGN SUMMARY (${camps.length} campaigns, API-sourced) ---
 ${camps.slice(0, 25).map(c => `  [${c.type}] ${c.name.substring(0, 55)} | ${c.status} | Spend $${Math.round(c.spend)} | Rev $${Math.round(c.revenue)} | ACOS ${c.acos.toFixed(1)}% | ROAS ${c.roas.toFixed(2)} | CPC $${c.cpc.toFixed(2)} | Conv ${c.convRate.toFixed(1)}% | Budget $${c.budget || '?'}/day | ${c.days}d`).join('\n')}
@@ -2215,14 +2215,16 @@ const AmazonAdsIntelModal = ({
       // Also store CSV uploads in the nested platform format that the Deep Analysis
       // checklist reads: adsIntelData.amazon.<report_type> = { records, headers, meta }
       // This ensures CSV data shows up in the checklist alongside API-sourced data.
+      // Keys must match the checklist ALL_REPORTS entries in AdsView.jsx
+      // Use the SAME key as the API sync so CSV and API data merge into one checklist row
       const FLAT_TO_NESTED = {
-        spCampaign:    { platform: 'amazon', key: 'sp_campaign',          label: 'SP Campaign Report',    getRecords: (d) => d?.campaigns },
+        spCampaign:    { platform: 'amazon', key: 'sp_campaigns',         label: 'SP Campaigns',          getRecords: (d) => d?.campaigns },
         spSearchTerms: { platform: 'amazon', key: 'sp_search_terms',     label: 'SP Search Terms',       getRecords: (d) => d?.terms },
         spAdvertised:  { platform: 'amazon', key: 'sp_advertised_product', label: 'SP Advertised Product', getRecords: (d) => d },
         spPurchased:   { platform: 'amazon', key: 'sp_purchased_product', label: 'SP Purchased Product',  getRecords: (d) => d?.pairs },
         spPlacement:   { platform: 'amazon', key: 'sp_placement',        label: 'SP Placement',          getRecords: (d) => d?.byPlacement },
         spTargeting:   { platform: 'amazon', key: 'sp_targeting',        label: 'SP Targeting',          getRecords: (d) => d },
-        sbCampaign:    { platform: 'amazon', key: 'sb_campaign',         label: 'SB Campaign Report',    getRecords: (d) => d?.campaigns },
+        sbCampaign:    { platform: 'amazon', key: 'sb_campaigns',        label: 'SB Campaigns',          getRecords: (d) => d?.campaigns },
         sbSearchTerms: { platform: 'amazon', key: 'sb_search_terms',     label: 'SB Search Terms',       getRecords: (d) => d },
         sdCampaign:    { platform: 'amazon', key: 'sd_campaigns',        label: 'SD Campaigns',          getRecords: (d) => d },
         businessReport:{ platform: 'amazon', key: 'business_report_child', label: 'Business Report',     getRecords: (d) => d },
@@ -2515,9 +2517,9 @@ tbody tr:nth-child(even) { background: #f9fafb; }
                 {[
                   adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d overview`,
                   adsIntelData.historicalDaily && `${adsIntelData.historicalDaily.totalDays}d historical`,
-                  // SP Campaigns: prefer API campaign summary, fall back to CSV
+                  // SP Campaigns: show one entry whether from API or CSV (not both)
                   adsIntelData.campaignSummary?.length
-                    ? `${adsIntelData.campaignSummary.length} campaigns (API)`
+                    ? `${adsIntelData.campaignSummary.length} campaigns (API)${adsIntelData.spCampaign ? ' + CSV' : ''}`
                     : adsIntelData.spCampaign && `${adsIntelData.spCampaign.totalCampaigns} SP campaigns`,
                   // SP Search Terms: prefer API, fall back to CSV
                   adsIntelData._apiSpSearchTerms?.length
