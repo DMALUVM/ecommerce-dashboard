@@ -2288,24 +2288,39 @@ tbody tr:nth-child(even) { background: #f9fafb; }
                 {[
                   adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d overview`,
                   adsIntelData.historicalDaily && `${adsIntelData.historicalDaily.totalDays}d historical`,
-                  adsIntelData.spCampaign && `${adsIntelData.spCampaign.totalCampaigns} SP campaigns`,
-                  adsIntelData.spSearchTerms && `${adsIntelData.spSearchTerms.totalTerms} SP terms`,
+                  // SP Campaigns: prefer API campaign summary, fall back to CSV
+                  adsIntelData.campaignSummary?.length
+                    ? `${adsIntelData.campaignSummary.length} campaigns (API)`
+                    : adsIntelData.spCampaign && `${adsIntelData.spCampaign.totalCampaigns} SP campaigns`,
+                  // SP Search Terms: prefer API, fall back to CSV
+                  adsIntelData._apiSpSearchTerms?.length
+                    ? `${adsIntelData._apiSpSearchTerms.length} SP search terms (API)`
+                    : adsIntelData.spSearchTerms && `${adsIntelData.spSearchTerms.totalTerms} SP terms`,
+                  // SP Targeting: prefer API, fall back to CSV
+                  adsIntelData._apiSpTargeting?.length
+                    ? `${adsIntelData._apiSpTargeting.length} targeting rows (API)`
+                    : adsIntelData.spTargeting?.length && `${adsIntelData.spTargeting.length} targets`,
+                  // SP Placement: prefer API, fall back to CSV
+                  adsIntelData._apiSpPlacement?.length
+                    ? `${adsIntelData._apiSpPlacement.length} placements (API)`
+                    : adsIntelData.spPlacement && `placements`,
+                  // SP Advertised (CSV only — no API equivalent in summary)
                   adsIntelData.spAdvertised?.length && `${adsIntelData.spAdvertised.length} ASINs`,
                   adsIntelData.spPurchased && `${adsIntelData.spPurchased.totalPairs} purchased pairs`,
-                  adsIntelData.spPlacement && `placements`,
-                  adsIntelData.spTargeting?.length && `${adsIntelData.spTargeting.length} targets`,
-                  adsIntelData.sbCampaign && `${adsIntelData.sbCampaign.totalCampaigns} SB campaigns`,
-                  adsIntelData.sbSearchTerms?.length && `${adsIntelData.sbSearchTerms.length} SB terms`,
-                  adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`,
+                  // SB: prefer API, fall back to CSV
+                  adsIntelData._apiSbSearchTerms?.length
+                    ? `${adsIntelData._apiSbSearchTerms.length} SB terms (API)`
+                    : adsIntelData.sbSearchTerms?.length && `${adsIntelData.sbSearchTerms.length} SB terms`,
+                  !adsIntelData.campaignSummary?.length && adsIntelData.sbCampaign && `${adsIntelData.sbCampaign.totalCampaigns} SB campaigns`,
+                  // SD: prefer API, fall back to CSV
+                  adsIntelData._apiSdCampaign?.length
+                    ? `${adsIntelData._apiSdCampaign.length} SD campaigns (API)`
+                    : adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`,
+                  // Non-overlapping data sources (no API equivalent)
                   adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
                   adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
                   adsIntelData.skuEconomics?.length && `${adsIntelData.skuEconomics.length} SKU econ`,
-                  // API-sourced data
                   adsIntelData.skuAdPerformance?.length && `${adsIntelData.skuAdPerformance.length} SKU ad perf (API)`,
-                  adsIntelData.campaignSummary?.length && `${adsIntelData.campaignSummary.length} campaigns (API)`,
-                  adsIntelData._apiSpSearchTerms?.length && `${adsIntelData._apiSpSearchTerms.length} SP term rows (API)`,
-                  adsIntelData._apiSpTargeting?.length && `${adsIntelData._apiSpTargeting.length} targeting rows (API)`,
-                  adsIntelData._apiSpPlacement?.length && `placements (API)`,
                 ].filter(Boolean).join(' · ')}
               </p>
               {/* Generate report from existing data */}
