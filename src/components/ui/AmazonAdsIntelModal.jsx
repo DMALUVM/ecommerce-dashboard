@@ -812,8 +812,99 @@ ROAS: ${data.overallROAS.toFixed(2)} | ACOS: ${data.overallACOS.toFixed(1)}% | T
 
 export const buildAdsIntelContext = (intelData) => {
   if (!intelData || !intelData.lastUpdated) return '';
-  
+
   let context = `\n=== DETAILED AMAZON ADS INTELLIGENCE (Updated: ${new Date(intelData.lastUpdated).toLocaleDateString()}) ===\n`;
+
+  // ===== PRODUCT CATALOG — ASIN→Product lookup =====
+  // Build from all available sources: Business Report (has titles), SKU Economics, SP Advertised, campaign names
+  {
+    const catalog = {}; // keyed by ASIN
+    // Business Report — best source, has full product titles
+    (intelData.businessReport || []).forEach(r => {
+      if (r.asin && r.title) {
+        catalog[r.asin] = { title: r.title, source: 'Business Report', sessions: r.sessions, sales: r.sales, convRate: r.convRate };
+      }
+      if (r.childAsin && r.childAsin !== r.asin && r.title) {
+        catalog[r.childAsin] = { title: r.title, source: 'Business Report (child)', sessions: r.sessions, sales: r.sales, convRate: r.convRate };
+      }
+    });
+    // SKU Economics — has pricing and margin data
+    (intelData.skuEconomics || []).forEach(r => {
+      if (r.asin) {
+        if (!catalog[r.asin]) catalog[r.asin] = {};
+        catalog[r.asin].msku = r.msku;
+        catalog[r.asin].avgPrice = r.avgPrice;
+        catalog[r.asin].margin = r.contributionMargin;
+        if (!catalog[r.asin].source) catalog[r.asin].source = 'SKU Economics';
+      }
+    });
+    // SP Advertised — has SKU and ad spend data
+    (intelData.spAdvertised || []).forEach(r => {
+      if (r.asin) {
+        if (!catalog[r.asin]) catalog[r.asin] = {};
+        if (r.sku) catalog[r.asin].sku = r.sku;
+        catalog[r.asin].adSpend = r.spend;
+        catalog[r.asin].adSales = r.sales;
+        if (!catalog[r.asin].source) catalog[r.asin].source = 'SP Advertised';
+      }
+    });
+    // API-sourced SKU data
+    (intelData.skuAdPerformance || []).forEach(r => {
+      if (r.asin) {
+        if (!catalog[r.asin]) catalog[r.asin] = {};
+        if (r.sku) catalog[r.asin].sku = r.sku;
+        if (!catalog[r.asin].adSpend) { catalog[r.asin].adSpend = r.spend; catalog[r.asin].adSales = r.sales; }
+        if (!catalog[r.asin].source) catalog[r.asin].source = 'API';
+      }
+    });
+
+    // Extract ASINs from campaign names (pattern: B0[A-Z0-9]{8,10})
+    const campaignASINs = {};
+    const allCampaigns = [
+      ...(intelData.spCampaign?.campaigns || []),
+      ...(intelData.sbCampaign?.campaigns || []),
+      ...(intelData.sdCampaign || []),
+    ];
+    allCampaigns.forEach(c => {
+      const name = c.campaign || c.name || '';
+      const matches = name.match(/B0[A-Z0-9]{8,10}/g);
+      if (matches) {
+        matches.forEach(asin => {
+          if (!campaignASINs[asin]) campaignASINs[asin] = [];
+          campaignASINs[asin].push(name.length > 65 ? name.substring(0, 62) + '...' : name);
+        });
+      }
+    });
+
+    const catalogEntries = Object.entries(catalog);
+    if (catalogEntries.length > 0) {
+      context += `\n=== PRODUCT CATALOG — ASIN IDENTIFICATION (use this to correctly identify products in campaigns) ===
+⚠️ CRITICAL: Always cross-reference campaign ASINs with this catalog before making recommendations.
+Campaign names contain ASINs (e.g. "SP \\TBB - 2oz \\B0CLF4XDCP") — look up the ASIN here to identify the actual product.
+Do NOT assume product type from campaign name abbreviations alone.
+
+${catalogEntries.map(([asin, info]) => {
+  const parts = [`${asin}`];
+  if (info.title) parts.push(`"${info.title}"`);
+  if (info.sku) parts.push(`SKU: ${info.sku}`);
+  if (info.msku) parts.push(`MSKU: ${info.msku}`);
+  if (info.avgPrice) parts.push(`Price: $${info.avgPrice.toFixed(2)}`);
+  if (info.margin != null) parts.push(`Margin: ${(info.margin * 100).toFixed(0)}%`);
+  if (info.adSpend) parts.push(`Ad Spend: $${Math.round(info.adSpend)}`);
+  if (info.adSales) parts.push(`Ad Sales: $${Math.round(info.adSales)}`);
+  if (info.sessions) parts.push(`Sessions: ${info.sessions}`);
+  if (info.convRate) parts.push(`Conv: ${info.convRate.toFixed(1)}%`);
+  // List campaigns using this ASIN
+  const camps = campaignASINs[asin];
+  if (camps) parts.push(`Used in ${camps.length} campaigns`);
+  return `  ${parts.join(' | ')}`;
+}).join('\n')}
+${Object.entries(campaignASINs).filter(([asin]) => !catalog[asin]).map(([asin, camps]) => {
+  return `  ${asin} | ⚠️ NO PRODUCT TITLE FOUND | Used in ${camps.length} campaigns: ${camps.slice(0, 3).join(', ')}${camps.length > 3 ? '...' : ''}`;
+}).join('\n')}
+`;
+    }
+  }
 
   // Daily Overview (recent)
   if (intelData.dailyOverview) {
@@ -1335,6 +1426,7 @@ ${isolationCandidates.map(t => `  "${t.term}" | ${t.orders} orders | ROAS ${t.ro
 === ANALYSIS PRINCIPLES (MANDATORY) ===
 - ONLY cite numbers that appear in the data below. NEVER fabricate metrics or invent campaign names.
 - ⚠️ DOUBLE-COUNTING WARNING: The data below includes multiple views of the SAME ad spend. SP Search Terms, SP Targeting, SP Placements, and SP Advertised Products are all different slices of the SAME SP dollars. DO NOT sum them. Use ONLY the "AUTHORITATIVE ACCOUNT TOTALS" section for total spend, total sales, and blended ROAS/ACOS figures.
+- ⚠️ PRODUCT IDENTIFICATION: ALWAYS look up ASINs in the PRODUCT CATALOG before making recommendations. Campaign names contain abbreviations (e.g., "TBB" might mean body balm, "TBL" might mean lip balm) — do NOT guess product type from abbreviations. Instead, find the ASIN in the campaign name (e.g., B0CLF4XDCP) and look it up in the catalog to get the actual product title. Get the product category RIGHT — recommending lip balm actions for a body balm campaign (or vice versa) is a critical error.
 - Every recommendation MUST reference the specific data point that triggered it. Format: "Campaign X has ROAS 0.8x on $450 spend → [action]"
 - Cross-reference data sources: tie search terms to the campaigns they run in, products to their ad profitability, placements to the campaigns using them.
 - MINIMUM DATA THRESHOLDS for recommendations: $10+ spend for negative keyword decisions, $5+ spend for bid changes, 50+ clicks for placement modifiers, 2+ orders for "scale" recommendations. Flag when data is below threshold but still worth watching.
