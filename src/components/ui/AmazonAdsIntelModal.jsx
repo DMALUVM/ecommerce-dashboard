@@ -1265,39 +1265,83 @@ export const buildActionReportPrompt = (intelData, storeName) => {
   let advancedContext = '';
 
   // 0. Authoritative account totals — prevent double-counting across overlapping report types
-  // Priority: SP/SB/SD Campaign reports > Search Terms > Targeting > Advertised > Daily Overview
+  // Priority: SP/SB/SD Campaign reports (CSV) > Campaign Summary (API) > Search Terms > Targeting > Advertised > SKU Ad Perf > Daily Overview
   {
-    const spSpend = intelData.spCampaign?.totalSpend
-      || intelData.spSearchTerms?.totalSpend
-      || (intelData.spAdvertised || []).reduce((s, a) => s + a.spend, 0)
+    // Compute totals from API campaignSummary if available (grouped by ad type)
+    let apiSpSpend = 0, apiSpSales = 0, apiSbSpend = 0, apiSbSales = 0, apiSdSpend = 0, apiSdSales = 0;
+    (intelData.campaignSummary || []).forEach(c => {
+      const type = (c.type || '').toUpperCase();
+      if (type === 'SP') { apiSpSpend += c.spend || 0; apiSpSales += c.revenue || 0; }
+      else if (type === 'SB') { apiSbSpend += c.spend || 0; apiSbSales += c.revenue || 0; }
+      else if (type === 'SD') { apiSdSpend += c.spend || 0; apiSdSales += c.revenue || 0; }
+    });
+
+    // SP: prefer CSV campaign report, then API campaign summary, then search terms, then advertised, then SKU ad perf
+    const spSpend = (intelData.spCampaign?.totalSpend > 0 && intelData.spCampaign.totalSpend)
+      || (apiSpSpend > 0 && apiSpSpend)
+      || (intelData.spSearchTerms?.totalSpend > 0 && intelData.spSearchTerms.totalSpend)
+      || ((intelData.spAdvertised || []).reduce((s, a) => s + a.spend, 0) || 0)
+      || ((intelData.skuAdPerformance || []).reduce((s, a) => s + a.spend, 0) || 0)
       || 0;
-    const spSales = intelData.spCampaign?.totalSales
-      || intelData.spSearchTerms?.totalSales
-      || (intelData.spAdvertised || []).reduce((s, a) => s + a.sales, 0)
+    const spSales = (intelData.spCampaign?.totalSales > 0 && intelData.spCampaign.totalSales)
+      || (apiSpSales > 0 && apiSpSales)
+      || (intelData.spSearchTerms?.totalSales > 0 && intelData.spSearchTerms.totalSales)
+      || ((intelData.spAdvertised || []).reduce((s, a) => s + a.sales, 0) || 0)
+      || ((intelData.skuAdPerformance || []).reduce((s, a) => s + a.sales, 0) || 0)
       || 0;
-    const sbSpend = intelData.sbCampaign?.totalSpend
-      || (intelData.sbSearchTerms || []).reduce((s, t) => s + t.spend, 0)
+
+    // SB: prefer CSV campaign report, then API campaign summary, then search terms
+    const sbSpend = (intelData.sbCampaign?.totalSpend > 0 && intelData.sbCampaign.totalSpend)
+      || (apiSbSpend > 0 && apiSbSpend)
+      || ((intelData.sbSearchTerms || []).reduce((s, t) => s + t.spend, 0) || 0)
       || 0;
-    const sbSales = intelData.sbCampaign?.totalSales
-      || (intelData.sbSearchTerms || []).reduce((s, t) => s + t.sales, 0)
+    const sbSales = (intelData.sbCampaign?.totalSales > 0 && intelData.sbCampaign.totalSales)
+      || (apiSbSales > 0 && apiSbSales)
+      || ((intelData.sbSearchTerms || []).reduce((s, t) => s + t.sales, 0) || 0)
       || 0;
-    const sdSpend = (intelData.sdCampaign || []).reduce((s, c) => s + c.spend, 0);
-    const sdSales = (intelData.sdCampaign || []).reduce((s, c) => s + c.sales, 0);
+
+    // SD: prefer CSV SD campaign, then API campaign summary
+    const sdSpend = (intelData.sdCampaign || []).reduce((s, c) => s + c.spend, 0)
+      || (apiSdSpend > 0 && apiSdSpend)
+      || 0;
+    const sdSales = (intelData.sdCampaign || []).reduce((s, c) => s + c.sales, 0)
+      || (apiSdSales > 0 && apiSdSales)
+      || 0;
+
     const totalSpend = spSpend + sbSpend + sdSpend;
     const totalSales = spSales + sbSales + sdSales;
+
+    // Identify data sources used for transparency
+    const spSource = (intelData.spCampaign?.totalSpend > 0) ? 'CSV Campaign Report'
+      : (apiSpSpend > 0) ? 'API Campaign Summary'
+      : (intelData.spSearchTerms?.totalSpend > 0) ? 'CSV Search Terms'
+      : (intelData.spAdvertised?.length > 0) ? 'CSV Advertised Products'
+      : (intelData.skuAdPerformance?.length > 0) ? 'API SKU Ad Performance'
+      : 'No SP data';
+    const sbSource = (intelData.sbCampaign?.totalSpend > 0) ? 'CSV Campaign Report'
+      : (apiSbSpend > 0) ? 'API Campaign Summary'
+      : 'No SB data';
+    const sdSource = ((intelData.sdCampaign || []).length > 0) ? 'CSV SD Campaign'
+      : (apiSdSpend > 0) ? 'API Campaign Summary'
+      : 'No SD data';
 
     advancedContext += `
 === AUTHORITATIVE ACCOUNT TOTALS (use ONLY these — do NOT sum across report sections) ===
 ⚠️ CRITICAL: The SP Search Terms, SP Targeting, SP Placements, and SP Advertised Products sections
 show the SAME SP dollars sliced different ways. DO NOT add them together. Use these totals:
 
-  SP Total Spend: $${Math.round(spSpend)} | SP Total Sales: $${Math.round(spSales)} | SP ROAS: ${spSpend > 0 ? (spSales / spSpend).toFixed(2) : 'N/A'}
-  SB Total Spend: $${Math.round(sbSpend)} | SB Total Sales: $${Math.round(sbSales)} | SB ROAS: ${sbSpend > 0 ? (sbSales / sbSpend).toFixed(2) : 'N/A'}
-  SD Total Spend: $${Math.round(sdSpend)} | SD Total Sales: $${Math.round(sdSales)} | SD ROAS: ${sdSpend > 0 ? (sdSales / sdSpend).toFixed(2) : 'N/A'}
+  SP Total Spend: $${Math.round(spSpend)} | SP Total Sales: $${Math.round(spSales)} | SP ROAS: ${spSpend > 0 ? (spSales / spSpend).toFixed(2) : 'N/A'} (source: ${spSource})
+  SB Total Spend: $${Math.round(sbSpend)} | SB Total Sales: $${Math.round(sbSales)} | SB ROAS: ${sbSpend > 0 ? (sbSales / sbSpend).toFixed(2) : 'N/A'} (source: ${sbSource})
+  SD Total Spend: $${Math.round(sdSpend)} | SD Total Sales: $${Math.round(sdSales)} | SD ROAS: ${sdSpend > 0 ? (sdSales / sdSpend).toFixed(2) : 'N/A'} (source: ${sdSource})
   ═══════════════════════════════════════════════════════════
   ACCOUNT TOTAL SPEND: $${Math.round(totalSpend)} | ACCOUNT TOTAL SALES: $${Math.round(totalSales)} | BLENDED ROAS: ${totalSpend > 0 ? (totalSales / totalSpend).toFixed(2) : 'N/A'} | BLENDED ACOS: ${totalSales > 0 ? ((totalSpend / totalSales) * 100).toFixed(1) : 'N/A'}%
   ═══════════════════════════════════════════════════════════
-  SP Campaign Count: ${intelData.spCampaign?.totalCampaigns || 'N/A'} | SB Campaign Count: ${intelData.sbCampaign?.totalCampaigns || 'N/A'} | SD Campaign Count: ${(intelData.sdCampaign || []).length || 'N/A'}
+  SP Campaign Count: ${intelData.spCampaign?.totalCampaigns || (intelData.campaignSummary || []).filter(c => (c.type || '').toUpperCase() === 'SP').length || 'N/A'} | SB Campaign Count: ${intelData.sbCampaign?.totalCampaigns || (intelData.campaignSummary || []).filter(c => (c.type || '').toUpperCase() === 'SB').length || 'N/A'} | SD Campaign Count: ${(intelData.sdCampaign || []).length || (intelData.campaignSummary || []).filter(c => (c.type || '').toUpperCase() === 'SD').length || 'N/A'}
+
+NOTE: These totals are computed from the best available data source for each ad type (shown in parentheses above).
+If the Campaign Summary section below shows different totals, the numbers above take precedence — they use
+the most complete source. The Campaign Summary, Search Terms, Targeting, Placements, and Advertised Products
+sections are all different views of the same underlying spend.
 `;
   }
 
@@ -1425,7 +1469,7 @@ ${isolationCandidates.map(t => `  "${t.term}" | ${t.orders} orders | ROAS ${t.ro
 
 === ANALYSIS PRINCIPLES (MANDATORY) ===
 - ONLY cite numbers that appear in the data below. NEVER fabricate metrics or invent campaign names.
-- ⚠️ DOUBLE-COUNTING WARNING: The data below includes multiple views of the SAME ad spend. SP Search Terms, SP Targeting, SP Placements, and SP Advertised Products are all different slices of the SAME SP dollars. DO NOT sum them. Use ONLY the "AUTHORITATIVE ACCOUNT TOTALS" section for total spend, total sales, and blended ROAS/ACOS figures.
+- ⚠️ DOUBLE-COUNTING WARNING: The data below includes multiple views of the SAME ad spend. SP Search Terms, SP Targeting, SP Placements, and SP Advertised Products are all different slices of the SAME SP dollars. DO NOT sum them. Use the "AUTHORITATIVE ACCOUNT TOTALS" section for total spend, total sales, and blended ROAS/ACOS figures. These totals are pre-computed from the best available data source (CSV campaign reports, API campaign summary, or search terms — whichever has the most complete data).
 - ⚠️ PRODUCT IDENTIFICATION: ALWAYS look up ASINs in the PRODUCT CATALOG before making recommendations. Campaign names contain abbreviations (e.g., "TBB" might mean body balm, "TBL" might mean lip balm) — do NOT guess product type from abbreviations. Instead, find the ASIN in the campaign name (e.g., B0CLF4XDCP) and look it up in the catalog to get the actual product title. Get the product category RIGHT — recommending lip balm actions for a body balm campaign (or vice versa) is a critical error.
 - Every recommendation MUST reference the specific data point that triggered it. Format: "Campaign X has ROAS 0.8x on $450 spend → [action]"
 - Cross-reference data sources: tie search terms to the campaigns they run in, products to their ad profitability, placements to the campaigns using them.
