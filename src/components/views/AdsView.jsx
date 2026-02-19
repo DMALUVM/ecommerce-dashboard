@@ -1781,6 +1781,13 @@ ${kpiHtml}
                 { platform: 'meta', key: 'meta_placement', label: 'Meta Placement', source: 'CSV only' },
               ];
               const platformColor = { amazon: 'bg-orange-500', google: 'bg-red-500', meta: 'bg-blue-500' };
+              const getFreshness = (uploadedAt) => {
+                if (!uploadedAt) return null;
+                const days = Math.floor((Date.now() - new Date(uploadedAt).getTime()) / 86400000);
+                if (days <= 7) return { dot: 'bg-emerald-500', text: 'text-emerald-500', label: days === 0 ? 'today' : `${days}d ago` };
+                if (days <= 14) return { dot: 'bg-amber-500', text: 'text-amber-500', label: `${days}d ago` };
+                return { dot: 'bg-rose-500', text: 'text-rose-500', label: `${days}d ago` };
+              };
               return (
                 <div>
                   <h4 className="text-violet-400 text-[10px] font-semibold uppercase tracking-wider mb-2">Deep Analysis Reports</h4>
@@ -1788,14 +1795,18 @@ ${kpiHtml}
                     {ALL_REPORTS.map(({ platform, key, label, source }) => {
                       const data = adsIntelData?.[platform]?.[key];
                       const hasData = data?.records?.length > 0;
+                      const freshness = hasData ? getFreshness(data.meta?.uploadedAt || data.uploadedAt) : null;
                       return (
                         <div key={`${platform}-${key}`} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs ${hasData ? 'bg-slate-900/30' : 'bg-slate-900/15 border border-dashed border-slate-700/40'}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${hasData ? (platformColor[platform] || 'bg-emerald-500') : 'bg-slate-700'}`}/>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasData ? (freshness?.dot || platformColor[platform] || 'bg-emerald-500') : 'bg-slate-700'}`}/>
                           <span className={`flex-1 truncate ${hasData ? 'text-white' : 'text-slate-600'}`}>{data?.meta?.label || label}</span>
                           {hasData ? (
-                            <span className="text-slate-500 text-[10px]">{data.records.length} rows{data.meta?.source === 'amazon-ads-api' ? ' · API' : ''}</span>
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-slate-500 text-[10px]">{data.records.length} rows{data.meta?.source === 'amazon-ads-api' ? ' · API' : ''}</span>
+                              {freshness && <span className={`text-[10px] ${freshness.text}`}>· {freshness.label}</span>}
+                            </span>
                           ) : (
-                            <span className="text-slate-700 text-[10px] italic">{source}</span>
+                            <span className="text-slate-700 text-[10px] italic shrink-0">{source}</span>
                           )}
                         </div>
                       );
