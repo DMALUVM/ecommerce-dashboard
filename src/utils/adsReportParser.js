@@ -61,8 +61,8 @@ const REPORT_SIGNATURES = [
     tier: 2,
     platform: 'amazon',
     label: 'SP Campaign Report',
-    required: ['Campaign Name', 'Campaign Daily Budget', 'Spend'],
-    optional: ['Campaign Status', 'Impressions', 'Clicks', '7 Day Total Sales', 'Bidding Strategy', 'Portfolio name'],
+    required: ['Campaign Name', 'Spend', '7 Day Total Sales'],
+    optional: ['Budget Amount', 'Campaign Daily Budget', 'Campaign Status', 'Status', 'Impressions', 'Clicks', 'Bidding strategy', 'Targeting Type', 'Portfolio name', 'Program Type'],
   },
   {
     id: 'sp_search_terms',
@@ -111,8 +111,8 @@ const REPORT_SIGNATURES = [
     tier: 2,
     platform: 'amazon',
     label: 'SB Campaign Report',
-    required: ['Campaign Name', 'Campaign Daily Budget', '14 Day Total Sales'],
-    optional: ['Campaign Status', 'Impressions', 'Clicks', 'Spend', 'New-to-brand Orders (#)', 'Portfolio name'],
+    required: ['Campaign Name', 'Cost type', 'Spend'],
+    optional: ['14 Day Total Sales', 'Impressions', 'Clicks', '14 Day New-to-brand Orders (#)', '14 Day Detail Page Views (DPV)', 'Portfolio name', 'Viewable Impressions', '14 Day Branded Searches'],
   },
   {
     id: 'sb_campaign_placement',

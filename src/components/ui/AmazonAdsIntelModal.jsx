@@ -354,11 +354,11 @@ const aggregateSPCampaign = (rows) => {
     byCampaign[camp].clicks += num(r['Clicks'] || r['clicks']);
     byCampaign[camp].orders += num(r['7 Day Total Orders (#)'] || r['Total Orders']);
     byCampaign[camp].units += num(r['7 Day Total Units (#)'] || r['Total Units']);
-    const budget = num(r['Campaign Daily Budget'] || r['Daily Budget'] || r['Budget']);
+    const budget = num(r['Budget Amount'] || r['Campaign Daily Budget'] || r['Daily Budget'] || r['Budget']);
     if (budget > 0) byCampaign[camp].budget = budget;
-    const status = r['Campaign Status'] || r['Status'] || r['Campaign Serving status'] || '';
+    const status = r['Status'] || r['Campaign Status'] || r['Campaign Serving status'] || '';
     if (status) byCampaign[camp].status = status;
-    const strat = r['Campaign Bidding Strategy'] || r['Bidding Strategy'] || r['Bidding strategy'] || '';
+    const strat = r['Bidding strategy'] || r['Campaign Bidding Strategy'] || r['Bidding Strategy'] || '';
     if (strat) byCampaign[camp].biddingStrategy = strat;
     const portfolio = r['Portfolio name'] || r['Portfolio Name'] || '';
     if (portfolio) byCampaign[camp].portfolioName = portfolio;
@@ -1191,15 +1191,25 @@ const detectReportType = (headers, rows, fileName) => {
   if (hSet.has('sessions - total') || (hSet.has('(parent) asin') && (hSet.has('sessions - mobile app') || hSet.has('units ordered') || hSet.has('ordered product sales')))) return 'businessReport';
   if (hSet.has('unit session percentage') || hSet.has('featured offer (buy box) percentage')) return 'businessReport';
 
-  // SD Campaign (14 Day + DPV / New-to-brand)
-  if (hSet.has('14 day detail page views (dpv)') || hSet.has('14 day new-to-brand orders (#)')) return 'sdCampaign';
+  // ── CAMPAIGN-LEVEL REPORT DETECTION ──
+  // Amazon has 3 campaign report types sharing many columns. Key differentiators:
+  //   SP Campaign: "7 Day" attribution, may have "Budget Amount" or "Campaign Daily Budget"
+  //   SB Campaign: "Cost type" column (UNIQUE to SB), "14 Day" attribution
+  //   SD Campaign: "Budget Amount" + "14 Day" attribution, NO "Cost type", NO "7 Day" sales
+  // Detection order: SB Search Terms → SB Campaign → SP sub-reports → SP Campaign → SD Campaign
+
+  const has7Day = hSet.has('7 day total sales') || hSet.has('7 day total sales ') || hSet.has('7 day total orders (#)');
+  const has14Day = hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('14 day total orders (#)');
 
   // SB Search Terms (14 Day attribution + Customer Search Term)
-  if ((hSet.has('customer search term') || hSet.has('search term')) && (hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('14 day total orders (#)'))) return 'sbSearchTerms';
+  if ((hSet.has('customer search term') || hSet.has('search term')) && has14Day) return 'sbSearchTerms';
+
+  // SB Campaign Report — "Cost type" is UNIQUE to SB (not in SP or SD)
+  if (hSet.has('cost type') && (has14Day || hSet.has('spend'))) return 'sbCampaign';
 
   // SP/SB Placement (has Placement column + sales data)
   if (hSet.has('placement') && hSet.has('bidding strategy')) return 'spPlacement';
-  if (hSet.has('placement') && (hSet.has('14 day total sales') || hSet.has('14 day total sales ') || hSet.has('cost type') || hSet.has('7 day total sales ') || hSet.has('7 day total sales'))) return 'spPlacement';
+  if (hSet.has('placement') && (has14Day || hSet.has('cost type') || has7Day)) return 'spPlacement';
   if (hSet.has('placement') && (hSet.has('spend') || hSet.has('impressions'))) return 'spPlacement';
 
   // SP Targeting (has Targeting + Match Type + Top-of-search IS)
@@ -1212,19 +1222,15 @@ const detectReportType = (headers, rows, fileName) => {
   if (hSet.has('advertised asin') || hSet.has('advertised sku')) return 'spAdvertised';
 
   // SP Search Terms (7 Day attribution)
-  if (hSet.has('customer search term') && (hSet.has('7 day total sales') || hSet.has('7 day total sales ') || hSet.has('7 day total orders (#)'))) return 'spSearchTerms';
+  if (hSet.has('customer search term') && has7Day) return 'spSearchTerms';
 
-  // SB Campaign Report (campaign-level with 14-day attribution, no search term / DPV columns)
-  // Detected by: Campaign Daily Budget + 14 Day sales (no Customer Search Term — that's sbSearchTerms)
-  if (hSet.has('campaign daily budget') && (hSet.has('14 day total sales') || hSet.has('14 day total sales '))) return 'sbCampaign';
-  if (hSet.has('campaign name') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin') && (hSet.has('14 day total sales') || hSet.has('14 day total sales '))) return 'sbCampaign';
+  // SP Campaign Report — uses "7 Day" attribution. Both "Budget Amount" and "Campaign Daily Budget" accepted.
+  if (has7Day && hSet.has('campaign name') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin')) return 'spCampaign';
+  // Fallback SP: long Amazon header names with ACOS/ROAS partials + 7 Day attribution
+  if (has7Day && hSet.has('campaign name') && hSet.has('spend') && (hasPartial('total advertising cost of sales') || hasPartial('return on advertising spend'))) return 'spCampaign';
 
-  // SP Campaign Report (campaign-level with 7-day attribution, no search term / targeting / placement / ASIN columns)
-  // Amazon exports use long headers like "Total Advertising Cost of Sales (ACoS)" and "Return on Advertising Spend (RoAS)"
-  if (hSet.has('campaign daily budget') && (hSet.has('7 day total sales') || hSet.has('7 day total sales '))) return 'spCampaign';
-  if (hSet.has('campaign name') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin') && (hSet.has('7 day total sales') || hSet.has('7 day total sales '))) return 'spCampaign';
-  // Fallback: campaign-level report with long Amazon header names (e.g. "Total Advertising Cost of Sales (ACoS)")
-  if (hSet.has('campaign name') && hSet.has('spend') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin') && (hasPartial('total advertising cost of sales') || hasPartial('return on advertising spend') || hSet.has('campaign daily budget'))) return 'spCampaign';
+  // SD Campaign — "14 Day" attribution WITHOUT "Cost type" (that's SB) and WITHOUT "7 Day" sales (that's SP)
+  if (has14Day && !hSet.has('cost type') && !has7Day && !hSet.has('advertised asin') && !hSet.has('customer search term') && (hSet.has('budget amount') || hSet.has('14 day detail page views (dpv)') || hSet.has('14 day new-to-brand orders (#)'))) return 'sdCampaign';
 
   // Daily Overview / Historical (has Date + Spend + ROAS columns — custom/manual overview data)
   if ((hSet.has('date') || hSet.has('Date')) && (hSet.has('spend') || hSet.has('Spend')) && (hSet.has('roas') || hSet.has('ROAS') || hSet.has('acos') || hSet.has('ACOS'))) {
@@ -1235,7 +1241,10 @@ const detectReportType = (headers, rows, fileName) => {
   // Fallback: search term report without clear attribution window
   if (hSet.has('customer search term') || hSet.has('search term')) return 'spSearchTerms';
 
-  // Last resort: campaign-level report with Spend + Campaign Name (generic Amazon ads export)
+  // Fallback: campaign-level with 14 Day (SB-like) or generic
+  if (has14Day && hSet.has('campaign name') && !hSet.has('customer search term') && !hSet.has('advertised asin')) return 'sbCampaign';
+
+  // Last resort: campaign-level report with Spend + Campaign Name
   if (hSet.has('campaign name') && (hSet.has('spend') || hSet.has('impressions')) && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement')) return 'spCampaign';
 
   return null;
