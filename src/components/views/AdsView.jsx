@@ -10,11 +10,61 @@ import { hasDailySalesData } from '../../utils/date';
 import { AI_MODEL_OPTIONS, getModelLabel } from '../../utils/config';
 import NavTabs from '../ui/NavTabs';
 
-// ── Markdown → HTML for PDF export ──
+// ── Markdown → HTML for PDF export & in-app rendering ──
 const markdownToHtml = (md) => {
   if (!md) return '';
-  let html = md
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // First escape HTML entities
+  let text = md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Extract and convert markdown tables before line-level processing
+  const lines = text.split('\n');
+  const result = [];
+  let i = 0;
+  while (i < lines.length) {
+    // Detect a markdown table: line with pipes, followed by separator row (|---|---|)
+    if (lines[i].includes('|') && i + 1 < lines.length && /^\|?\s*[-:]+[-|\s:]+$/.test(lines[i + 1])) {
+      const headerLine = lines[i];
+      const sepLine = lines[i + 1];
+      // Parse alignment from separator
+      const aligns = sepLine.split('|').filter(c => c.trim()).map(c => {
+        const t = c.trim();
+        if (t.startsWith(':') && t.endsWith(':')) return 'center';
+        if (t.endsWith(':')) return 'right';
+        return 'left';
+      });
+      // Parse header cells
+      const headerCells = headerLine.split('|').filter(c => c.trim()).map(c => c.trim());
+      let tableHtml = '<div class="table-wrap"><table><thead><tr>';
+      headerCells.forEach((cell, ci) => {
+        const align = aligns[ci] || 'left';
+        tableHtml += `<th style="text-align:${align}">${cell}</th>`;
+      });
+      tableHtml += '</tr></thead><tbody>';
+      i += 2; // skip header + separator
+      while (i < lines.length && lines[i].includes('|') && !/^\|?\s*[-:]+[-|\s:]+$/.test(lines[i])) {
+        const cells = lines[i].split('|').filter(c => c.trim() !== '' || lines[i].trim().startsWith('|')).map(c => c.trim());
+        // Handle leading/trailing pipe: split on | and filter
+        const rowCells = lines[i].replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+        tableHtml += '<tr>';
+        rowCells.forEach((cell, ci) => {
+          const align = aligns[ci] || 'left';
+          tableHtml += `<td style="text-align:${align}">${cell}</td>`;
+        });
+        tableHtml += '</tr>';
+        i++;
+      }
+      tableHtml += '</tbody></table></div>';
+      result.push(tableHtml);
+    } else {
+      result.push(lines[i]);
+      i++;
+    }
+  }
+  text = result.join('\n');
+
+  // Now process inline/block markdown
+  let html = text
     .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -1523,10 +1573,107 @@ Ranked by dollar impact. For each: Meta Ads Manager navigation path, exact actio
                     const modelName = getModelLabel(aiChatModel);
                     const modeLabel = REPORT_MODES.find(m => m.key === reportMode)?.label || 'All Platforms';
                     const htmlBody = markdownToHtml(report);
-                    const kpiHtml = `<div class="kpi-bar"><div class="kpi"><span class="kpi-label">Ad Spend</span><span class="kpi-value">$${(cur.spend || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div><div class="kpi"><span class="kpi-label">Revenue</span><span class="kpi-value">$${(cur.rev || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div><div class="kpi"><span class="kpi-label">ROAS</span><span class="kpi-value">${(cur.roas || 0).toFixed(2)}x</span></div><div class="kpi"><span class="kpi-label">TACOS</span><span class="kpi-value">${(cur.tacos || 0).toFixed(1)}%</span></div><div class="kpi"><span class="kpi-label">Days</span><span class="kpi-value">${cur.days || 0}</span></div></div>`;
                     const bn = storeName || 'Brand';
-                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bn} ${modeLabel} Audit</title><style>@page{margin:.75in;size:letter}*{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.65;max-width:100%;padding:0;margin:0;font-size:11pt}.header{background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);color:white;padding:32px 40px 20px;margin:-.75in -.75in 0}.header h1{font-size:22pt;margin:0 0 4px;font-weight:800}.header .subtitle{font-size:13pt;opacity:.85;margin-bottom:12px;font-weight:300}.header .meta{font-size:9pt;opacity:.7;display:flex;gap:20px}.kpi-bar{display:flex;gap:0;margin:0 -.75in;padding:16px 40px;background:#0a1628}.kpi{flex:1;text-align:center;border-right:1px solid rgba(255,255,255,.1)}.kpi:last-child{border-right:none}.kpi-label{display:block;font-size:8pt;text-transform:uppercase;letter-spacing:.5px;color:rgba(255,255,255,.5);margin-bottom:2px}.kpi-value{display:block;font-size:14pt;font-weight:700;color:white}.content{padding-top:24px}h2{color:#1a1a2e;border-bottom:3px solid #e94560;padding-bottom:6px;margin-top:32px;font-size:14pt}h3{color:#16213e;margin-top:22px;font-size:12pt;border-left:3px solid #e94560;padding-left:10px}p,li{font-size:11pt;margin-bottom:6px}ul,ol{padding-left:22px}strong{color:#e94560}code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:10pt}hr{border:none;border-top:1px solid #ddd;margin:28px 0}.footer{margin-top:48px;padding-top:16px;border-top:2px solid #1a1a2e;font-size:8pt;color:#888;text-align:center}.confidential{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 16px;margin-bottom:24px;font-size:9pt;color:#856404}@media print{.no-print{display:none!important}.header,.kpi-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="header"><h1>${bn} Advertising Audit</h1><div class="subtitle">${modeLabel} Performance Report</div><div class="meta"><span>${dateStr}</span><span>${modelName}</span><span>${dateRangeLabel} window</span></div></div>${kpiHtml}<div class="content"><div class="no-print" style="background:#fff3cd;padding:12px 20px;margin-bottom:20px;border-radius:8px;font-size:10pt;color:#856404">Press Ctrl+P → Save as PDF</div><div class="confidential">CONFIDENTIAL — Proprietary advertising data for ${bn}.</div>${htmlBody}</div><div class="footer"><p><strong>${bn} Advertising Command Center</strong></p><p>${modeLabel} Audit · ${dateStr} · ${modelName} · ${Date.now().toString(36).toUpperCase()}</p><p style="margin-top:6px;font-size:7pt">AI-generated analysis. Validate before implementation.</p></div></body></html>`;
-                    const w = window.open('', '_blank', 'width=900,height=700'); w.document.write(printDoc); w.document.close(); setTimeout(() => w.print(), 500);
+                    const fileName = `${(bn).toLowerCase().replace(/\s+/g, '-')}-ppc-audit-${new Date().toISOString().slice(0, 10)}`;
+                    const kpiCards = [
+                      { label: 'Ad Spend', value: `$${(cur.spend || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
+                      { label: 'Revenue', value: `$${(cur.rev || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
+                      { label: 'ROAS', value: `${(cur.roas || 0).toFixed(2)}x` },
+                      { label: 'ACOS', value: `${cur.roas > 0 ? (100 / cur.roas).toFixed(1) : '0'}%` },
+                      { label: 'TACOS', value: `${(cur.tacos || 0).toFixed(1)}%` },
+                    ];
+                    const kpiHtml = `<div class="kpi-strip">${kpiCards.map(k => `<div class="kpi-card"><div class="kpi-label">${k.label}</div><div class="kpi-value">${k.value}</div></div>`).join('')}</div>`;
+                    const pdfStyles = `
+@page { margin: 0.6in 0.65in; size: letter; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a1a2e; line-height: 1.6; font-size: 10pt; }
+
+/* ── Cover Header ── */
+.cover { background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #0f3460 100%); color: white; padding: 36px 44px 24px; margin: -0.6in -0.65in 0; }
+.cover .brand { font-size: 11pt; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 2px; }
+.cover h1 { font-size: 26pt; font-weight: 900; letter-spacing: -0.5px; margin: 0 0 4px; line-height: 1.15; }
+.cover .subtitle { font-size: 12pt; font-weight: 300; color: rgba(255,255,255,0.7); margin-bottom: 16px; }
+.cover .meta-row { display: flex; gap: 24px; font-size: 8.5pt; color: rgba(255,255,255,0.45); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; }
+
+/* ── KPI Strip ── */
+.kpi-strip { display: flex; gap: 0; margin: 0 -0.65in; padding: 18px 44px; background: #0a1628; border-bottom: 3px solid #e94560; }
+.kpi-card { flex: 1; text-align: center; border-right: 1px solid rgba(255,255,255,0.08); padding: 0 12px; }
+.kpi-card:last-child { border-right: none; }
+.kpi-label { font-size: 7pt; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.4); margin-bottom: 3px; font-weight: 600; }
+.kpi-value { font-size: 16pt; font-weight: 800; color: white; letter-spacing: -0.3px; }
+
+/* ── Content Area ── */
+.content { padding: 28px 0 0; }
+.confidential { background: #f8f9fa; border-left: 4px solid #e94560; padding: 10px 16px; margin-bottom: 28px; font-size: 8pt; color: #6b7280; font-weight: 500; letter-spacing: 0.3px; }
+
+/* ── Typography ── */
+h1 { font-size: 18pt; font-weight: 800; color: #0f172a; margin: 36px 0 12px; letter-spacing: -0.3px; }
+h2 { font-size: 13pt; font-weight: 700; color: #1e293b; margin: 30px 0 10px; padding-bottom: 8px; border-bottom: 2.5px solid #e94560; letter-spacing: -0.2px; }
+h3 { font-size: 11pt; font-weight: 600; color: #334155; margin: 22px 0 8px; padding-left: 12px; border-left: 3px solid #6366f1; }
+h4 { font-size: 10pt; font-weight: 600; color: #475569; margin: 16px 0 6px; }
+p { font-size: 10pt; margin-bottom: 6px; line-height: 1.65; color: #374151; }
+li { font-size: 10pt; margin-bottom: 4px; line-height: 1.55; color: #374151; }
+ul, ol { padding-left: 20px; margin-bottom: 10px; }
+strong { color: #e94560; font-weight: 700; }
+em { color: #6366f1; }
+code { background: #f1f5f9; padding: 1px 6px; border-radius: 3px; font-size: 9pt; font-family: 'SF Mono', 'Fira Code', monospace; color: #7c3aed; }
+hr { border: none; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+
+/* ── Tables ── */
+.table-wrap { margin: 14px 0 18px; border-radius: 6px; overflow: hidden; border: 1px solid #d1d5db; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.table-wrap table, table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 0; }
+.table-wrap th, table th {
+  background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left;
+  padding: 9px 10px; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px;
+  border-bottom: 2px solid #e94560; white-space: nowrap;
+}
+.table-wrap td, table td {
+  padding: 7px 10px; border-bottom: 1px solid #f3f4f6; font-size: 8.5pt;
+  color: #374151; vertical-align: top; line-height: 1.4;
+}
+.table-wrap tbody tr:nth-child(even), table tbody tr:nth-child(even) { background: #f9fafb; }
+.table-wrap tbody tr:nth-child(odd), table tbody tr:nth-child(odd) { background: #ffffff; }
+
+/* ── Footer ── */
+.footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #0f172a; text-align: center; }
+.footer p { font-size: 7.5pt; color: #9ca3af; margin-bottom: 2px; }
+.footer .brand-line { font-size: 8.5pt; font-weight: 700; color: #1e293b; letter-spacing: 0.5px; margin-bottom: 4px; }
+
+/* ── Print Overrides ── */
+@media print {
+  .no-print { display: none !important; }
+  .cover, .kpi-strip { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .table-wrap th, table th { background: #0f172a !important; color: #e2e8f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  table { page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  h2, h3 { page-break-after: avoid; }
+  .table-wrap { page-break-inside: auto; }
+}`;
+                    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileName}</title><style>${pdfStyles}</style></head><body>
+<div class="cover">
+  <div class="brand">${bn}</div>
+  <h1>PPC Advertising Audit</h1>
+  <div class="subtitle">${modeLabel} Performance Report</div>
+  <div class="meta-row"><span>${dateStr}</span><span>${modelName}</span><span>${dateRangeLabel} window</span></div>
+</div>
+${kpiHtml}
+<div class="content">
+  <div class="no-print" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;padding:14px 24px;margin-bottom:24px;border-radius:8px;font-size:10pt;display:flex;justify-content:space-between;align-items:center;">
+    <span><strong>PDF Preview</strong> — Use Ctrl+P / Cmd+P and select "Save as PDF"</span>
+    <button onclick="window.print()" style="background:white;color:#6366f1;border:none;padding:8px 20px;border-radius:6px;font-weight:700;cursor:pointer;font-size:10pt;">Save as PDF</button>
+  </div>
+  <div class="confidential">CONFIDENTIAL — Proprietary advertising intelligence for ${bn}. Do not distribute.</div>
+  ${htmlBody}
+</div>
+<div class="footer">
+  <p class="brand-line">${bn} Advertising Command Center</p>
+  <p>${modeLabel} Audit &middot; ${dateStr} &middot; ${modelName}</p>
+  <p style="margin-top:6px;font-size:6.5pt;color:#d1d5db;">AI-generated analysis. Validate recommendations before implementation. ID: ${Date.now().toString(36).toUpperCase()}</p>
+</div></body></html>`;
+                    const w = window.open('', '_blank', 'width=900,height=700');
+                    if (!w) { setToast({ message: 'Please allow popups to export PDF', type: 'error' }); return; }
+                    w.document.write(printDoc); w.document.close();
                   }} className="px-3 py-1.5 bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-lg text-white text-[10px] font-medium hover:from-orange-500 hover:to-amber-500 flex items-center gap-1">📊 Export PDF</button>
                 </div>
               </div>
@@ -1538,7 +1685,11 @@ Ranked by dollar impact. For each: Meta Ads Manager navigation path, exact actio
                       <button onClick={() => { if (msg.role === 'user') setAdsAiMessages(prev => prev.filter((_, j) => j !== i && j !== i + 1)); else setAdsAiMessages(prev => prev.filter((_, j) => j !== i)); }}
                         className="hidden group-hover:block p-1 rounded hover:bg-rose-900/30 text-slate-700 hover:text-rose-400"><X className="w-3 h-3"/></button>
                     </div>
-                    <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                    {msg.role === 'assistant' ? (
+                      <div className="text-sm text-slate-200 leading-relaxed ads-report-content" dangerouslySetInnerHTML={{ __html: markdownToHtml(msg.content) }} />
+                    ) : (
+                      <p className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                    )}
                   </div>
                 ))}
                 {adsAiLoading && <div className="bg-slate-900/40 rounded-xl p-4"><div className="flex gap-1"><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}/><div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}/></div></div>}
@@ -1681,7 +1832,11 @@ Ranked by dollar impact. For each: Meta Ads Manager navigation path, exact actio
                         className={`absolute -top-1.5 -right-1.5 hidden group-hover:flex w-4 h-4 items-center justify-center rounded-full text-white shadow ${msg.role === 'user' ? 'bg-rose-500' : 'bg-slate-500 hover:bg-rose-500'}`}>
                         <X className="w-2.5 h-2.5"/>
                       </button>
-                      <p className="text-xs whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                      {msg.role === 'assistant' ? (
+                        <div className="text-xs leading-relaxed ads-report-content" dangerouslySetInnerHTML={{ __html: markdownToHtml(msg.content) }} />
+                      ) : (
+                        <p className="text-xs whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                      )}
                     </div>
                   </div>
                 ))}
