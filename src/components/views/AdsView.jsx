@@ -1757,28 +1757,53 @@ ${kpiHtml}
               <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-red-500"/><span className="text-white text-xs font-medium">Google</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.googleSpend ?? allDaysData[d]?.googleSpend ?? 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.googleImpressions ?? allDaysData[d]?.shopify?.adsMetrics?.googleImpressions ?? 0) > 0).length}d metrics</p></div>
               <div className="bg-slate-900/40 rounded-lg p-3"><div className="flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-blue-500"/><span className="text-white text-xs font-medium">Meta</span></div><p className="text-slate-500 text-[10px]">{sortedDays.filter(d => (allDaysData[d]?.shopify?.metaSpend ?? allDaysData[d]?.metaSpend ?? 0) > 0).length}d spend · {sortedDays.filter(d => (allDaysData[d]?.metaImpressions ?? allDaysData[d]?.shopify?.adsMetrics?.metaImpressions ?? 0) > 0).length}d metrics</p></div>
             </div>
-            {deepReportCount > 0 ? (
-              <div>
-                <h4 className="text-violet-400 text-[10px] font-semibold uppercase tracking-wider mb-2">Deep Analysis Reports</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
-                  {Object.entries(adsIntelData || {}).map(([platform, reports]) => {
-                    if (platform === 'lastUpdated' || platform === 'reportCount' || typeof reports !== 'object') return null;
-                    return Object.entries(reports).map(([rt, data]) => {
-                      if (!data?.records) return null;
-                      return (<div key={`${platform}-${rt}`} className="flex items-center gap-2 bg-slate-900/30 rounded-lg px-3 py-1.5 text-xs">
-                        <span className={`w-1.5 h-1.5 rounded-full ${platform === 'amazon' ? 'bg-orange-500' : platform === 'google' ? 'bg-red-500' : platform === 'meta' ? 'bg-blue-500' : 'bg-emerald-500'}`}/>
-                        <span className="text-white flex-1 truncate">{data.meta?.label || rt}</span>
-                        <span className="text-slate-600 text-[10px]">{data.records.length} rows</span>
-                      </div>);
-                    });
-                  })}
+            {(() => {
+              const ALL_REPORTS = [
+                { platform: 'amazon', key: 'sp_search_terms', label: 'SP Search Terms', source: 'API + CSV' },
+                { platform: 'amazon', key: 'sp_advertised_product', label: 'SP Advertised Product', source: 'API + CSV' },
+                { platform: 'amazon', key: 'sp_targeting', label: 'SP Targeting', source: 'API + CSV' },
+                { platform: 'amazon', key: 'sp_placement', label: 'SP Placement', source: 'API + CSV' },
+                { platform: 'amazon', key: 'sp_campaigns', label: 'SP Campaigns', source: 'API + CSV' },
+                { platform: 'amazon', key: 'sb_search_terms', label: 'SB Search Terms', source: 'API + CSV' },
+                { platform: 'amazon', key: 'sb_campaign_placement', label: 'SB Campaign Placement', source: 'CSV only' },
+                { platform: 'amazon', key: 'sd_campaigns', label: 'SD Campaigns', source: 'API + CSV' },
+                { platform: 'amazon', key: 'search_query_performance', label: 'Search Query Performance', source: 'CSV only (Brand Analytics)' },
+                { platform: 'amazon', key: 'business_report_child', label: 'Business Report (Child ASIN)', source: 'CSV only (Seller Central)' },
+                { platform: 'amazon', key: 'business_report_parent', label: 'Business Report (Parent ASIN)', source: 'CSV only (Seller Central)' },
+                { platform: 'amazon', key: 'sku_economics', label: 'SKU Economics', source: 'CSV only (Seller Central)' },
+                { platform: 'google', key: 'google_campaign_perf', label: 'Google Campaign Performance', source: 'CSV only' },
+                { platform: 'google', key: 'google_search_terms', label: 'Google Search Terms', source: 'CSV only' },
+                { platform: 'google', key: 'google_keywords', label: 'Google Keywords', source: 'CSV only' },
+                { platform: 'google', key: 'google_ad_groups', label: 'Google Ad Groups', source: 'CSV only' },
+                { platform: 'meta', key: 'meta_campaign_perf', label: 'Meta Campaign Performance', source: 'CSV only' },
+                { platform: 'meta', key: 'meta_ad_sets', label: 'Meta Ad Sets', source: 'CSV only' },
+                { platform: 'meta', key: 'meta_ads', label: 'Meta Ads', source: 'CSV only' },
+                { platform: 'meta', key: 'meta_placement', label: 'Meta Placement', source: 'CSV only' },
+              ];
+              const platformColor = { amazon: 'bg-orange-500', google: 'bg-red-500', meta: 'bg-blue-500' };
+              return (
+                <div>
+                  <h4 className="text-violet-400 text-[10px] font-semibold uppercase tracking-wider mb-2">Deep Analysis Reports</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                    {ALL_REPORTS.map(({ platform, key, label, source }) => {
+                      const data = adsIntelData?.[platform]?.[key];
+                      const hasData = data?.records?.length > 0;
+                      return (
+                        <div key={`${platform}-${key}`} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs ${hasData ? 'bg-slate-900/30' : 'bg-slate-900/15 border border-dashed border-slate-700/40'}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${hasData ? (platformColor[platform] || 'bg-emerald-500') : 'bg-slate-700'}`}/>
+                          <span className={`flex-1 truncate ${hasData ? 'text-white' : 'text-slate-600'}`}>{data?.meta?.label || label}</span>
+                          {hasData ? (
+                            <span className="text-slate-500 text-[10px]">{data.records.length} rows{data.meta?.source === 'amazon-ads-api' ? ' · API' : ''}</span>
+                          ) : (
+                            <span className="text-slate-700 text-[10px] italic">{source}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="text-center py-4">
-                <Brain className="w-6 h-6 text-slate-700 mx-auto mb-1"/><p className="text-slate-600 text-xs">No deep analysis data — upload search terms, placements, or campaigns for AI reports</p>
-              </div>
-            )}
+              );
+            })()}
 
             {adsIntelData?.amazon?.search_query_performance && (
               <div className="mt-4 pt-4 border-t border-slate-700/50">
