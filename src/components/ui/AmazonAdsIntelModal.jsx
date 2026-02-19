@@ -923,13 +923,13 @@ ${Object.entries(campaignASINs).filter(([asin]) => !catalog[asin]).map(([asin, c
 Total SP Search Term Spend: $${Math.round(d.totalSpend)} | Sales $${Math.round(d.totalSales)} | ROAS ${d.overallROAS.toFixed(2)}
 
 TOP CONVERTING SEARCH TERMS (by ROAS, min $5 spend):
-${d.topByROAS.slice(0, 15).map(t => `  "${t.term}" | ROAS ${t.roas.toFixed(1)} | Spend $${t.spend.toFixed(2)} | Sales $${t.sales.toFixed(2)} | Conv ${t.convRate.toFixed(1)}% | ${t.matchTypes.join('/')}`).join('\n')}
+${d.topByROAS.slice(0, 15).map(t => `  "${t.term}" | ROAS ${t.roas.toFixed(1)} | Spend $${t.spend.toFixed(2)} | Sales $${t.sales.toFixed(2)} | Conv ${t.convRate.toFixed(1)}% | ${t.matchTypes.join('/')} | Campaigns: ${(t.campaigns || []).slice(0, 2).join(', ')}${(t.campaigns || []).length > 2 ? ` (+${t.campaigns.length - 2})` : ''}`).join('\n')}
 
 TOP REVENUE SEARCH TERMS:
-${d.topBySales.slice(0, 10).map(t => `  "${t.term}" | Sales $${t.sales.toFixed(2)} | Spend $${t.spend.toFixed(2)} | ACOS ${t.acos.toFixed(1)}% | Orders ${t.orders}`).join('\n')}
+${d.topBySales.slice(0, 10).map(t => `  "${t.term}" | Sales $${t.sales.toFixed(2)} | Spend $${t.spend.toFixed(2)} | ACOS ${t.acos.toFixed(1)}% | Orders ${t.orders} | Campaigns: ${(t.campaigns || []).slice(0, 2).join(', ')}${(t.campaigns || []).length > 2 ? ` (+${t.campaigns.length - 2})` : ''}`).join('\n')}
 
-WASTED SPEND (spend but $0 sales):
-${d.wasteful.slice(0, 15).map(t => `  "${t.term}" | WASTED $${t.spend.toFixed(2)} | Clicks ${t.clicks} | Impr ${t.impressions} | ${t.matchTypes.join('/')}`).join('\n')}
+WASTED SPEND (spend but $0 sales) — CHECK CAMPAIGN vs SEARCH INTENT before negating:
+${d.wasteful.slice(0, 15).map(t => `  "${t.term}" | WASTED $${t.spend.toFixed(2)} | Clicks ${t.clicks} | Impr ${t.impressions} | ${t.matchTypes.join('/')} | Campaigns: ${(t.campaigns || []).slice(0, 3).join(', ')}${(t.campaigns || []).length > 3 ? ` (+${t.campaigns.length - 3} more)` : ''}`).join('\n')}
 
 HIGH IMPRESSIONS / NO CLICKS (potential negative targets):
 ${(d.highImprNoClick || []).slice(0, 10).map(t => `  "${t.term}" | ${t.impressions} impressions, 0 clicks`).join('\n')}
@@ -1471,8 +1471,29 @@ FRAMEWORK 5: PLACEMENT STRATEGY
 - CROSS-REFERENCE: which specific campaigns benefit most from TOS? Apply modifiers per-campaign, not account-wide
 
 FRAMEWORK 6: NEGATIVE KEYWORD RULES
-- NEGATIVE EXACT if: the exact term is irrelevant OR has >$10 spend with 0 orders
-- NEGATIVE PHRASE if: the root phrase is irrelevant (e.g., "pet" for skincare, "wholesale" for DTC)
+⚠️ CRITICAL — PRODUCT-INTENT MATCHING (most common error):
+Before recommending ANY negative keyword, you MUST:
+1. Look at which CAMPAIGN(S) the search term ran in (shown in the data after "Campaigns:")
+2. Extract the ASIN from the campaign name (e.g., "SP body balm 2oz B0CLF4XDCP" → B0CLF4XDCP)
+3. Look up that ASIN in the PRODUCT CATALOG to find the actual product (e.g., "Tallow Body Balm 2oz")
+4. Ask: does the search term's intent MATCH the campaign's product?
+
+EXAMPLES OF CORRECT vs INCORRECT negation:
+- "tallow balm for skin" in a BODY BALM campaign → DO NOT NEGATE! Body balm IS a skin product. The searcher wants exactly what the campaign sells. If it's not converting, the issue is listing quality, price, or competition — not targeting.
+- "tallow balm for skin" in a LIP BALM campaign → NEGATE. The searcher wants skin/body balm, not lip balm.
+- "beef tallow for body" in a BODY BALM campaign → DO NOT NEGATE! This is your target customer.
+- "beef tallow for body" in a LIP BALM campaign → NEGATE. Wrong product.
+- "tallow chapstick" in a BODY BALM campaign → NEGATE. Searcher wants lip product.
+- "face cream" in a BODY BALM campaign → MAYBE keep — body balms can be used on face. Check conversion data.
+
+If a search term MATCHES the campaign's product intent but has zero orders, diagnose WHY instead of negating:
+- Low conversion + high clicks = listing/price issue, not targeting issue
+- The fix is to improve the listing, adjust price, or improve main image — NOT to negate relevant traffic
+- Only negate truly irrelevant intent (wrong product category entirely)
+
+STANDARD NEGATIVE RULES (apply AFTER passing the product-intent check above):
+- NEGATIVE EXACT if: the exact term is truly irrelevant to the campaign's product OR has >$10 spend with 0 orders AND the intent does not match the product
+- NEGATIVE PHRASE if: the root phrase is irrelevant to the campaign's product (e.g., "pet" for skincare, "wholesale" for DTC, "lip" for body balm campaigns)
 - NEVER negate your own brand terms (even if ACOS is high — brand defense is mandatory)
 - NEVER negate terms with <$5 spend (insufficient data — flag for monitoring instead)
 - Flag terms with 10+ clicks and 0 orders as "watch list" even if spend is below threshold
@@ -1534,7 +1555,17 @@ You are not an advisor — you are the operator. Write as if you are the person 
     sections += `
 ## 🔴 KILL LIST — Negative Keywords to Add Immediately
 | Search Term | Campaign to Negate In | Neg Match Type (exact/phrase) | Spend Wasted | Clicks | Orders | Why Negate |
-RULES: minimum 10 keywords. Prioritize by spend wasted (highest first). Only include terms meeting the $10+/0-orders threshold OR 10+ clicks/0-orders threshold. For each, specify negative EXACT vs negative PHRASE and explain why.
+⚠️ PRODUCT-INTENT GATE (MANDATORY before adding ANY term to this list):
+For EACH candidate negative keyword, you MUST verify:
+1. Which campaign(s) did this search term trigger in? (Look at "Campaigns:" field in the data)
+2. What PRODUCT does that campaign advertise? (Extract ASIN from campaign name → look up in PRODUCT CATALOG)
+3. Does the searcher's intent MATCH the campaign's product?
+   - If YES (e.g., "tallow balm for skin" in a body balm campaign) → DO NOT ADD TO KILL LIST. Instead, note it as a listing/conversion issue.
+   - If NO (e.g., "tallow chapstick" in a body balm campaign) → ADD to kill list.
+DO NOT assume all campaigns sell the same product. A body balm campaign and a lip balm campaign sell DIFFERENT products to DIFFERENT customers.
+If a relevant search term has zero orders, explain the likely cause (listing quality, price, competition) instead of negating it.
+
+RULES: minimum 10 keywords. Prioritize by spend wasted (highest first). Only include terms meeting the $10+/0-orders threshold OR 10+ clicks/0-orders threshold. For each, specify negative EXACT vs negative PHRASE and explain why. EVERY "Why Negate" MUST reference the product catalog lookup confirming intent mismatch.
 BOTTOM LINE: "Adding these X negatives saves ~$Y/week ($Z/month), reducing blended ACOS by ~W points."
 
 ## 🟢 SCALE LIST — Increase Bids & Budgets
@@ -1687,7 +1718,7 @@ Then for EACH campaign (not just the top ones), provide ALL of the following:
 - Revenue trend if data allows: growing, flat, or declining?
 
 **Specific Actions (minimum 3 per campaign):**
-1. **Keywords to negate** — list each one with spend wasted and the negative match type (exact/phrase). If no negatives needed, explain why.
+1. **Keywords to negate** — list each one with spend wasted and the negative match type (exact/phrase). ⚠️ FIRST identify this campaign's ASIN from the campaign name, look it up in the PRODUCT CATALOG, then ONLY negate terms whose intent does NOT match this campaign's actual product. If a search term matches the product but doesn't convert, diagnose it as a listing/price issue instead of negating. If no negatives needed, explain why.
 2. **Keywords to increase bids on** — list each one with current CPC, target bid (show formula: Target ACOS × AOV × Conv Rate), and expected incremental revenue
 3. **Keywords to decrease bids on** — list each one with current CPC, target bid, and expected savings
 4. **Budget verdict** — "Increase to $X/day" or "Decrease to $X/day" or "Maintain at $X/day" with reasoning (is it budget-capped? underperforming?)
