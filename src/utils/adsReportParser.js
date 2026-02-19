@@ -95,7 +95,7 @@ const REPORT_SIGNATURES = [
     tier: 2,
     platform: 'amazon',
     label: 'SB Campaign Placement',
-    required: ['Campaign Name', 'Placement', 'Cost type'],
+    required: ['Campaign Name', 'Placement', 'Cost Type'],
     optional: ['Impressions', 'Clicks', 'Spend', '14 Day Total Sales', 'Viewable Impressions'],
   },
   {
@@ -103,7 +103,7 @@ const REPORT_SIGNATURES = [
     tier: 2,
     platform: 'amazon',
     label: 'SB Search Terms',
-    required: ['Customer Search Term', 'Campaign Name', 'Cost type'],
+    required: ['Customer Search Term', 'Campaign Name', 'Cost Type'],
     optional: ['Impressions', 'Clicks', 'Spend', '14 Day Total Sales'],
   },
 
@@ -275,8 +275,8 @@ const REPORT_SIGNATURES = [
     tier: 2,
     platform: 'amazon',
     label: 'Business Report (Child ASIN)',
-    required: ['(Child) ASIN', 'Sessions - Total'],
-    optional: ['(Parent) ASIN', 'Title', 'Page Views - Total', 'Units Ordered', 'Ordered Product Sales'],
+    required: ['(Child) ASIN', '(Parent) ASIN', 'Sessions - Total', 'Units Ordered'],
+    optional: ['Title', 'Page Views - Total', 'Ordered Product Sales'],
   },
   {
     id: 'business_report_parent',
@@ -356,24 +356,27 @@ const parseDate = (val) => {
 const classifyHeaders = (headers) => {
   if (!headers || headers.length === 0) return null;
   
-  // Normalize headers for matching
+  // Normalize headers for matching (case-insensitive)
   const normalizedHeaders = headers.map(h => String(h || '').trim());
-  
+  const lowerHeaders = normalizedHeaders.map(h => h.toLowerCase());
+
   let bestMatch = null;
   let bestScore = 0;
-  
+
   for (const sig of REPORT_SIGNATURES) {
-    const requiredMatches = sig.required.filter(req => 
-      normalizedHeaders.some(h => h.includes(req) || req.includes(h))
-    );
-    
+    const requiredMatches = sig.required.filter(req => {
+      const lReq = req.toLowerCase();
+      return lowerHeaders.some(h => h.includes(lReq) || lReq.includes(h));
+    });
+
     if (requiredMatches.length === sig.required.length) {
       // All required headers found — calculate score including optionals
-      const optionalMatches = (sig.optional || []).filter(opt =>
-        normalizedHeaders.some(h => h.includes(opt) || opt.includes(h))
-      );
+      const optionalMatches = (sig.optional || []).filter(opt => {
+        const lOpt = opt.toLowerCase();
+        return lowerHeaders.some(h => h.includes(lOpt) || lOpt.includes(h));
+      });
       const score = requiredMatches.length * 10 + optionalMatches.length;
-      
+
       if (score > bestScore) {
         bestScore = score;
         bestMatch = sig;
