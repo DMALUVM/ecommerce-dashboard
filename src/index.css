@@ -9,17 +9,19 @@
   display: none;
 }
 
-/* ── Ads Report rich content tables (dark theme) ── */
+/* ── Ads Report rich content (dark theme) ── */
+.ads-report-content { color: #e2e8f0; }
 .ads-report-content h1 { font-size: 1.25rem; font-weight: 800; color: #f1f5f9; margin: 1.5rem 0 0.5rem; }
 .ads-report-content h2 { font-size: 1.1rem; font-weight: 700; color: #e2e8f0; margin: 1.25rem 0 0.5rem; border-bottom: 2px solid #6366f1; padding-bottom: 4px; }
 .ads-report-content h3 { font-size: 0.95rem; font-weight: 600; color: #cbd5e1; margin: 1rem 0 0.4rem; border-left: 3px solid #f97316; padding-left: 8px; }
 .ads-report-content h4 { font-size: 0.85rem; font-weight: 600; color: #94a3b8; margin: 0.75rem 0 0.3rem; }
-.ads-report-content p { margin-bottom: 0.35rem; }
+.ads-report-content p { margin-bottom: 0.35rem; color: #e2e8f0; }
 .ads-report-content hr { border: none; border-top: 1px solid #334155; margin: 1.25rem 0; }
-.ads-report-content ul { padding-left: 1.25rem; margin-bottom: 0.5rem; }
-.ads-report-content li { margin-bottom: 0.2rem; }
+.ads-report-content ul, .ads-report-content ol { padding-left: 1.25rem; margin-bottom: 0.5rem; color: #e2e8f0; }
+.ads-report-content li { margin-bottom: 0.2rem; color: #e2e8f0; }
+.ads-report-content em { color: #c4b5fd; }
 .ads-report-content strong { color: #f97316; }
-.ads-report-content code { background: rgba(99,102,241,0.15); padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+.ads-report-content code { background: rgba(99,102,241,0.15); padding: 1px 5px; border-radius: 3px; font-size: 0.85em; color: #c4b5fd; }
 .ads-report-content .table-wrap { overflow-x: auto; margin: 0.75rem 0; border-radius: 8px; border: 1px solid #334155; }
 .ads-report-content table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
 .ads-report-content th {

@@ -302,82 +302,89 @@ export default async function handler(req, res) {
         },
       ];
 
-      const createdReports = [];
+      // Create all reports in parallel batches (2 at a time to respect rate limits)
+      const createReport = async (spec) => {
+        const body = {
+          startDate: startStr,
+          endDate: endStr,
+          configuration: {
+            adProduct: spec.adProduct,
+            reportTypeId: spec.reportTypeId,
+            timeUnit: 'DAILY',
+            format: 'GZIP_JSON',
+            groupBy: spec.groupBy,
+            columns: spec.columns,
+          },
+        };
 
-      for (const spec of REPORT_SPECS) {
+        let created;
         try {
-          const body = {
-            startDate: startStr,
-            endDate: endStr,
-            configuration: {
-              adProduct: spec.adProduct,
-              reportTypeId: spec.reportTypeId,
-              timeUnit: 'DAILY',
-              format: 'GZIP_JSON',
-              groupBy: spec.groupBy,
-              columns: spec.columns,
-            },
-          };
-
-          let created;
-          try {
-            created = await adsRequest(token, '/reporting/reports', 'POST', body);
-          } catch (firstErr) {
-            const errMsg = firstErr.message || '';
-            // If invalid columns, parse allowed values and retry with only valid ones
-            if (errMsg.includes('invalid values') && errMsg.includes('Allowed values')) {
-              const allowedMatch = errMsg.match(/Allowed values:\s*\(([^)]+)\)/);
-              if (allowedMatch) {
-                const allowed = new Set(allowedMatch[1].split(',').map(s => s.trim()));
-                const validColumns = spec.columns.filter(c => allowed.has(c));
-                if (validColumns.length >= 3) { // Need at least date + a couple metrics
-                  console.log(`[AdsSync] ${spec.label}: retrying with ${validColumns.length}/${spec.columns.length} valid columns`);
-                  body.configuration.columns = validColumns;
-                  created = await adsRequest(token, '/reporting/reports', 'POST', body);
-                } else {
-                  // Try with just the core columns that should always work
-                  const coreColumns = ['date', 'impressions', 'clicks', 'cost', 'campaignName', 'campaignId']
-                    .filter(c => allowed.has(c));
-                  // Add any sales/purchases columns available
-                  for (const col of allowed) {
-                    if (col.startsWith('sales') || col.startsWith('purchases') || col.startsWith('unitsSold') || col.startsWith('dpv') || col.startsWith('detailPage')) {
-                      coreColumns.push(col);
-                    }
-                  }
-                  if (coreColumns.length >= 3) {
-                    console.log(`[AdsSync] ${spec.label}: fallback with ${coreColumns.length} core columns from allowed set`);
-                    body.configuration.columns = coreColumns;
-                    created = await adsRequest(token, '/reporting/reports', 'POST', body);
-                  } else {
-                    throw firstErr;
+          created = await adsRequest(token, '/reporting/reports', 'POST', body);
+        } catch (firstErr) {
+          const errMsg = firstErr.message || '';
+          if (errMsg.includes('invalid values') && errMsg.includes('Allowed values')) {
+            const allowedMatch = errMsg.match(/Allowed values:\s*\(([^)]+)\)/);
+            if (allowedMatch) {
+              const allowed = new Set(allowedMatch[1].split(',').map(s => s.trim()));
+              const validColumns = spec.columns.filter(c => allowed.has(c));
+              if (validColumns.length >= 3) {
+                console.log(`[AdsSync] ${spec.label}: retrying with ${validColumns.length}/${spec.columns.length} valid columns`);
+                body.configuration.columns = validColumns;
+                created = await adsRequest(token, '/reporting/reports', 'POST', body);
+              } else {
+                const coreColumns = ['date', 'impressions', 'clicks', 'cost', 'campaignName', 'campaignId']
+                  .filter(c => allowed.has(c));
+                for (const col of allowed) {
+                  if (col.startsWith('sales') || col.startsWith('purchases') || col.startsWith('unitsSold') || col.startsWith('dpv') || col.startsWith('detailPage')) {
+                    coreColumns.push(col);
                   }
                 }
-              } else {
-                throw firstErr;
+                if (coreColumns.length >= 3) {
+                  console.log(`[AdsSync] ${spec.label}: fallback with ${coreColumns.length} core columns`);
+                  body.configuration.columns = coreColumns;
+                  created = await adsRequest(token, '/reporting/reports', 'POST', body);
+                } else {
+                  throw firstErr;
+                }
               }
             } else {
               throw firstErr;
             }
-          }
-
-          createdReports.push({
-            reportId: created.reportId,
-            reportKey: spec.key,
-            label: spec.label,
-            status: created.status || 'PROCESSING',
-          });
-          console.log(`[AdsSync] ${spec.label} report created: ${created.reportId}`);
-          await new Promise(r => setTimeout(r, 1000)); // Throttle to stay under Amazon rate limits
-        } catch (err) {
-          const msg = err.message || '';
-          // Non-fatal: account may not have SB, SD, etc.
-          if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('401') || msg.includes('UNAUTHORIZED') || msg.includes('AccountNotFound')) {
-            console.log(`[AdsSync] ${spec.label} not available, skipping`);
           } else {
-            console.error(`[AdsSync] ${spec.label} creation failed:`, msg);
-            createdReports.push({ reportKey: spec.key, label: spec.label, status: 'ERROR', error: msg });
+            throw firstErr;
           }
         }
+
+        return {
+          reportId: created.reportId,
+          reportKey: spec.key,
+          label: spec.label,
+          status: created.status || 'PROCESSING',
+        };
+      };
+
+      // Batch in pairs to avoid Amazon rate limits (2 concurrent, then 500ms pause)
+      const createdReports = [];
+      for (let b = 0; b < REPORT_SPECS.length; b += 2) {
+        const batch = REPORT_SPECS.slice(b, b + 2);
+        const results = await Promise.allSettled(batch.map(spec => createReport(spec)));
+        for (let j = 0; j < results.length; j++) {
+          const result = results[j];
+          const spec = batch[j];
+          if (result.status === 'fulfilled') {
+            createdReports.push(result.value);
+            console.log(`[AdsSync] ${spec.label} report created: ${result.value.reportId}`);
+          } else {
+            const msg = result.reason?.message || '';
+            if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('401') || msg.includes('UNAUTHORIZED') || msg.includes('AccountNotFound')) {
+              console.log(`[AdsSync] ${spec.label} not available, skipping`);
+            } else {
+              console.error(`[AdsSync] ${spec.label} creation failed:`, msg);
+              createdReports.push({ reportKey: spec.key, label: spec.label, status: 'ERROR', error: msg });
+            }
+          }
+        }
+        if (b + 2 < REPORT_SPECS.length) await new Promise(r => setTimeout(r, 500));
       }
 
       if (createdReports.filter(r => r.reportId).length === 0) {
@@ -402,30 +409,36 @@ export default async function handler(req, res) {
     const completed = reports.filter(r => r.status === 'COMPLETED');
     const errors = reports.filter(r => r.status === 'ERROR');
 
-    // Poll up to ~50 seconds (client retries will continue polling if needed)
+    // Poll with exponential backoff: 2s, 3s, 4s, 5s, 5s... up to ~90s total
+    // Amazon reports typically complete in 15-60s
     let polls = 0;
-    while (pending.length > 0 && polls < 25) {
+    let pollDelay = 2000;
+    const startTime = Date.now();
+    const maxPollTime = 90000; // 90s max (function has 120s limit)
+    while (pending.length > 0 && (Date.now() - startTime) < maxPollTime) {
       polls++;
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, pollDelay));
+      pollDelay = Math.min(pollDelay + 1000, 5000); // Ramp up: 2s → 3s → 4s → 5s cap
 
-      for (let i = pending.length - 1; i >= 0; i--) {
-        const rpt = pending[i];
-        try {
-          const status = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
-          if (status.status === 'COMPLETED') {
-            rpt.status = 'COMPLETED';
-            rpt.downloadUrl = status.url;
-            completed.push(rpt);
-            pending.splice(i, 1);
-            console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls})`);
-          } else if (status.status === 'FAILURE') {
-            rpt.status = 'ERROR';
-            rpt.error = status.statusDetails || 'Report failed';
-            errors.push(rpt);
-            pending.splice(i, 1);
-          }
-        } catch (err) {
-          console.error(`[AdsSync] Poll error ${rpt.label}:`, err.message);
+      // Poll all pending reports in parallel
+      const pollResults = await Promise.allSettled(
+        pending.map(rpt => adsRequest(token, `/reporting/reports/${rpt.reportId}`).then(s => ({ rpt, status: s })))
+      );
+
+      for (const result of pollResults) {
+        if (result.status !== 'fulfilled') continue;
+        const { rpt, status } = result.value;
+        if (status.status === 'COMPLETED') {
+          rpt.status = 'COMPLETED';
+          rpt.downloadUrl = status.url;
+          completed.push(rpt);
+          pending.splice(pending.indexOf(rpt), 1);
+          console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls}, ${((Date.now() - startTime) / 1000).toFixed(0)}s)`);
+        } else if (status.status === 'FAILURE') {
+          rpt.status = 'ERROR';
+          rpt.error = status.statusDetails || 'Report failed';
+          errors.push(rpt);
+          pending.splice(pending.indexOf(rpt), 1);
         }
       }
     }

@@ -1855,8 +1855,8 @@ const renderMarkdown = (md) => {
   html = html.replace(/\*\*(.+?)\*\*/g, '&lt;strong&gt;$1&lt;/strong&gt;');
   html = html.replace(/\*(.+?)\*/g, '&lt;em&gt;$1&lt;/em&gt;');
   html = html.replace(/`([^`]+)`/g, '&lt;code&gt;$1&lt;/code&gt;');
-  // Lists
-  html = html.replace(/^- (.+$)/gm, '&lt;li&gt;$1&lt;/li&gt;');
+  // Lists (handle both - and * bullets)
+  html = html.replace(/^[\-\*] (.+$)/gm, '&lt;li&gt;$1&lt;/li&gt;');
   html = html.replace(/^(\d+)\. (.+$)/gm, '&lt;li&gt;$2&lt;/li&gt;');
   html = html.replace(/(&lt;li&gt;.*&lt;\/li&gt;\n?)+/g, '&lt;ul&gt;$&&lt;/ul&gt;');
   // Tables
@@ -2186,6 +2186,75 @@ const AmazonAdsIntelModal = ({
     URL.revokeObjectURL(url);
   };
 
+  const exportReportPdf = () => {
+    if (!actionReport) return;
+    const bn = storeName || 'Brand';
+    const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const fileName = `${bn.toLowerCase().replace(/\s+/g, '-')}-ppc-audit-${new Date().toISOString().slice(0, 10)}`;
+    const htmlBody = sanitizeHtml(renderMarkdown(actionReport));
+    const pdfStyles = `
+@page { margin: 0.6in 0.65in; size: letter; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a1a2e; line-height: 1.6; font-size: 10pt; }
+.cover { background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #0f3460 100%); color: white; padding: 36px 44px 24px; margin: -0.6in -0.65in 0; }
+.cover .brand { font-size: 11pt; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 2px; }
+.cover h1 { font-size: 26pt; font-weight: 900; letter-spacing: -0.5px; margin: 0 0 4px; line-height: 1.15; }
+.cover .subtitle { font-size: 12pt; font-weight: 300; color: rgba(255,255,255,0.7); margin-bottom: 16px; }
+.cover .meta-row { display: flex; gap: 24px; font-size: 8.5pt; color: rgba(255,255,255,0.45); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; }
+.content { padding: 28px 0 0; }
+.confidential { background: #f8f9fa; border-left: 4px solid #e94560; padding: 10px 16px; margin-bottom: 28px; font-size: 8pt; color: #6b7280; font-weight: 500; letter-spacing: 0.3px; }
+h1 { font-size: 18pt; font-weight: 800; color: #0f172a; margin: 36px 0 12px; letter-spacing: -0.3px; }
+h2 { font-size: 13pt; font-weight: 700; color: #1e293b; margin: 30px 0 10px; padding-bottom: 8px; border-bottom: 2.5px solid #e94560; letter-spacing: -0.2px; }
+h3 { font-size: 11pt; font-weight: 600; color: #334155; margin: 22px 0 8px; padding-left: 12px; border-left: 3px solid #6366f1; }
+h4 { font-size: 10pt; font-weight: 600; color: #475569; margin: 16px 0 6px; }
+p { font-size: 10pt; margin-bottom: 6px; line-height: 1.65; color: #374151; }
+li { font-size: 10pt; margin-bottom: 4px; line-height: 1.55; color: #374151; }
+ul, ol { padding-left: 20px; margin-bottom: 10px; }
+strong { color: #e94560; font-weight: 700; }
+em { color: #6366f1; }
+code { background: #f1f5f9; padding: 1px 6px; border-radius: 3px; font-size: 9pt; font-family: 'SF Mono', 'Fira Code', monospace; color: #7c3aed; }
+hr { border: none; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 14px 0 18px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 9px 10px; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 2px solid #e94560; }
+td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; font-size: 8.5pt; color: #374151; vertical-align: top; }
+tbody tr:nth-child(even) { background: #f9fafb; }
+.footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #0f172a; text-align: center; }
+.footer p { font-size: 7.5pt; color: #9ca3af; margin-bottom: 2px; }
+.footer .brand-line { font-size: 8.5pt; font-weight: 700; color: #1e293b; letter-spacing: 0.5px; margin-bottom: 4px; }
+@media print {
+  .no-print { display: none !important; }
+  .cover { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  th { background: #0f172a !important; color: #e2e8f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  table { page-break-inside: auto; } tr { page-break-inside: avoid; }
+  h2, h3 { page-break-after: avoid; }
+}`;
+    const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileName}</title><style>${pdfStyles}</style></head><body>
+<div class="cover">
+  <div class="brand">${bn}</div>
+  <h1>PPC Advertising Audit</h1>
+  <div class="subtitle">Amazon Performance Report</div>
+  <div class="meta-row"><span>${dateStr}</span><span>AI-Generated Analysis</span></div>
+</div>
+<div class="content">
+  <div class="no-print" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;padding:14px 24px;margin-bottom:24px;border-radius:8px;font-size:10pt;display:flex;justify-content:space-between;align-items:center;">
+    <span><strong>PDF Preview</strong> — Use Ctrl+P / Cmd+P and select "Save as PDF"</span>
+    <button onclick="window.print()" style="background:white;color:#6366f1;border:none;padding:8px 20px;border-radius:6px;font-weight:700;cursor:pointer;font-size:10pt;">Save as PDF</button>
+  </div>
+  <div class="confidential">CONFIDENTIAL — Proprietary advertising intelligence for ${bn}. Do not distribute.</div>
+  ${htmlBody}
+</div>
+<div class="footer">
+  <p class="brand-line">${bn} Advertising Command Center</p>
+  <p>Amazon PPC Audit &middot; ${dateStr}</p>
+  <p style="margin-top:6px;font-size:6.5pt;color:#d1d5db;">AI-generated analysis. Validate recommendations before implementation.</p>
+</div></body></html>`;
+    const w = window.open('', '_blank', 'width=900,height=700');
+    if (!w) { setToast({ message: 'Please allow popups to export PDF', type: 'error' }); return; }
+    w.document.write(printDoc);
+    w.document.close();
+  };
+
   const validFiles = detectedFiles.filter(d => d.type && !d.error);
   const unknownFiles = detectedFiles.filter(d => !d.type || d.error);
   const hasExistingData = adsIntelData?.lastUpdated;
@@ -2299,6 +2368,9 @@ const AmazonAdsIntelModal = ({
                   PPC Action Report
                 </h3>
                 <div className="flex gap-2">
+                  <button onClick={exportReportPdf} className="px-3 py-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white text-sm font-medium flex items-center gap-1.5 shadow-lg shadow-orange-500/20">
+                    <Download className="w-3.5 h-3.5" />Export PDF
+                  </button>
                   <button onClick={downloadReport} className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 rounded-lg text-emerald-300 text-sm flex items-center gap-1.5">
                     <Download className="w-3.5 h-3.5" />Download .md
                   </button>
@@ -2306,16 +2378,20 @@ const AmazonAdsIntelModal = ({
                   <button onClick={() => setActionReport(null)} className="px-3 py-1.5 bg-slate-600/50 hover:bg-slate-600 rounded-lg text-slate-300 text-sm">Close Report</button>
                 </div>
               </div>
-              <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[60vh] overflow-y-auto prose prose-invert prose-sm max-w-none
+              <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[60vh] overflow-y-auto text-slate-300 text-sm leading-relaxed max-w-none
+                [&_h1]:text-xl [&_h1]:font-extrabold [&_h1]:text-white [&_h1]:mt-6 [&_h1]:mb-3
                 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-white [&_h2]:mt-6 [&_h2]:mb-3 [&_h2]:pb-2 [&_h2]:border-b [&_h2]:border-slate-700
                 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-slate-200 [&_h3]:mt-4 [&_h3]:mb-2
-                [&_strong]:text-white [&_em]:text-amber-300
-                [&_ul]:space-y-1 [&_ol]:space-y-1
+                [&_strong]:text-orange-400 [&_em]:text-amber-300
+                [&_ul]:space-y-1 [&_ol]:space-y-1 [&_ul]:pl-5 [&_ol]:pl-5
                 [&_li]:text-slate-300 [&_li]:leading-relaxed
-                [&_p]:text-slate-300 [&_p]:leading-relaxed
-                [&_table]:w-full [&_th]:text-left [&_th]:text-slate-300 [&_th]:pb-2 [&_th]:pr-3 [&_td]:py-1 [&_td]:pr-3 [&_td]:text-slate-400
+                [&_p]:text-slate-300 [&_p]:leading-relaxed [&_p]:mb-1
+                [&_table]:w-full [&_table]:text-xs [&_table]:border-collapse
+                [&_th]:text-left [&_th]:text-slate-400 [&_th]:pb-2 [&_th]:pr-3 [&_th]:font-semibold [&_th]:text-xs [&_th]:uppercase [&_th]:tracking-wide [&_th]:border-b [&_th]:border-slate-700
+                [&_td]:py-1.5 [&_td]:pr-3 [&_td]:text-slate-300 [&_td]:border-b [&_td]:border-slate-800
                 [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
                 [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
+                [&_hr]:border-slate-700 [&_hr]:my-4
               ">
                 <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(actionReport)) }} />
               </div>
@@ -2503,6 +2579,13 @@ const AmazonAdsIntelModal = ({
                         </h3>
                         <div className="flex gap-2">
                           <button
+                            onClick={exportReportPdf}
+                            className="px-3 py-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 rounded-lg text-white text-sm font-medium flex items-center gap-1.5 shadow-lg shadow-orange-500/20"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Export PDF
+                          </button>
+                          <button
                             onClick={downloadReport}
                             className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 rounded-lg text-emerald-300 text-sm flex items-center gap-1.5"
                           >
@@ -2517,7 +2600,20 @@ const AmazonAdsIntelModal = ({
                           </button>
                         </div>
                       </div>
-                      <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[50vh] overflow-y-auto prose prose-invert prose-sm max-w-none">
+                      <div className="bg-slate-950 border border-slate-700 rounded-xl p-5 max-h-[50vh] overflow-y-auto text-slate-300 text-sm leading-relaxed max-w-none
+                        [&_h1]:text-xl [&_h1]:font-extrabold [&_h1]:text-white [&_h1]:mt-6 [&_h1]:mb-3
+                        [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-white [&_h2]:mt-6 [&_h2]:mb-3 [&_h2]:pb-2 [&_h2]:border-b [&_h2]:border-slate-700
+                        [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-slate-200 [&_h3]:mt-4 [&_h3]:mb-2
+                        [&_strong]:text-orange-400 [&_em]:text-amber-300
+                        [&_ul]:space-y-1 [&_ol]:space-y-1 [&_ul]:pl-5 [&_ol]:pl-5
+                        [&_li]:text-slate-300 [&_li]:leading-relaxed
+                        [&_p]:text-slate-300 [&_p]:leading-relaxed [&_p]:mb-1
+                        [&_table]:w-full [&_table]:text-xs [&_table]:border-collapse
+                        [&_th]:text-left [&_th]:text-slate-400 [&_th]:pb-2 [&_th]:pr-3 [&_th]:font-semibold
+                        [&_td]:py-1.5 [&_td]:pr-3 [&_td]:text-slate-300 [&_td]:border-b [&_td]:border-slate-800
+                        [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
+                        [&_hr]:border-slate-700 [&_hr]:my-4
+                      ">
                         <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(actionReport)) }} />
                       </div>
                     </div>
