@@ -1331,6 +1331,18 @@ Ranked by estimated dollar impact (largest first). For each:
 5. **Time**: Minutes to implement
 6. **Confidence**: HIGH/MEDIUM/LOW based on data volume
 
+## 📋 IMPLEMENTATION CHECKLIST
+Organized by time investment:
+### 🟢 QUICK WINS (< 5 min each)
+Numbered list: negative keywords to add, bid adjustments to make. Include exact amounts.
+### 🟡 MEDIUM ACTIONS (5-15 min each)
+Numbered list: campaign restructuring, new ad groups, budget reallocations.
+### 🔴 STRATEGIC MOVES (15+ min each)
+Numbered list: new campaign creation, product targeting expansion, major structure changes.
+Total estimated savings from quick wins: $X/month. Total estimated revenue gain from all actions: $X/month.`;
+
+  // ===== Part 2 sections: Campaign-by-campaign audit =====
+  const part2Sections = `
 ## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT — EVERY CAMPAIGN, NO EXCEPTIONS
 ⚠️ CRITICAL: You MUST audit EVERY campaign in the data, not just the top 10. Do not stop early. Do not summarize remaining campaigns as "similar pattern." Each campaign gets its own entry.
 
@@ -1358,20 +1370,12 @@ Then for EACH campaign (not just the top ones), provide ALL of the following:
 
 For campaigns with <$5 total spend: group into a "Low-Data Campaigns" section but still list each one with a verdict (maintain for data collection / pause / merge into X).
 
-DO NOT TRUNCATE THIS SECTION. Complete every campaign before moving to the next section.
-
-## 📋 IMPLEMENTATION CHECKLIST
-Organized by time investment:
-### 🟢 QUICK WINS (< 5 min each)
-Numbered list: negative keywords to add, bid adjustments to make. Include exact amounts.
-### 🟡 MEDIUM ACTIONS (5-15 min each)
-Numbered list: campaign restructuring, new ad groups, budget reallocations.
-### 🔴 STRATEGIC MOVES (15+ min each)
-Numbered list: new campaign creation, product targeting expansion, major structure changes.
-Total estimated savings from quick wins: $X/month. Total estimated revenue gain from all actions: $X/month.`;
+DO NOT TRUNCATE THIS SECTION. Complete every campaign before moving to the next section.`;
 
   const brandName = storeName || 'this brand';
-  const userPrompt = `Generate a comprehensive Amazon PPC Action Report for ${brandName}.
+
+  // ===== Part 1 user prompt: Strategy report =====
+  const userPromptPart1 = `Generate Part 1 (Strategic Analysis) of the Amazon PPC Action Report for ${brandName}.
 
 DATE RANGE: ${dateRange}
 REPORTS AVAILABLE: ${available.join(', ')}
@@ -1387,14 +1391,29 @@ ${dataContext}
 
 ${advancedContext}
 
-=== GENERATE ALL SECTIONS — SKIP NONE ===
-=== COMPLETENESS RULES ===
-1. The CAMPAIGN-BY-CAMPAIGN AUDIT must cover EVERY campaign in the data. Do not stop at 3 or 10 — finish them all.
-2. The CAMPAIGN STRUCTURE RECOMMENDATIONS must include REAL campaign names, REAL keywords from the data, and REAL bid amounts calculated with the formula. No template placeholders.
-3. If you are running low on output space, prioritize completing the campaign audit and structure sections over the implementation checklist — the checklist can be brief if needed, but the audit and structure MUST be complete.
+=== GENERATE ALL SECTIONS BELOW — SKIP NONE ===
+The campaign-by-campaign audit will be generated separately — focus all output on the strategic analysis sections.
+The CAMPAIGN STRUCTURE RECOMMENDATIONS must include REAL campaign names, REAL keywords from the data, and REAL bid amounts calculated with the formula. No template placeholders.
 ${sections}`;
 
-  return { systemPrompt, userPrompt };
+  // ===== Part 2 user prompt: Campaign audit =====
+  const userPromptPart2 = `Generate Part 2 (Campaign-by-Campaign Audit) of the Amazon PPC Action Report for ${brandName}.
+
+This is a CONTINUATION of the report. Part 1 (strategy sections) has already been generated. Now produce the exhaustive campaign audit.
+
+DATE RANGE: ${dateRange}
+
+${dataContext}
+
+${advancedContext}
+
+=== COMPLETENESS RULES ===
+1. You MUST audit EVERY campaign in the data — all of them, not just top 10 or 20. Do not stop early.
+2. Do not summarize remaining campaigns as "similar pattern." Each campaign gets its own entry.
+3. Use your FULL output capacity. This section should be thorough and complete.
+${part2Sections}`;
+
+  return { systemPrompt, userPromptPart1, userPromptPart2 };
 };
 
 // ============ MARKDOWN RENDERER ============
@@ -1465,6 +1484,7 @@ const AmazonAdsIntelModal = ({
   const [dragOver, setDragOver] = useState(false);
   const [actionReport, setActionReport] = useState(null);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportProgress, setReportProgress] = useState(''); // Progress message during two-part generation
   const [reportError, setReportError] = useState(null);
   const [selectedModel, setSelectedModel] = useState(window.__aiModelOverride || AI_DEFAULT_MODEL);
 
@@ -1688,27 +1708,35 @@ const AmazonAdsIntelModal = ({
     setGeneratingReport(true);
     setReportError(null);
     setActionReport(null);
-    
+    setReportProgress('');
+
     try {
       const prompts = buildActionReportPrompt(adsIntelData, storeName);
       if (!prompts) throw new Error('No data available for report');
-      
-      // Action reports need high token limit for full campaign-by-campaign audit (no truncation)
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, 32000);
-      setActionReport(response);
+
+      // Two-part generation: strategy report + campaign audit (avoids timeout/truncation)
+      setReportProgress('Part 1/2: Generating strategic analysis...');
+      const part1 = await callAI(prompts.userPromptPart1, prompts.systemPrompt, selectedModel, 32000);
+
+      setReportProgress('Part 2/2: Generating campaign-by-campaign audit...');
+      const part2 = await callAI(prompts.userPromptPart2, prompts.systemPrompt, selectedModel, 32000);
+
+      const fullReport = part1 + '\n\n' + part2;
+      setActionReport(fullReport);
+      setReportProgress('');
       // Save to report history
       if (saveReportToHistory) {
         const t = adsIntelData?.total || {};
         saveReportToHistory({
           type: 'amazon',
-          content: response,
+          content: fullReport,
           model: selectedModel,
           metrics: {
             revenue: t.totalSales || 0,
             adSpend: t.totalSpend || 0,
             roas: t.totalSales && t.totalSpend ? (t.totalSales / t.totalSpend) : 0,
             acos: t.totalSpend && t.totalSales ? (t.totalSpend / t.totalSales * 100) : 0,
-            actionCount: (response.match(/^\d+[\.\)]/gm) || []).length,
+            actionCount: (fullReport.match(/^\d+[\.\)]/gm) || []).length,
           },
         });
       }
@@ -1717,6 +1745,7 @@ const AmazonAdsIntelModal = ({
       setReportError(err.message || 'Failed to generate report');
     } finally {
       setGeneratingReport(false);
+      setReportProgress('');
     }
   };
 
@@ -1820,9 +1849,9 @@ const AmazonAdsIntelModal = ({
           {generatingReport && !results && (
             <div className="bg-gradient-to-br from-rose-900/30 to-orange-900/30 border border-rose-500/30 rounded-xl p-6 text-center">
               <div className="w-8 h-8 border-3 border-rose-400/30 border-t-rose-400 rounded-full animate-spin mx-auto mb-3" style={{borderWidth: '3px'}} />
-              <p className="text-white font-medium">Generating Action Report...</p>
+              <p className="text-white font-medium">{reportProgress || 'Generating Action Report...'}</p>
               <p className="text-slate-400 text-sm mt-1">Analyzing {Object.keys(adsIntelData || {}).filter(k => k !== 'lastUpdated' && adsIntelData[k]).length} data sources with expert PPC frameworks</p>
-              <p className="text-slate-500 text-xs mt-2">This may take 30-60 seconds</p>
+              <p className="text-slate-500 text-xs mt-2">{reportProgress.includes('2/2') ? 'Almost done — auditing every campaign...' : 'Report generated in 2 parts to ensure completeness (~2-4 min total)'}</p>
             </div>
           )}
           
