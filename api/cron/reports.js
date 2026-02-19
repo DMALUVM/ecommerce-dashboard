@@ -26,7 +26,7 @@ async function callAnthropicAPI(userPrompt, systemPrompt, model = DEFAULT_MODEL)
     },
     body: JSON.stringify({
       model,
-      max_tokens: 12000,
+      max_tokens: 32000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     }),

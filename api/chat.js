@@ -50,7 +50,7 @@ function detectProvider(model) {
   return null;
 }
 
-const MAX_TOKENS_CEILING = 16384;
+const MAX_TOKENS_CEILING = 64000;  // Modern Claude models support 64K+ output — don't bottleneck reports
 const MAX_PAYLOAD_BYTES = 1_500_000; // ~1.5 MB
 
 // === SEC-005: Simple Rate Limiter ===

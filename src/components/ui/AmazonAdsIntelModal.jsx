@@ -1693,8 +1693,8 @@ const AmazonAdsIntelModal = ({
       const prompts = buildActionReportPrompt(adsIntelData, storeName);
       if (!prompts) throw new Error('No data available for report');
       
-      // Action reports need much higher token limit for full campaign-by-campaign audit
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, 16000);
+      // Action reports need high token limit for full campaign-by-campaign audit (no truncation)
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, 32000);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {

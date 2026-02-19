@@ -6,7 +6,7 @@ import { AI_DEFAULT_MODEL } from './config';
 // Model string imported from config.js — edit ONLY there when models update
 const AI_CONFIG = {
   model: AI_DEFAULT_MODEL,
-  maxTokens: 12000,  // Reports need 8K-12K tokens for full output
+  maxTokens: 16000,  // Default for chat/quick actions; reports override higher
   maxDuration: 60,  // Pro plan 60-second timeout
   streaming: true,  // Use streaming to avoid 25s first-byte timeout
 
