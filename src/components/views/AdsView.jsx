@@ -1,8 +1,8 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   AlertTriangle, BarChart3, Brain, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight,
-  Clock, Database, DollarSign, FileSpreadsheet, FileText, Flame, Globe, Loader2, RefreshCw, Search,
-  Send, ShieldAlert, Sparkles, Target, TrendingDown, TrendingUp, Trophy, Upload, X, Zap
+  Clock, Database, DollarSign, Eye, FileSpreadsheet, FileText, Flame, Globe, Loader2, RefreshCw, Search,
+  Send, ShieldAlert, Sparkles, Target, Trash2, TrendingDown, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
 import { getShopifyAdsForDay, aggregateShopifyAdsForDays } from '../../utils/ads';
@@ -126,7 +126,7 @@ const AdsView = ({
   setAdsTimeTab, setAdsViewMode, setAdsYear, setAmazonCampaignFilter,
   setAmazonCampaignSort, setNavDropdown, setSelectedDay, setSelectedInvDate,
   setSelectedPeriod, setSelectedWeek, setShowAdsAIChat, setShowAdsBulkUpload,
-  setShowAdsIntelUpload, setShowDtcIntelUpload, dtcIntelData, setToast, setUploadTab, showAdsAIChat, storeName,
+  setShowAdsIntelUpload, setShowDtcIntelUpload, dtcIntelData, setToast, reportHistory, setReportHistory, setUploadTab, showAdsAIChat, storeName,
   setView, view, save
 }) => {
   const sortedWeeks = Object.keys(allWeeksData).sort();
@@ -138,6 +138,8 @@ const AdsView = ({
   const [showDataSources, setShowDataSources] = useState(false);
   const [dateRange, setDateRange] = useState(30);
   const [reportMode, setReportMode] = useState('all');
+  const [viewingReportId, setViewingReportId] = useState(null);
+  const [showSavedReports, setShowSavedReports] = useState(false);
   const fileInputRef = useRef(null);
 
   const campaigns = amazonCampaigns?.campaigns || [];
@@ -1297,6 +1299,95 @@ const AdsView = ({
 
             <p className="text-slate-600 text-[10px] mt-3 text-center">Uses 9-framework analysis system with pre-computed bid calculations and waste detection</p>
           </div>
+
+          {/* ═══════════════════════════════════════════════════ */}
+          {/* SAVED REPORTS — Previously generated deep reports   */}
+          {/* ═══════════════════════════════════════════════════ */}
+          {(() => {
+            const saved = (reportHistory || []).filter(r => r.content && (r.type === 'amazon' || r.type === 'dtc'));
+            if (saved.length === 0) return null;
+            const viewingReport = viewingReportId ? saved.find(r => r.id === viewingReportId) : null;
+            return (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/60 p-4 mb-5">
+                <div className="flex items-center justify-between mb-3">
+                  <button onClick={() => setShowSavedReports(!showSavedReports)} className="flex items-center gap-2 text-white font-medium text-sm hover:text-slate-200 transition-colors">
+                    <FileText className="w-4 h-4 text-violet-400" />
+                    Saved Reports ({saved.length})
+                    <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform ${showSavedReports ? 'rotate-180' : ''}`} />
+                  </button>
+                </div>
+
+                {showSavedReports && !viewingReport && (
+                  <div className="space-y-1.5">
+                    {saved.map(r => {
+                      const date = new Date(r.generatedAt);
+                      const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                      const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                      const m = r.metrics || {};
+                      return (
+                        <div key={r.id} className="flex items-center gap-3 bg-slate-900/50 rounded-lg px-3 py-2.5 group hover:bg-slate-900/80 transition-colors">
+                          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${r.type === 'amazon' ? 'bg-orange-500' : 'bg-cyan-500'}`} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-slate-200 text-xs font-medium">{r.type === 'amazon' ? 'Amazon PPC Audit' : 'DTC Audit'}</span>
+                              <span className="text-slate-500 text-[10px]">{dateStr} {timeStr}</span>
+                              {r.model && <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-400">{r.model}</span>}
+                            </div>
+                            {(m.adSpend > 0 || m.revenue > 0) && (
+                              <div className="flex items-center gap-3 mt-0.5 text-[10px] text-slate-500">
+                                {m.revenue > 0 && <span>Rev {formatCurrency(m.revenue)}</span>}
+                                {m.adSpend > 0 && <span>Spend {formatCurrency(m.adSpend)}</span>}
+                                {m.roas > 0 && <span className={roasColor(m.roas)}>ROAS {m.roas.toFixed(2)}</span>}
+                                {m.acos > 0 && <span className={acosColor(m.acos)}>ACOS {m.acos.toFixed(1)}%</span>}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => setViewingReportId(r.id)} className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="View report">
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => { navigator.clipboard.writeText(r.content); setToast({ message: 'Report copied', type: 'success' }); }} className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Copy text">
+                              <FileSpreadsheet className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => {
+                              if (!window.confirm('Delete this report?')) return;
+                              const updated = (reportHistory || []).filter(rr => rr.id !== r.id);
+                              setReportHistory(updated);
+                            }} className="p-1.5 rounded-lg hover:bg-rose-900/50 text-slate-500 hover:text-rose-400 transition-colors" title="Delete report">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {viewingReport && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-700/50">
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setViewingReportId(null)} className="text-slate-400 hover:text-white transition-colors"><ChevronLeft className="w-4 h-4" /></button>
+                        <span className="text-slate-200 text-sm font-medium">{viewingReport.type === 'amazon' ? 'Amazon PPC Audit' : 'DTC Audit'}</span>
+                        <span className="text-slate-500 text-xs">{new Date(viewingReport.generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => { navigator.clipboard.writeText(viewingReport.content); setToast({ message: 'Copied', type: 'success' }); }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">Copy</button>
+                        <button onClick={() => {
+                          const blob = new Blob([viewingReport.content], { type: 'text/markdown' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a'); a.href = url; a.download = `report-${viewingReport.type}-${viewingReport.generatedAt.slice(0,10)}.md`; a.click();
+                          URL.revokeObjectURL(url);
+                        }} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">Download .md</button>
+                        <button onClick={() => setViewingReportId(null)} className="text-slate-500 hover:text-white text-[10px] px-2 py-1 bg-slate-700/40 rounded-lg hover:bg-slate-700">Close</button>
+                      </div>
+                    </div>
+                    <div className="max-h-[60vh] overflow-y-auto text-sm text-slate-200 leading-relaxed ads-report-content" dangerouslySetInnerHTML={{ __html: markdownToHtml(viewingReport.content) }} />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ═══════════════════════════════════════════════════ */}
           {/* QUICK CHAT AUDIT — Faster, conversational          */}

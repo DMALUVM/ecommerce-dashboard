@@ -1365,7 +1365,7 @@ export default function Dashboard() {
   
   // Persist report history & action items
   useEffect(() => {
-    if (reportHistory?.length) {
+    if (reportHistory) {
       try { lsSet('ecommerce_report_history_v1', JSON.stringify(reportHistory)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     }
   }, [reportHistory]);
@@ -18440,6 +18440,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setShowDtcIntelUpload={setShowDtcIntelUpload}
       dtcIntelData={dtcIntelData}
       setToast={setToast}
+      reportHistory={reportHistory}
+      setReportHistory={setReportHistory}
       setUploadTab={setUploadTab}
       showAdsAIChat={showAdsAIChat}
       storeName={storeName}
