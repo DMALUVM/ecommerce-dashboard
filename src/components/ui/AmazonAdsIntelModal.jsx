@@ -1859,14 +1859,46 @@ const renderMarkdown = (md) => {
   html = html.replace(/^[\-\*] (.+$)/gm, '&lt;li&gt;$1&lt;/li&gt;');
   html = html.replace(/^(\d+)\. (.+$)/gm, '&lt;li&gt;$2&lt;/li&gt;');
   html = html.replace(/(&lt;li&gt;.*&lt;\/li&gt;\n?)+/g, '&lt;ul&gt;$&&lt;/ul&gt;');
-  // Tables
-  html = html.replace(/\|(.+)\|/g, function(match) {
-    var cells = match.split('|').filter(function(c) { return c.trim(); });
-    var isSep = cells.every(function(c) { return c.trim().replace(/[-:]/g, '').trim() === ''; });
-    if (isSep) return '';
-    return '&lt;tr&gt;' + cells.map(function(c) { return '&lt;td&gt;' + c.trim() + '&lt;/td&gt;'; }).join('') + '&lt;/tr&gt;';
-  });
-  html = html.replace(/(&lt;tr&gt;.*&lt;\/tr&gt;\n?)+/g, '&lt;table&gt;$&&lt;/table&gt;');
+  // Tables — line-by-line detection for proper header/body structure
+  var tLines = html.split('\n');
+  var tOut = [];
+  var ti = 0;
+  while (ti < tLines.length) {
+    if (tLines[ti].includes('|') && ti + 1 < tLines.length && /^\|?\s*[-:]+[-|\s:]+$/.test(tLines[ti + 1])) {
+      var hLine = tLines[ti];
+      var sLine = tLines[ti + 1];
+      var aligns = sLine.split('|').filter(function(c) { return c.trim(); }).map(function(c) {
+        var t = c.trim();
+        if (t.charAt(0) === ':' && t.charAt(t.length - 1) === ':') return 'center';
+        if (t.charAt(t.length - 1) === ':') return 'right';
+        return 'left';
+      });
+      var hCells = hLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return c.trim(); });
+      var tHtml = '&lt;div class="table-wrap"&gt;&lt;table&gt;&lt;thead&gt;&lt;tr&gt;';
+      hCells.forEach(function(cell, ci) {
+        var a = aligns[ci] || 'left';
+        tHtml += '&lt;th style="text-align:' + a + '"&gt;' + cell + '&lt;/th&gt;';
+      });
+      tHtml += '&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;';
+      ti += 2;
+      while (ti < tLines.length && tLines[ti].includes('|') && !/^\|?\s*[-:]+[-|\s:]+$/.test(tLines[ti])) {
+        var rCells = tLines[ti].replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return c.trim(); });
+        tHtml += '&lt;tr&gt;';
+        rCells.forEach(function(cell, ci) {
+          var a = aligns[ci] || 'left';
+          tHtml += '&lt;td style="text-align:' + a + '"&gt;' + cell + '&lt;/td&gt;';
+        });
+        tHtml += '&lt;/tr&gt;';
+        ti++;
+      }
+      tHtml += '&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;';
+      tOut.push(tHtml);
+    } else {
+      tOut.push(tLines[ti]);
+      ti++;
+    }
+  }
+  html = tOut.join('\n');
   // Collapse 3+ blank lines into 1
   html = html.replace(/\n{3,}/g, '\n\n');
   // Paragraphs and line breaks
@@ -1876,7 +1908,7 @@ const renderMarkdown = (md) => {
   html = html.replace(/&lt;p&gt;\s*&lt;\/p&gt;/g, '');
   html = html.replace(/&lt;p&gt;\s*&lt;br\/&gt;\s*&lt;\/p&gt;/g, '');
   // Now unescape our HTML tags
-  var unescapeRe = new RegExp('&lt;(\\/?(?:h[23]|strong|em|li|ul|ol|table|tr|td|th|p|br\\/?|code))&gt;', 'g');
+  var unescapeRe = new RegExp('&lt;(\\/?(?:h[23]|strong|em|li|ul|ol|table|thead|tbody|tr|td|th|div|p|br\\/?|code)(?:\\s[^&]*)?)&gt;', 'g');
   html = html.replace(unescapeRe, function(_, tag) { return '<' + tag + '>'; });
   return html;
 };
@@ -2215,8 +2247,9 @@ strong { color: #e94560; font-weight: 700; }
 em { color: #6366f1; }
 code { background: #f1f5f9; padding: 1px 6px; border-radius: 3px; font-size: 9pt; font-family: 'SF Mono', 'Fira Code', monospace; color: #7c3aed; }
 hr { border: none; border-top: 1px solid #e5e7eb; margin: 28px 0; }
-table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 14px 0 18px; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
-th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 9px 10px; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 2px solid #e94560; }
+.table-wrap { overflow-x: auto; margin: 14px 0 18px; }
+table { width: 100%; border-collapse: collapse; font-size: 8.5pt; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+th { background: #0f172a; color: #e2e8f0; font-weight: 700; text-align: left; padding: 9px 10px; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 2px solid #e94560; white-space: nowrap; }
 td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; font-size: 8.5pt; color: #374151; vertical-align: top; }
 tbody tr:nth-child(even) { background: #f9fafb; }
 .footer { margin-top: 48px; padding-top: 16px; border-top: 2px solid #0f172a; text-align: center; }
@@ -2403,9 +2436,11 @@ tbody tr:nth-child(even) { background: #f9fafb; }
                 [&_ul]:space-y-1 [&_ol]:space-y-1 [&_ul]:pl-5 [&_ol]:pl-5
                 [&_li]:text-slate-300 [&_li]:leading-relaxed
                 [&_p]:text-slate-300 [&_p]:leading-relaxed [&_p]:mb-1
+                [&_.table-wrap]:overflow-x-auto [&_.table-wrap]:my-3 [&_.table-wrap]:rounded-lg [&_.table-wrap]:border [&_.table-wrap]:border-slate-700
                 [&_table]:w-full [&_table]:text-xs [&_table]:border-collapse
-                [&_th]:text-left [&_th]:text-slate-400 [&_th]:pb-2 [&_th]:pr-3 [&_th]:font-semibold [&_th]:text-xs [&_th]:uppercase [&_th]:tracking-wide [&_th]:border-b [&_th]:border-slate-700
-                [&_td]:py-1.5 [&_td]:pr-3 [&_td]:text-slate-300 [&_td]:border-b [&_td]:border-slate-800
+                [&_th]:bg-slate-800 [&_th]:text-left [&_th]:text-slate-400 [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold [&_th]:text-[0.65rem] [&_th]:uppercase [&_th]:tracking-wide [&_th]:border-b-2 [&_th]:border-indigo-500 [&_th]:whitespace-nowrap
+                [&_td]:px-3 [&_td]:py-1.5 [&_td]:text-slate-300 [&_td]:border-b [&_td]:border-slate-800 [&_td]:align-top
+                [&_tbody_tr:nth-child(even)]:bg-slate-800/40 [&_tbody_tr:hover]:bg-indigo-500/10
                 [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
                 [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:text-amber-200
                 [&_hr]:border-slate-700 [&_hr]:my-4
@@ -2625,9 +2660,11 @@ tbody tr:nth-child(even) { background: #f9fafb; }
                         [&_ul]:space-y-1 [&_ol]:space-y-1 [&_ul]:pl-5 [&_ol]:pl-5
                         [&_li]:text-slate-300 [&_li]:leading-relaxed
                         [&_p]:text-slate-300 [&_p]:leading-relaxed [&_p]:mb-1
+                        [&_.table-wrap]:overflow-x-auto [&_.table-wrap]:my-3 [&_.table-wrap]:rounded-lg [&_.table-wrap]:border [&_.table-wrap]:border-slate-700
                         [&_table]:w-full [&_table]:text-xs [&_table]:border-collapse
-                        [&_th]:text-left [&_th]:text-slate-400 [&_th]:pb-2 [&_th]:pr-3 [&_th]:font-semibold
-                        [&_td]:py-1.5 [&_td]:pr-3 [&_td]:text-slate-300 [&_td]:border-b [&_td]:border-slate-800
+                        [&_th]:bg-slate-800 [&_th]:text-left [&_th]:text-slate-400 [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold [&_th]:text-[0.65rem] [&_th]:uppercase [&_th]:tracking-wide [&_th]:border-b-2 [&_th]:border-indigo-500 [&_th]:whitespace-nowrap
+                        [&_td]:px-3 [&_td]:py-1.5 [&_td]:text-slate-300 [&_td]:border-b [&_td]:border-slate-800 [&_td]:align-top
+                        [&_tbody_tr:nth-child(even)]:bg-slate-800/40 [&_tbody_tr:hover]:bg-indigo-500/10
                         [&_code]:bg-slate-800 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_code]:text-xs
                         [&_hr]:border-slate-700 [&_hr]:my-4
                       ">
