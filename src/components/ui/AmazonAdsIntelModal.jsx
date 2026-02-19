@@ -828,8 +828,8 @@ export const buildAdsIntelContext = (intelData) => {
   // SP Search Terms
   if (intelData.spSearchTerms) {
     const d = intelData.spSearchTerms;
-    context += `\n--- SP SEARCH TERM ANALYSIS (${d.totalTerms} unique terms) ---
-Total: Spend $${Math.round(d.totalSpend)} | Sales $${Math.round(d.totalSales)} | ROAS ${d.overallROAS.toFixed(2)}
+    context += `\n--- SP SEARCH TERM ANALYSIS (${d.totalTerms} unique terms) [⚠️ same SP dollars as Campaign/Targeting/Placement reports — do NOT add to those totals] ---
+Total SP Search Term Spend: $${Math.round(d.totalSpend)} | Sales $${Math.round(d.totalSales)} | ROAS ${d.overallROAS.toFixed(2)}
 
 TOP CONVERTING SEARCH TERMS (by ROAS, min $5 spend):
 ${d.topByROAS.slice(0, 15).map(t => `  "${t.term}" | ROAS ${t.roas.toFixed(1)} | Spend $${t.spend.toFixed(2)} | Sales $${t.sales.toFixed(2)} | Conv ${t.convRate.toFixed(1)}% | ${t.matchTypes.join('/')}`).join('\n')}
@@ -848,7 +848,7 @@ ${(d.highImprNoClick || []).slice(0, 10).map(t => `  "${t.term}" | ${t.impressio
   // SP Advertised Products
   if (intelData.spAdvertised?.length > 0) {
     const prods = intelData.spAdvertised;
-    context += `\n--- ADVERTISED PRODUCT PERFORMANCE (${prods.length} ASINs) ---
+    context += `\n--- ADVERTISED PRODUCT PERFORMANCE (${prods.length} ASINs) [⚠️ same SP dollars as Campaign/SearchTerm/Targeting reports — different slice] ---
 ${prods.slice(0, 15).map(a => `  ${a.asin}${a.sku ? ` (${a.sku})` : ''} | Spend $${Math.round(a.spend)} | Sales $${Math.round(a.sales)} | ROAS ${a.roas.toFixed(2)} | ACOS ${a.acos.toFixed(1)}% | Conv ${a.convRate.toFixed(1)}%`).join('\n')}
 `;
   }
@@ -893,7 +893,7 @@ ${pp.pairs.filter(p => !p.isCrossSell).slice(0, 10).map(p => `  ${p.advertisedAs
   // SP Placements
   if (intelData.spPlacement) {
     const pl = intelData.spPlacement;
-    context += `\n--- PLACEMENT PERFORMANCE ---
+    context += `\n--- PLACEMENT PERFORMANCE [⚠️ same SP dollars sliced by placement — do NOT add to campaign totals] ---
 ${pl.byPlacement.map(p => `  ${p.placement}: Spend $${Math.round(p.spend)} | Sales $${Math.round(p.sales)} | ROAS ${p.roas.toFixed(2)} | ACOS ${p.acos.toFixed(1)}% | CTR ${p.ctr.toFixed(2)}% | Conv ${p.convRate.toFixed(1)}%`).join('\n')}
 
 BEST CAMPAIGN-PLACEMENT COMBOS:
@@ -908,7 +908,7 @@ ${(pl.topCampaignPlacements || []).slice(0, 10).map(cp => `  ${cp.campaign.subst
     const wastefulTargets = targets.filter(t => t.spend >= 5 && t.sales === 0).sort((a, b) => b.spend - a.spend).slice(0, 10);
     const highTOS = targets.filter(t => t.avgTosShare > 5).sort((a, b) => b.avgTosShare - a.avgTosShare).slice(0, 10);
     
-    context += `\n--- TARGETING PERFORMANCE (${targets.length} targets) ---
+    context += `\n--- TARGETING PERFORMANCE (${targets.length} targets) [⚠️ same SP dollars sliced by target — do NOT add to campaign totals] ---
 TOP TARGETS (by ROAS):
 ${topTargets.map(t => `  "${t.target}" (${t.matchType}) | ROAS ${t.roas.toFixed(2)} | Spend $${t.spend.toFixed(2)} | Sales $${t.sales.toFixed(2)} | TOS Share ${t.avgTosShare.toFixed(1)}%`).join('\n')}
 
@@ -1172,7 +1172,44 @@ export const buildActionReportPrompt = (intelData, storeName) => {
   
   // ===== COMPUTE ADVANCED METRICS FOR AI =====
   let advancedContext = '';
-  
+
+  // 0. Authoritative account totals — prevent double-counting across overlapping report types
+  // Priority: SP/SB/SD Campaign reports > Search Terms > Targeting > Advertised > Daily Overview
+  {
+    const spSpend = intelData.spCampaign?.totalSpend
+      || intelData.spSearchTerms?.totalSpend
+      || (intelData.spAdvertised || []).reduce((s, a) => s + a.spend, 0)
+      || 0;
+    const spSales = intelData.spCampaign?.totalSales
+      || intelData.spSearchTerms?.totalSales
+      || (intelData.spAdvertised || []).reduce((s, a) => s + a.sales, 0)
+      || 0;
+    const sbSpend = intelData.sbCampaign?.totalSpend
+      || (intelData.sbSearchTerms || []).reduce((s, t) => s + t.spend, 0)
+      || 0;
+    const sbSales = intelData.sbCampaign?.totalSales
+      || (intelData.sbSearchTerms || []).reduce((s, t) => s + t.sales, 0)
+      || 0;
+    const sdSpend = (intelData.sdCampaign || []).reduce((s, c) => s + c.spend, 0);
+    const sdSales = (intelData.sdCampaign || []).reduce((s, c) => s + c.sales, 0);
+    const totalSpend = spSpend + sbSpend + sdSpend;
+    const totalSales = spSales + sbSales + sdSales;
+
+    advancedContext += `
+=== AUTHORITATIVE ACCOUNT TOTALS (use ONLY these — do NOT sum across report sections) ===
+⚠️ CRITICAL: The SP Search Terms, SP Targeting, SP Placements, and SP Advertised Products sections
+show the SAME SP dollars sliced different ways. DO NOT add them together. Use these totals:
+
+  SP Total Spend: $${Math.round(spSpend)} | SP Total Sales: $${Math.round(spSales)} | SP ROAS: ${spSpend > 0 ? (spSales / spSpend).toFixed(2) : 'N/A'}
+  SB Total Spend: $${Math.round(sbSpend)} | SB Total Sales: $${Math.round(sbSales)} | SB ROAS: ${sbSpend > 0 ? (sbSales / sbSpend).toFixed(2) : 'N/A'}
+  SD Total Spend: $${Math.round(sdSpend)} | SD Total Sales: $${Math.round(sdSales)} | SD ROAS: ${sdSpend > 0 ? (sdSales / sdSpend).toFixed(2) : 'N/A'}
+  ═══════════════════════════════════════════════════════════
+  ACCOUNT TOTAL SPEND: $${Math.round(totalSpend)} | ACCOUNT TOTAL SALES: $${Math.round(totalSales)} | BLENDED ROAS: ${totalSpend > 0 ? (totalSales / totalSpend).toFixed(2) : 'N/A'} | BLENDED ACOS: ${totalSales > 0 ? ((totalSpend / totalSales) * 100).toFixed(1) : 'N/A'}%
+  ═══════════════════════════════════════════════════════════
+  SP Campaign Count: ${intelData.spCampaign?.totalCampaigns || 'N/A'} | SB Campaign Count: ${intelData.sbCampaign?.totalCampaigns || 'N/A'} | SD Campaign Count: ${(intelData.sdCampaign || []).length || 'N/A'}
+`;
+  }
+
   // 1. Campaign structure analysis (extract from campaign naming conventions)
   if (intelData.spSearchTerms) {
     const d = intelData.spSearchTerms;
@@ -1297,6 +1334,7 @@ ${isolationCandidates.map(t => `  "${t.term}" | ${t.orders} orders | ROAS ${t.ro
 
 === ANALYSIS PRINCIPLES (MANDATORY) ===
 - ONLY cite numbers that appear in the data below. NEVER fabricate metrics or invent campaign names.
+- ⚠️ DOUBLE-COUNTING WARNING: The data below includes multiple views of the SAME ad spend. SP Search Terms, SP Targeting, SP Placements, and SP Advertised Products are all different slices of the SAME SP dollars. DO NOT sum them. Use ONLY the "AUTHORITATIVE ACCOUNT TOTALS" section for total spend, total sales, and blended ROAS/ACOS figures.
 - Every recommendation MUST reference the specific data point that triggered it. Format: "Campaign X has ROAS 0.8x on $450 spend → [action]"
 - Cross-reference data sources: tie search terms to the campaigns they run in, products to their ad profitability, placements to the campaigns using them.
 - MINIMUM DATA THRESHOLDS for recommendations: $10+ spend for negative keyword decisions, $5+ spend for bid changes, 50+ clicks for placement modifiers, 2+ orders for "scale" recommendations. Flag when data is below threshold but still worth watching.
