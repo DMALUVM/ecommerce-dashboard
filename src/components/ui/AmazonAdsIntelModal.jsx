@@ -1491,9 +1491,19 @@ If a search term MATCHES the campaign's product intent but has zero orders, diag
 - The fix is to improve the listing, adjust price, or improve main image — NOT to negate relevant traffic
 - Only negate truly irrelevant intent (wrong product category entirely)
 
-STANDARD NEGATIVE RULES (apply AFTER passing the product-intent check above):
-- NEGATIVE EXACT if: the exact term is truly irrelevant to the campaign's product OR has >$10 spend with 0 orders AND the intent does not match the product
-- NEGATIVE PHRASE if: the root phrase is irrelevant to the campaign's product (e.g., "pet" for skincare, "wholesale" for DTC, "lip" for body balm campaigns)
+TWO VALID REASONS TO NEGATE (always label which one):
+A) TRUE INTENT MISMATCH — the search term wants a fundamentally different product than the campaign sells
+   - NEGATIVE EXACT if: term clearly targets wrong product category (e.g., "chapstick" in deodorant campaign)
+   - NEGATIVE PHRASE if: root phrase is wrong category (e.g., "lip" in body balm campaigns, "pet" for skincare, "wholesale" for DTC)
+   - "Why" must name both the search intent AND the campaign's actual product from the catalog
+
+B) SPEND EFFICIENCY — intent matches the product but high spend with zero conversions
+   - NEGATIVE EXACT only (not phrase — the broader intent is still relevant)
+   - Only if >$10 spend with 0 orders (or 10+ clicks with 0 orders)
+   - "Why" must acknowledge the intent matches, state the spend/click data, and flag it as a listing/conversion investigation item
+   - ALWAYS pair with a recommendation to investigate why the relevant term isn't converting
+
+NEVER use intent-mismatch language (e.g., "wrong product category", "not lip balm") for reason B terms.
 - NEVER negate your own brand terms (even if ACOS is high — brand defense is mandatory)
 - NEVER negate terms with <$5 spend (insufficient data — flag for monitoring instead)
 - Flag terms with 10+ clicks and 0 orders as "watch list" even if spend is below threshold
@@ -1556,16 +1566,23 @@ You are not an advisor — you are the operator. Write as if you are the person 
 ## 🔴 KILL LIST — Negative Keywords to Add Immediately
 | Search Term | Campaign to Negate In | Neg Match Type (exact/phrase) | Spend Wasted | Clicks | Orders | Why Negate |
 ⚠️ PRODUCT-INTENT GATE (MANDATORY before adding ANY term to this list):
-For EACH candidate negative keyword, you MUST verify:
-1. Which campaign(s) did this search term trigger in? (Look at "Campaigns:" field in the data)
-2. What PRODUCT does that campaign advertise? (Extract ASIN from campaign name → look up in PRODUCT CATALOG)
-3. Does the searcher's intent MATCH the campaign's product?
-   - If YES (e.g., "tallow balm for skin" in a body balm campaign) → DO NOT ADD TO KILL LIST. Instead, note it as a listing/conversion issue.
-   - If NO (e.g., "tallow chapstick" in a body balm campaign) → ADD to kill list.
-DO NOT assume all campaigns sell the same product. A body balm campaign and a lip balm campaign sell DIFFERENT products to DIFFERENT customers.
-If a relevant search term has zero orders, explain the likely cause (listing quality, price, competition) instead of negating it.
+For EACH candidate negative keyword, you MUST:
+1. Check which campaign(s) the search term triggered in (look at "Campaigns:" field in the data)
+2. Identify what PRODUCT that campaign advertises (extract ASIN from campaign name → look up in PRODUCT CATALOG)
+3. Determine if the searcher's intent MATCHES or MISMATCHES the campaign's product
 
-RULES: minimum 10 keywords. Prioritize by spend wasted (highest first). Only include terms meeting the $10+/0-orders threshold OR 10+ clicks/0-orders threshold. For each, specify negative EXACT vs negative PHRASE and explain why. EVERY "Why Negate" MUST reference the product catalog lookup confirming intent mismatch.
+TWO valid reasons to negate — the "Why Negate" column MUST use the correct one:
+A) TRUE INTENT MISMATCH: The search term wants a fundamentally different product than the campaign sells.
+   Examples: "tallow chapstick" in a deodorant campaign, "lip balm" in a body balm campaign, "face cream" in a lip balm campaign.
+   → "Why Negate" = "Searcher wants [product X], campaign sells [product Y] (ASIN lookup: B0xxx = '[title]')"
+B) SPEND EFFICIENCY: The search term's intent matches the campaign's product, but it has significant spend with zero conversions.
+   Examples: "tallow balm for skin" with $133 spend and 0 orders in a body balm campaign — the intent is correct but it's not converting.
+   → "Why Negate" = "Intent matches product but $X spent / Y clicks / 0 orders — likely [listing/price/competition] issue. Negate to stop bleeding while investigating."
+   ⚠️ For type B, also add a note in the campaign audit recommending the seller investigate WHY the relevant term isn't converting (listing quality, main image, price, reviews, etc.)
+
+NEVER write "not lip balm" or "wrong product category" when the search term actually DOES match the campaign's product. Getting this wrong leads to bad strategic advice.
+
+RULES: minimum 10 keywords. Prioritize by spend wasted (highest first). Only include terms meeting the $10+/0-orders threshold OR 10+ clicks/0-orders threshold. For each, specify negative EXACT vs negative PHRASE. The "Why Negate" column MUST clearly state whether it's reason A (intent mismatch) or reason B (spend efficiency) and include the product catalog lookup.
 BOTTOM LINE: "Adding these X negatives saves ~$Y/week ($Z/month), reducing blended ACOS by ~W points."
 
 ## 🟢 SCALE LIST — Increase Bids & Budgets
@@ -1718,7 +1735,7 @@ Then for EACH campaign (not just the top ones), provide ALL of the following:
 - Revenue trend if data allows: growing, flat, or declining?
 
 **Specific Actions (minimum 3 per campaign):**
-1. **Keywords to negate** — list each one with spend wasted and the negative match type (exact/phrase). ⚠️ FIRST identify this campaign's ASIN from the campaign name, look it up in the PRODUCT CATALOG, then ONLY negate terms whose intent does NOT match this campaign's actual product. If a search term matches the product but doesn't convert, diagnose it as a listing/price issue instead of negating. If no negatives needed, explain why.
+1. **Keywords to negate** — list each one with spend wasted and the negative match type (exact/phrase). ⚠️ FIRST identify this campaign's ASIN from the campaign name, look it up in the PRODUCT CATALOG, then for each candidate negative label it as: (A) TRUE INTENT MISMATCH — searcher wants a different product than this campaign sells, or (B) SPEND EFFICIENCY — intent matches this campaign's product but zero conversions despite significant spend. For type B, also note what the seller should investigate (listing, price, reviews, main image). NEVER say "wrong product category" when the intent actually matches the campaign's product. If no negatives needed, explain why.
 2. **Keywords to increase bids on** — list each one with current CPC, target bid (show formula: Target ACOS × AOV × Conv Rate), and expected incremental revenue
 3. **Keywords to decrease bids on** — list each one with current CPC, target bid, and expected savings
 4. **Budget verdict** — "Increase to $X/day" or "Decrease to $X/day" or "Maintain at $X/day" with reasoning (is it budget-capped? underperforming?)
