@@ -360,20 +360,31 @@ const classifyHeaders = (headers) => {
   const normalizedHeaders = headers.map(h => String(h || '').trim());
   const lowerHeaders = normalizedHeaders.map(h => h.toLowerCase());
 
+  // Match helper: exact match, prefix match, or substring match only if
+  // the strings are similar length (≥60% ratio). This prevents short fields
+  // like "Day" or "Cost" from matching inside unrelated headers like
+  // "14 Day Total Sales" or "Cost type".
+  const fieldMatch = (header, field) => {
+    if (header === field) return true;
+    if (header.startsWith(field) || field.startsWith(header)) return true;
+    const ratio = Math.min(header.length, field.length) / Math.max(header.length, field.length);
+    return ratio >= 0.6 && (header.includes(field) || field.includes(header));
+  };
+
   let bestMatch = null;
   let bestScore = 0;
 
   for (const sig of REPORT_SIGNATURES) {
     const requiredMatches = sig.required.filter(req => {
       const lReq = req.toLowerCase();
-      return lowerHeaders.some(h => h.includes(lReq) || lReq.includes(h));
+      return lowerHeaders.some(h => fieldMatch(h, lReq));
     });
 
     if (requiredMatches.length === sig.required.length) {
       // All required headers found — calculate score including optionals
       const optionalMatches = (sig.optional || []).filter(opt => {
         const lOpt = opt.toLowerCase();
-        return lowerHeaders.some(h => h.includes(lOpt) || lOpt.includes(h));
+        return lowerHeaders.some(h => fieldMatch(h, lOpt));
       });
       const score = requiredMatches.length * 10 + optionalMatches.length;
 
@@ -1024,6 +1035,35 @@ export const mergeTier2IntoIntelData = (existing, tier2Results) => {
     .reduce((sum, platform) => sum + Object.keys(platform).filter(k => k !== 'lastUpdated' && k !== 'reportCount').length, 0);
   
   return updated;
+};
+
+
+/**
+ * Merge cloud intel data into local, preferring whichever version has more
+ * records for each platform > report. Prevents cloud restore (which trims
+ * to 150 rows) from overwriting richer local data.
+ */
+export const mergeIntelDataPreferLocal = (local, cloud) => {
+  if (!local?.lastUpdated) return cloud || {};
+  if (!cloud?.lastUpdated) return local || {};
+
+  const merged = JSON.parse(JSON.stringify(local));
+
+  for (const [platform, reports] of Object.entries(cloud)) {
+    if (platform === 'lastUpdated' || platform === 'reportCount' || platform === 'source') continue;
+    if (!reports || typeof reports !== 'object') continue;
+
+    if (!merged[platform]) { merged[platform] = reports; continue; }
+
+    for (const [rt, data] of Object.entries(reports)) {
+      const existing = merged[platform][rt];
+      // Keep whichever has more records; fill gaps from cloud
+      if (!existing?.records?.length) {
+        merged[platform][rt] = data;
+      }
+    }
+  }
+  return merged;
 };
 
 

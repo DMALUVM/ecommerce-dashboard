@@ -9,7 +9,7 @@ import { devWarn, devError, audit, getAuditLog } from './utils/logger';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay } from './utils/ads';
-import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData, buildComprehensiveAdsPrompt } from './utils/adsReportParser';
+import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData, mergeIntelDataPreferLocal, buildComprehensiveAdsPrompt } from './utils/adsReportParser';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
@@ -5022,7 +5022,8 @@ const loadFromCloud = useCallback(async (storeId = null, _noTimeout = false) => 
     if (cloud.productionPipeline) setProductionPipeline(cloud.productionPipeline);
     if (cloud.threeplLedger) setThreeplLedger(cloud.threeplLedger);
     if (cloud.amazonCampaigns) setAmazonCampaigns(cloud.amazonCampaigns);
-    if (cloud.adsIntelData) setAdsIntelData(cloud.adsIntelData);
+    if (cloud.adsIntelData) setAdsIntelData(prev => mergeIntelDataPreferLocal(prev, cloud.adsIntelData));
+    if (cloud.dtcIntelData) setDtcIntelData(prev => mergeIntelDataPreferLocal(prev, cloud.dtcIntelData));
     if (cloud.reportHistory) setReportHistory(cloud.reportHistory);
     if (cloud.actionItems) setActionItems(cloud.actionItems);
     
@@ -11093,15 +11094,21 @@ const savePeriods = async (d) => {
           restored.push(`${d.amazonCampaigns.campaigns?.length || 0} ad campaigns`);
         }
         if (d.adsIntelData && Object.keys(d.adsIntelData).length > 0) {
-          setAdsIntelData(d.adsIntelData);
-          lsSet('ecommerce_ads_intel_v1', JSON.stringify(d.adsIntelData));
-          mergedData.adsIntelData = d.adsIntelData;
+          setAdsIntelData(prev => {
+            const merged = mergeIntelDataPreferLocal(prev, d.adsIntelData);
+            lsSet('ecommerce_ads_intel_v1', JSON.stringify(merged));
+            mergedData.adsIntelData = merged;
+            return merged;
+          });
           restored.push('ads intelligence');
         }
         if (d.dtcIntelData && Object.keys(d.dtcIntelData).length > 0) {
-          setDtcIntelData(d.dtcIntelData);
-          lsSet('ecommerce_dtc_intel_v1', JSON.stringify(d.dtcIntelData));
-          mergedData.dtcIntelData = d.dtcIntelData;
+          setDtcIntelData(prev => {
+            const merged = mergeIntelDataPreferLocal(prev, d.dtcIntelData);
+            lsSet('ecommerce_dtc_intel_v1', JSON.stringify(merged));
+            mergedData.dtcIntelData = merged;
+            return merged;
+          });
           restored.push('DTC ads intelligence');
         }
         if (d.reportHistory && Object.keys(d.reportHistory).length > 0) {
