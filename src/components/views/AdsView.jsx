@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   AlertTriangle, BarChart3, Brain, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight,
-  Clock, Database, DollarSign, FileSpreadsheet, Flame, Globe, Loader2, RefreshCw, Search,
+  Clock, Database, DollarSign, FileSpreadsheet, FileText, Flame, Globe, Loader2, RefreshCw, Search,
   Send, ShieldAlert, Sparkles, Target, TrendingDown, TrendingUp, Trophy, Upload, X, Zap
 } from 'lucide-react';
 import { formatCurrency, formatPercent, formatNumber } from '../../utils/format';
@@ -76,7 +76,7 @@ const AdsView = ({
   setAdsTimeTab, setAdsViewMode, setAdsYear, setAmazonCampaignFilter,
   setAmazonCampaignSort, setNavDropdown, setSelectedDay, setSelectedInvDate,
   setSelectedPeriod, setSelectedWeek, setShowAdsAIChat, setShowAdsBulkUpload,
-  setShowAdsIntelUpload, setToast, setUploadTab, showAdsAIChat, storeName,
+  setShowAdsIntelUpload, setShowDtcIntelUpload, dtcIntelData, setToast, setUploadTab, showAdsAIChat, storeName,
   setView, view, save
 }) => {
   const sortedWeeks = Object.keys(allWeeksData).sort();
@@ -1181,41 +1181,87 @@ const AdsView = ({
         {/* AI REPORTS TAB                                         */}
         {/* ════════════════════════════════════════════════════════ */}
         {adsViewMode === 'reports' && (<>
+
+          {/* ═══════════════════════════════════════════════════ */}
+          {/* DEEP ACTION REPORTS — Best possible output         */}
+          {/* ═══════════════════════════════════════════════════ */}
+          <div className="bg-gradient-to-br from-violet-900/20 via-slate-800/40 to-orange-900/15 rounded-xl border border-violet-500/30 p-5 mb-5">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+              <div>
+                <h3 className="text-white text-lg font-bold flex items-center gap-2"><FileText className="w-5 h-5 text-violet-400"/>Deep Action Reports</h3>
+                <p className="text-slate-400 text-xs mt-0.5">Full structured audit with bid calculations, waste analysis, and step-by-step actions</p>
+              </div>
+              <span className="px-2.5 py-1 bg-violet-600/30 border border-violet-500/40 rounded-lg text-violet-300 text-[10px] font-bold uppercase tracking-wider">Best Quality</span>
+            </div>
+
+            {/* Data status indicators */}
+            <div className="flex flex-wrap gap-2 mb-4">
+              {(() => {
+                const indicators = [];
+                const hasAmzData = adsIntelData?.lastUpdated;
+                const hasDtcData = dtcIntelData?.lastUpdated;
+                if (hasAmzData) {
+                  const amzDate = new Date(adsIntelData.lastUpdated).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                  indicators.push({ label: `Amazon data loaded (${amzDate})`, ok: true });
+                } else {
+                  indicators.push({ label: 'No Amazon data — upload on Data tab', ok: false });
+                }
+                if (hasDtcData) {
+                  const dtcDate = new Date(dtcIntelData.lastUpdated).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                  indicators.push({ label: `DTC data loaded (${dtcDate})`, ok: true });
+                } else {
+                  indicators.push({ label: 'No DTC data — upload on Data tab', ok: false });
+                }
+                return indicators.map((ind, i) => (
+                  <span key={i} className={`flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-lg ${ind.ok ? 'bg-emerald-900/30 border border-emerald-500/30 text-emerald-400' : 'bg-slate-800/60 border border-slate-700/50 text-slate-500'}`}>
+                    {ind.ok ? <Check className="w-3 h-3"/> : <AlertTriangle className="w-3 h-3"/>}{ind.label}
+                  </span>
+                ));
+              })()}
+            </div>
+
+            {/* Deep Report buttons */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button
+                onClick={() => { if (adsIntelData?.lastUpdated) setShowAdsIntelUpload(true); else { setAdsViewMode('upload'); setToast({ message: 'Upload Amazon PPC data first', type: 'info' }); } }}
+                className={`relative px-5 py-4 rounded-xl font-semibold text-sm flex items-center gap-3 transition-all ${adsIntelData?.lastUpdated ? 'bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow-lg shadow-orange-500/20' : 'bg-slate-800/60 border border-slate-700/50 text-slate-500 hover:border-orange-500/40 hover:text-slate-300'}`}>
+                <span className="text-xl">📦</span>
+                <div className="text-left">
+                  <div className="flex items-center gap-2">Amazon Deep Report {!adsIntelData?.lastUpdated && <span className="text-[9px] bg-slate-700 px-1.5 py-0.5 rounded">needs data</span>}</div>
+                  <p className={`text-[10px] font-normal mt-0.5 ${adsIntelData?.lastUpdated ? 'text-orange-200/80' : 'text-slate-600'}`}>Campaigns, search terms, placements, bid math, SKU profitability</p>
+                </div>
+                <FileText className="w-4 h-4 ml-auto opacity-60"/>
+              </button>
+
+              <button
+                onClick={() => { if (dtcIntelData?.lastUpdated) setShowDtcIntelUpload(true); else { setAdsViewMode('upload'); setToast({ message: 'Upload Google/Meta data first', type: 'info' }); } }}
+                className={`relative px-5 py-4 rounded-xl font-semibold text-sm flex items-center gap-3 transition-all ${dtcIntelData?.lastUpdated ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/20' : 'bg-slate-800/60 border border-slate-700/50 text-slate-500 hover:border-cyan-500/40 hover:text-slate-300'}`}>
+                <span className="text-xl">🛍️</span>
+                <div className="text-left">
+                  <div className="flex items-center gap-2">DTC Deep Report {!dtcIntelData?.lastUpdated && <span className="text-[9px] bg-slate-700 px-1.5 py-0.5 rounded">needs data</span>}</div>
+                  <p className={`text-[10px] font-normal mt-0.5 ${dtcIntelData?.lastUpdated ? 'text-cyan-200/80' : 'text-slate-600'}`}>Google + Meta campaigns, creative analysis, audience, budget allocation</p>
+                </div>
+                <FileText className="w-4 h-4 ml-auto opacity-60"/>
+              </button>
+            </div>
+
+            <p className="text-slate-600 text-[10px] mt-3 text-center">Uses 9-framework analysis system with pre-computed bid calculations and waste detection</p>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════ */}
+          {/* QUICK CHAT AUDIT — Faster, conversational          */}
+          {/* ═══════════════════════════════════════════════════ */}
           <div className="bg-gradient-to-r from-orange-900/15 to-amber-900/10 rounded-xl border border-orange-500/25 p-5 mb-5">
             <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
               <div>
-                <h3 className="text-white text-lg font-semibold flex items-center gap-2"><Brain className="w-5 h-5 text-orange-400"/>AI Ads Audit</h3>
-                <p className="text-slate-500 text-xs mt-0.5">Cross-platform audit from all loaded data sources</p>
+                <h3 className="text-white text-base font-semibold flex items-center gap-2"><Brain className="w-4 h-4 text-orange-400"/>Quick Chat Audit</h3>
+                <p className="text-slate-500 text-xs mt-0.5">Conversational AI audit — ask follow-up questions, drill into specifics</p>
               </div>
               <select value={aiChatModel} onChange={e => setAiChatModel(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">
                 <optgroup label="Anthropic">{AI_MODEL_OPTIONS.filter(m => m.provider === 'anthropic').map(m => <option key={m.value} value={m.value}>{m.label} ({m.cost})</option>)}</optgroup>
                 <optgroup label="OpenAI">{AI_MODEL_OPTIONS.filter(m => m.provider === 'openai').map(m => <option key={m.value} value={m.value}>{m.label} ({m.cost})</option>)}</optgroup>
               </select>
             </div>
-
-            {/* Data Sources */}
-            {(() => {
-              const sources = [];
-              if (sortedDays.length > 0) sources.push({ platform: 'Dashboard', type: `Daily KPIs (${sortedDays.length}d)`, color: 'bg-violet-500' });
-              if (hasCampaignData) { const ac = campaigns.filter(c => (c.spend || 0) > 0).length; sources.push({ platform: 'Amazon', type: `Campaigns (${ac} active)`, color: 'bg-orange-500' }); }
-              if (adsIntelData) { ['amazon', 'google', 'meta', 'shopify'].forEach(p => { if (!adsIntelData[p] || typeof adsIntelData[p] !== 'object') return; Object.entries(adsIntelData[p]).forEach(([rt, data]) => { if (!data?.records) return; sources.push({ platform: p.charAt(0).toUpperCase() + p.slice(1), type: `${data.meta?.label || rt} (${data.records.length})`, color: p === 'amazon' ? 'bg-orange-500' : p === 'google' ? 'bg-red-500' : p === 'meta' ? 'bg-blue-500' : 'bg-emerald-500' }); }); }); }
-              return (
-                <button onClick={() => setShowDataSources(p => !p)} className="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-200 mb-4">
-                  <Database className="w-3.5 h-3.5"/>{sources.length} data source{sources.length !== 1 ? 's' : ''}<ChevronDown className={`w-3 h-3 transition-transform ${showDataSources ? 'rotate-180' : ''}`}/>
-                </button>
-              );
-            })()}
-            {showDataSources && (
-              <div className="bg-slate-900/50 rounded-lg border border-slate-700/50 p-3 mb-4 space-y-1">
-                {(() => {
-                  const sources = [];
-                  if (sortedDays.length > 0) sources.push({ p: 'Dashboard', t: `Daily KPIs (${sortedDays.length}d)`, c: 'bg-violet-500' });
-                  if (hasCampaignData) sources.push({ p: 'Amazon', t: `Campaigns (${campaigns.filter(c => (c.spend || 0) > 0).length} active)`, c: 'bg-orange-500' });
-                  if (adsIntelData) { ['amazon', 'google', 'meta', 'shopify'].forEach(pl => { if (!adsIntelData[pl] || typeof adsIntelData[pl] !== 'object') return; Object.entries(adsIntelData[pl]).forEach(([rt, data]) => { if (!data?.records) return; sources.push({ p: pl.charAt(0).toUpperCase() + pl.slice(1), t: `${data.meta?.label || rt} (${data.records.length} rows)`, c: pl === 'amazon' ? 'bg-orange-500' : pl === 'google' ? 'bg-red-500' : pl === 'meta' ? 'bg-blue-500' : 'bg-emerald-500' }); }); }); }
-                  return sources.map((s, i) => <div key={i} className="flex items-center gap-2 text-xs"><span className={`w-1.5 h-1.5 rounded-full ${s.c}`}/><span className="text-slate-500 w-16">{s.p}</span><span className="text-slate-300">{s.t}</span></div>);
-                })()}
-              </div>
-            )}
 
             {/* Report Scope */}
             <div className="mb-4">

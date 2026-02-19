@@ -18408,6 +18408,8 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setShowAdsAIChat={setShowAdsAIChat}
       setShowAdsBulkUpload={setShowAdsBulkUpload}
       setShowAdsIntelUpload={setShowAdsIntelUpload}
+      setShowDtcIntelUpload={setShowDtcIntelUpload}
+      dtcIntelData={dtcIntelData}
       setToast={setToast}
       setUploadTab={setUploadTab}
       showAdsAIChat={showAdsAIChat}
