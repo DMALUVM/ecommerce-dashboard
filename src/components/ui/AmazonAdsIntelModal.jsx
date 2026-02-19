@@ -7,10 +7,13 @@ import { sanitizeHtml } from '../../utils/sanitize';
 const REPORT_TYPES = [
   { key: 'dailyOverview', label: 'Daily Ads Overview', icon: TrendingUp, color: 'yellow', desc: 'Seller Central daily ads overview (recent 30d)' },
   { key: 'historicalDaily', label: 'Historical Daily Data', icon: BarChart3, color: 'indigo', desc: 'Historical daily ads data (months/years)' },
+  { key: 'spCampaign', label: 'SP Campaigns', icon: BarChart3, color: 'rose', desc: 'Sponsored Products Campaign Report' },
   { key: 'spSearchTerms', label: 'SP Search Terms', icon: Search, color: 'blue', desc: 'Sponsored Products Search Term Report' },
   { key: 'spAdvertised', label: 'SP Advertised Products', icon: ShoppingCart, color: 'green', desc: 'Sponsored Products Advertised Product Report' },
+  { key: 'spPurchased', label: 'SP Purchased Products', icon: ShoppingCart, color: 'teal', desc: 'Sponsored Products Purchased Product Report' },
   { key: 'spPlacement', label: 'SP Placements', icon: BarChart3, color: 'purple', desc: 'Sponsored Products / Brands Placement Report' },
   { key: 'spTargeting', label: 'SP Targeting', icon: Target, color: 'orange', desc: 'Sponsored Products Targeting Report' },
+  { key: 'sbCampaign', label: 'SB Campaigns', icon: BarChart3, color: 'violet', desc: 'Sponsored Brands Campaign Report' },
   { key: 'sbSearchTerms', label: 'SB Search Terms', icon: Search, color: 'cyan', desc: 'Sponsored Brands Search Term Report' },
   { key: 'sdCampaign', label: 'SD Campaigns', icon: Eye, color: 'pink', desc: 'Sponsored Display Campaign Report' },
   { key: 'businessReport', label: 'Business Report', icon: TrendingUp, color: 'emerald', desc: 'Amazon Business Report (by ASIN / child ASIN / Detail Page)' },
@@ -335,6 +338,142 @@ const pct = (v) => {
 };
 
 // ============ AGGREGATION FUNCTIONS ============
+
+const aggregateSPCampaign = (rows) => {
+  const byCampaign = {};
+  rows.forEach(r => {
+    const camp = r['Campaign Name'] || r['campaign name'] || '';
+    if (!camp) return;
+    if (!byCampaign[camp]) byCampaign[camp] = {
+      campaign: camp, spend: 0, sales: 0, impressions: 0, clicks: 0, orders: 0, units: 0,
+      budget: 0, status: '', biddingStrategy: '', portfolioName: '',
+    };
+    byCampaign[camp].spend += num(r['Spend'] || r['spend']);
+    byCampaign[camp].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales'] || r['Total Sales']);
+    byCampaign[camp].impressions += num(r['Impressions'] || r['impressions']);
+    byCampaign[camp].clicks += num(r['Clicks'] || r['clicks']);
+    byCampaign[camp].orders += num(r['7 Day Total Orders (#)'] || r['Total Orders']);
+    byCampaign[camp].units += num(r['7 Day Total Units (#)'] || r['Total Units']);
+    const budget = num(r['Campaign Daily Budget'] || r['Daily Budget'] || r['Budget']);
+    if (budget > 0) byCampaign[camp].budget = budget;
+    const status = r['Campaign Status'] || r['Status'] || r['Campaign Serving status'] || '';
+    if (status) byCampaign[camp].status = status;
+    const strat = r['Campaign Bidding Strategy'] || r['Bidding Strategy'] || r['Bidding strategy'] || '';
+    if (strat) byCampaign[camp].biddingStrategy = strat;
+    const portfolio = r['Portfolio name'] || r['Portfolio Name'] || '';
+    if (portfolio) byCampaign[camp].portfolioName = portfolio;
+  });
+
+  const campaigns = Object.values(byCampaign).map(c => ({
+    ...c,
+    roas: c.spend > 0 ? c.sales / c.spend : 0,
+    acos: c.sales > 0 ? (c.spend / c.sales) * 100 : (c.spend > 0 ? 999 : 0),
+    ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
+    convRate: c.clicks > 0 ? (c.orders / c.clicks) * 100 : 0,
+    cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
+  })).sort((a, b) => b.spend - a.spend);
+
+  const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0);
+  const totalSales = campaigns.reduce((s, c) => s + c.sales, 0);
+
+  return {
+    campaigns,
+    totalCampaigns: campaigns.length,
+    totalSpend,
+    totalSales,
+    overallROAS: totalSpend > 0 ? totalSales / totalSpend : 0,
+    activeCampaigns: campaigns.filter(c => c.status.toLowerCase().includes('enabled') || c.status.toLowerCase().includes('active') || c.status === '').length,
+    pausedCampaigns: campaigns.filter(c => c.status.toLowerCase().includes('paused')).length,
+    totalBudget: campaigns.reduce((s, c) => s + c.budget, 0),
+  };
+};
+
+const aggregateSBCampaign = (rows) => {
+  const byCampaign = {};
+  rows.forEach(r => {
+    const camp = r['Campaign Name'] || r['campaign name'] || '';
+    if (!camp) return;
+    if (!byCampaign[camp]) byCampaign[camp] = {
+      campaign: camp, spend: 0, sales: 0, impressions: 0, clicks: 0, orders: 0, units: 0,
+      ntbOrders: 0, ntbSales: 0, budget: 0, status: '', portfolioName: '',
+    };
+    byCampaign[camp].spend += num(r['Spend'] || r['spend']);
+    byCampaign[camp].sales += num(r['14 Day Total Sales '] || r['14 Day Total Sales'] || r['Total Sales']);
+    byCampaign[camp].impressions += num(r['Impressions'] || r['impressions']);
+    byCampaign[camp].clicks += num(r['Clicks'] || r['clicks']);
+    byCampaign[camp].orders += num(r['14 Day Total Orders (#)'] || r['Total Orders']);
+    byCampaign[camp].units += num(r['14 Day Total Units (#)'] || r['Total Units']);
+    byCampaign[camp].ntbOrders += num(r['New-to-brand Orders (#)'] || r['14 Day New-to-brand Orders (#)']);
+    byCampaign[camp].ntbSales += num(r['New-to-brand Sales'] || r['14 Day New-to-brand Sales']);
+    const budget = num(r['Campaign Daily Budget'] || r['Daily Budget']);
+    if (budget > 0) byCampaign[camp].budget = budget;
+    const status = r['Campaign Status'] || r['Status'] || '';
+    if (status) byCampaign[camp].status = status;
+    const portfolio = r['Portfolio name'] || r['Portfolio Name'] || '';
+    if (portfolio) byCampaign[camp].portfolioName = portfolio;
+  });
+
+  const campaigns = Object.values(byCampaign).map(c => ({
+    ...c,
+    roas: c.spend > 0 ? c.sales / c.spend : 0,
+    acos: c.sales > 0 ? (c.spend / c.sales) * 100 : (c.spend > 0 ? 999 : 0),
+    ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
+    convRate: c.clicks > 0 ? (c.orders / c.clicks) * 100 : 0,
+    cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
+    ntbRate: c.orders > 0 ? (c.ntbOrders / c.orders) * 100 : 0,
+  })).sort((a, b) => b.spend - a.spend);
+
+  const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0);
+  const totalSales = campaigns.reduce((s, c) => s + c.sales, 0);
+
+  return {
+    campaigns,
+    totalCampaigns: campaigns.length,
+    totalSpend,
+    totalSales,
+    overallROAS: totalSpend > 0 ? totalSales / totalSpend : 0,
+  };
+};
+
+const aggregateSPPurchased = (rows) => {
+  // Aggregate by Advertised ASIN → Purchased ASIN pairs
+  const byPair = {};
+  rows.forEach(r => {
+    const advAsin = r['Advertised ASIN'] || '';
+    const purAsin = r['Purchased ASIN'] || '';
+    if (!advAsin || !purAsin) return;
+    const key = `${advAsin}→${purAsin}`;
+    if (!byPair[key]) byPair[key] = { advertisedAsin: advAsin, purchasedAsin: purAsin, spend: 0, sales: 0, orders: 0, units: 0, campaigns: new Set() };
+    byPair[key].sales += num(r['7 Day Total Sales '] || r['7 Day Total Sales']);
+    byPair[key].orders += num(r['7 Day Total Orders (#)']);
+    byPair[key].units += num(r['7 Day Total Units (#)']);
+    const camp = r['Campaign Name'] || '';
+    if (camp) byPair[key].campaigns.add(camp);
+  });
+
+  const pairs = Object.values(byPair).map(p => ({
+    ...p,
+    isCrossSell: p.advertisedAsin !== p.purchasedAsin,
+    campaigns: [...p.campaigns],
+  })).sort((a, b) => b.sales - a.sales);
+
+  // Summarize cross-sell patterns
+  const crossSellPairs = pairs.filter(p => p.isCrossSell);
+  const samePairs = pairs.filter(p => !p.isCrossSell);
+  const totalCrossSellSales = crossSellPairs.reduce((s, p) => s + p.sales, 0);
+  const totalSameSales = samePairs.reduce((s, p) => s + p.sales, 0);
+
+  return {
+    pairs: pairs.slice(0, 50),
+    totalPairs: pairs.length,
+    crossSellPairs: crossSellPairs.slice(0, 25),
+    totalCrossSellSales,
+    totalSameSales,
+    crossSellRate: (totalCrossSellSales + totalSameSales) > 0
+      ? (totalCrossSellSales / (totalCrossSellSales + totalSameSales)) * 100
+      : 0,
+  };
+};
 
 const aggregateSPSearchTerms = (rows) => {
   // Aggregate by search term across all dates
@@ -714,6 +853,43 @@ ${prods.slice(0, 15).map(a => `  ${a.asin}${a.sku ? ` (${a.sku})` : ''} | Spend 
 `;
   }
 
+  // SP Campaign (campaign-level performance)
+  if (intelData.spCampaign) {
+    const sp = intelData.spCampaign;
+    context += `\n--- SP CAMPAIGN PERFORMANCE (${sp.totalCampaigns} campaigns) ---
+Total: Spend $${Math.round(sp.totalSpend)} | Sales $${Math.round(sp.totalSales)} | ROAS ${sp.overallROAS.toFixed(2)} | Active ${sp.activeCampaigns} | Paused ${sp.pausedCampaigns} | Total Daily Budget $${Math.round(sp.totalBudget)}
+
+ALL SP CAMPAIGNS (sorted by spend):
+${sp.campaigns.map(c => `  ${c.campaign.substring(0, 60)} | ${c.status || 'unknown'} | Spend $${Math.round(c.spend)} | Sales $${Math.round(c.sales)} | ROAS ${c.roas.toFixed(2)} | ACOS ${c.acos.toFixed(1)}% | CPC $${c.cpc.toFixed(2)} | CTR ${c.ctr.toFixed(2)}% | Conv ${c.convRate.toFixed(1)}% | Orders ${c.orders} | Budget $${c.budget}/day | ${c.biddingStrategy}${c.portfolioName ? ` | Portfolio: ${c.portfolioName}` : ''}`).join('\n')}
+`;
+  }
+
+  // SB Campaign (Sponsored Brands campaign-level)
+  if (intelData.sbCampaign) {
+    const sb = intelData.sbCampaign;
+    context += `\n--- SB CAMPAIGN PERFORMANCE (${sb.totalCampaigns} campaigns) ---
+Total: Spend $${Math.round(sb.totalSpend)} | Sales $${Math.round(sb.totalSales)} | ROAS ${sb.overallROAS.toFixed(2)}
+
+ALL SB CAMPAIGNS (sorted by spend):
+${sb.campaigns.map(c => `  ${c.campaign.substring(0, 60)} | ${c.status || 'unknown'} | Spend $${Math.round(c.spend)} | Sales $${Math.round(c.sales)} | ROAS ${c.roas.toFixed(2)} | ACOS ${c.acos.toFixed(1)}% | CPC $${c.cpc.toFixed(2)} | Conv ${c.convRate.toFixed(1)}% | Orders ${c.orders} | NTB ${c.ntbRate.toFixed(0)}% | Budget $${c.budget}/day`).join('\n')}
+`;
+  }
+
+  // SP Purchased Products (cross-sell analysis)
+  if (intelData.spPurchased) {
+    const pp = intelData.spPurchased;
+    context += `\n--- PURCHASED PRODUCT ANALYSIS (${pp.totalPairs} ad→purchase pairs) ---
+Cross-sell rate: ${pp.crossSellRate.toFixed(1)}% of attributed sales come from a DIFFERENT ASIN than advertised
+Same-ASIN sales: $${Math.round(pp.totalSameSales)} | Cross-sell sales: $${Math.round(pp.totalCrossSellSales)}
+
+TOP CROSS-SELL PAIRS (advertised ASIN → purchased ASIN):
+${pp.crossSellPairs.slice(0, 15).map(p => `  ${p.advertisedAsin} → ${p.purchasedAsin} | Sales $${Math.round(p.sales)} | Orders ${p.orders}`).join('\n')}
+
+TOP SAME-ASIN PURCHASES:
+${pp.pairs.filter(p => !p.isCrossSell).slice(0, 10).map(p => `  ${p.advertisedAsin} | Sales $${Math.round(p.sales)} | Orders ${p.orders}`).join('\n')}
+`;
+  }
+
   // SP Placements
   if (intelData.spPlacement) {
     const pl = intelData.spPlacement;
@@ -902,6 +1078,9 @@ Reports: ${s.campaignCount} campaigns | ${s.skuCount || 0} SKUs | ${JSON.stringi
 const detectReportType = (headers, rows, fileName) => {
   const hSet = new Set(headers.map(h => (h || '').toLowerCase().trim()));
   const fLower = fileName.toLowerCase();
+  // Also check for partial header matches (Amazon exports have long header names like "Total Advertising Cost of Sales (ACoS)")
+  const hArr = headers.map(h => (h || '').toLowerCase().trim());
+  const hasPartial = (sub) => hArr.some(h => h.includes(sub));
 
   // Search Query Performance (Brand Analytics) — has metadata row, headers like "Search Query Volume"
   if (hSet.has('search query') || hSet.has('"search query"') || hSet.has('search query volume') || hSet.has('search query score')) return 'searchQueryPerf';
@@ -927,11 +1106,26 @@ const detectReportType = (headers, rows, fileName) => {
   // SP Targeting (has Targeting + Match Type + Top-of-search IS)
   if (hSet.has('targeting') && (hSet.has('top-of-search impression share') || hSet.has('top-of-search is') || hSet.has('match type'))) return 'spTargeting';
 
+  // SP Purchased Product Report (has both Advertised ASIN and Purchased ASIN — must check BEFORE spAdvertised)
+  if ((hSet.has('advertised asin') || hSet.has('advertised sku')) && hSet.has('purchased asin')) return 'spPurchased';
+
   // SP Advertised Products
   if (hSet.has('advertised asin') || hSet.has('advertised sku')) return 'spAdvertised';
 
   // SP Search Terms (7 Day attribution)
   if (hSet.has('customer search term') && (hSet.has('7 day total sales') || hSet.has('7 day total sales ') || hSet.has('7 day total orders (#)'))) return 'spSearchTerms';
+
+  // SB Campaign Report (campaign-level with 14-day attribution, no search term / DPV columns)
+  // Detected by: Campaign Daily Budget + 14 Day sales (no Customer Search Term — that's sbSearchTerms)
+  if (hSet.has('campaign daily budget') && (hSet.has('14 day total sales') || hSet.has('14 day total sales '))) return 'sbCampaign';
+  if (hSet.has('campaign name') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin') && (hSet.has('14 day total sales') || hSet.has('14 day total sales '))) return 'sbCampaign';
+
+  // SP Campaign Report (campaign-level with 7-day attribution, no search term / targeting / placement / ASIN columns)
+  // Amazon exports use long headers like "Total Advertising Cost of Sales (ACoS)" and "Return on Advertising Spend (RoAS)"
+  if (hSet.has('campaign daily budget') && (hSet.has('7 day total sales') || hSet.has('7 day total sales '))) return 'spCampaign';
+  if (hSet.has('campaign name') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin') && (hSet.has('7 day total sales') || hSet.has('7 day total sales '))) return 'spCampaign';
+  // Fallback: campaign-level report with long Amazon header names (e.g. "Total Advertising Cost of Sales (ACoS)")
+  if (hSet.has('campaign name') && hSet.has('spend') && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement') && !hSet.has('advertised asin') && (hasPartial('total advertising cost of sales') || hasPartial('return on advertising spend') || hSet.has('campaign daily budget'))) return 'spCampaign';
 
   // Daily Overview / Historical (has Date + Spend + ROAS columns — custom/manual overview data)
   if ((hSet.has('date') || hSet.has('Date')) && (hSet.has('spend') || hSet.has('Spend')) && (hSet.has('roas') || hSet.has('ROAS') || hSet.has('acos') || hSet.has('ACOS'))) {
@@ -941,6 +1135,9 @@ const detectReportType = (headers, rows, fileName) => {
 
   // Fallback: search term report without clear attribution window
   if (hSet.has('customer search term') || hSet.has('search term')) return 'spSearchTerms';
+
+  // Last resort: campaign-level report with Spend + Campaign Name (generic Amazon ads export)
+  if (hSet.has('campaign name') && (hSet.has('spend') || hSet.has('impressions')) && !hSet.has('customer search term') && !hSet.has('targeting') && !hSet.has('placement')) return 'spCampaign';
 
   return null;
 };
@@ -959,10 +1156,13 @@ export const buildActionReportPrompt = (intelData, storeName) => {
   
   // Count available reports
   const available = [];
+  if (intelData.spCampaign) available.push(`SP Campaigns (${intelData.spCampaign.totalCampaigns} campaigns, $${Math.round(intelData.spCampaign.totalSpend)} spend)`);
   if (intelData.spSearchTerms) available.push(`SP Search Terms (${intelData.spSearchTerms.totalTerms} terms, $${Math.round(intelData.spSearchTerms.totalSpend)} spend)`);
   if (intelData.spTargeting?.length) available.push(`SP Targeting (${intelData.spTargeting.length} targets)`);
   if (intelData.spPlacement) available.push(`SP Placements (${intelData.spPlacement.byPlacement?.length || 0} placements)`);
   if (intelData.spAdvertised?.length) available.push(`SP Advertised Products (${intelData.spAdvertised.length} ASINs)`);
+  if (intelData.spPurchased) available.push(`SP Purchased Products (${intelData.spPurchased.totalPairs} pairs, ${intelData.spPurchased.crossSellRate.toFixed(0)}% cross-sell)`);
+  if (intelData.sbCampaign) available.push(`SB Campaigns (${intelData.sbCampaign.totalCampaigns} campaigns, $${Math.round(intelData.sbCampaign.totalSpend)} spend)`);
   if (intelData.sbSearchTerms?.length) available.push(`SB Search Terms (${intelData.sbSearchTerms.length} terms)`);
   if (intelData.sdCampaign?.length) available.push(`SD Campaigns (${intelData.sdCampaign.length} campaigns)`);
   if (intelData.businessReport?.length) available.push(`Business Report (${intelData.businessReport.length} ASINs)`);
@@ -1628,10 +1828,13 @@ const AmazonAdsIntelModal = ({
           switch (type) {
             case 'dailyOverview': summary = aggregateDailyOverview(allRows); break;
             case 'historicalDaily': summary = aggregateDailyOverview(allRows); break;
+            case 'spCampaign': summary = aggregateSPCampaign(allRows); break;
             case 'spSearchTerms': summary = aggregateSPSearchTerms(allRows); break;
             case 'spAdvertised': summary = aggregateSPAdvertised(allRows); break;
+            case 'spPurchased': summary = aggregateSPPurchased(allRows); break;
             case 'spPlacement': summary = aggregateSPPlacement(allRows); break;
             case 'spTargeting': summary = aggregateSPTargeting(allRows); break;
+            case 'sbCampaign': summary = aggregateSBCampaign(allRows); break;
             case 'sbSearchTerms': summary = aggregateSBSearchTerms(allRows); break;
             case 'sdCampaign': summary = aggregateSDCampaign(allRows); break;
             case 'businessReport': summary = aggregateBusinessReport(allRows); break;
@@ -1794,10 +1997,13 @@ const AmazonAdsIntelModal = ({
                 {[
                   adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d overview`,
                   adsIntelData.historicalDaily && `${adsIntelData.historicalDaily.totalDays}d historical`,
+                  adsIntelData.spCampaign && `${adsIntelData.spCampaign.totalCampaigns} SP campaigns`,
                   adsIntelData.spSearchTerms && `${adsIntelData.spSearchTerms.totalTerms} SP terms`,
                   adsIntelData.spAdvertised?.length && `${adsIntelData.spAdvertised.length} ASINs`,
+                  adsIntelData.spPurchased && `${adsIntelData.spPurchased.totalPairs} purchased pairs`,
                   adsIntelData.spPlacement && `placements`,
                   adsIntelData.spTargeting?.length && `${adsIntelData.spTargeting.length} targets`,
+                  adsIntelData.sbCampaign && `${adsIntelData.sbCampaign.totalCampaigns} SB campaigns`,
                   adsIntelData.sbSearchTerms?.length && `${adsIntelData.sbSearchTerms.length} SB terms`,
                   adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`,
                   adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
