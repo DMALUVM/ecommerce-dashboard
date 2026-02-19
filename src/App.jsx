@@ -12325,17 +12325,31 @@ const savePeriods = async (d) => {
                       };
                     };
                     
-                    if (!updated.amazon) updated.amazon = {};
+                    // Deep-copy amazon sub-object to avoid mutating previous state
+                    updated.amazon = updated.amazon ? { ...updated.amazon } : {};
                     const rpts = adsData.reports;
-                    if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
-                    if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
-                    if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
-                    if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
-                    if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
-                    if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
+                    // Only write API data if no CSV upload exists for that report type,
+                    // OR if the existing data was also API-sourced (safe to refresh).
+                    // This preserves user-uploaded CSVs which may cover longer date ranges.
+                    const mergeReport = (key, rows, label) => {
+                      const fmt = toIntelFormat(rows, label);
+                      if (!fmt) return;
+                      const existing = updated.amazon[key];
+                      if (!existing || existing.meta?.source === 'amazon-ads-api') {
+                        updated.amazon[key] = fmt;
+                      }
+                    };
+                    mergeReport('sp_search_terms', rpts.spSearchTerms, 'SP Search Terms (API)');
+                    mergeReport('sp_advertised_product', rpts.spAdvertised, 'SP Advertised Product (API)');
+                    mergeReport('sp_placement', rpts.spPlacement, 'SP Placement (API)');
+                    mergeReport('sp_targeting', rpts.spTargeting, 'SP Targeting (API)');
+                    mergeReport('sb_search_terms', rpts.sbSearchTerms, 'SB Search Terms (API)');
+                    mergeReport('sd_campaigns', rpts.sdCampaign, 'SD Campaigns (API)');
                     // SP Campaigns: prefer per-campaign rows, fall back to daily overview
-                    if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
-                    else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                    if (!updated.amazon.sp_campaigns || updated.amazon.sp_campaigns.meta?.source === 'amazon-ads-api') {
+                      if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
+                      else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                    }
                     
                     return updated;
                   });
