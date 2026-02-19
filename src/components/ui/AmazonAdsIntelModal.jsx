@@ -2124,8 +2124,42 @@ const AmazonAdsIntelModal = ({
         }
       }
 
+      // Also store CSV uploads in the nested platform format that the Deep Analysis
+      // checklist reads: adsIntelData.amazon.<report_type> = { records, headers, meta }
+      // This ensures CSV data shows up in the checklist alongside API-sourced data.
+      const FLAT_TO_NESTED = {
+        spCampaign:    { platform: 'amazon', key: 'sp_campaign',          label: 'SP Campaign Report',    getRecords: (d) => d?.campaigns },
+        spSearchTerms: { platform: 'amazon', key: 'sp_search_terms',     label: 'SP Search Terms',       getRecords: (d) => d?.terms },
+        spAdvertised:  { platform: 'amazon', key: 'sp_advertised_product', label: 'SP Advertised Product', getRecords: (d) => d },
+        spPurchased:   { platform: 'amazon', key: 'sp_purchased_product', label: 'SP Purchased Product',  getRecords: (d) => d?.pairs },
+        spPlacement:   { platform: 'amazon', key: 'sp_placement',        label: 'SP Placement',          getRecords: (d) => d?.byPlacement },
+        spTargeting:   { platform: 'amazon', key: 'sp_targeting',        label: 'SP Targeting',          getRecords: (d) => d },
+        sbCampaign:    { platform: 'amazon', key: 'sb_campaign',         label: 'SB Campaign Report',    getRecords: (d) => d?.campaigns },
+        sbSearchTerms: { platform: 'amazon', key: 'sb_search_terms',     label: 'SB Search Terms',       getRecords: (d) => d },
+        sdCampaign:    { platform: 'amazon', key: 'sd_campaigns',        label: 'SD Campaigns',          getRecords: (d) => d },
+        businessReport:{ platform: 'amazon', key: 'business_report_child', label: 'Business Report',     getRecords: (d) => d },
+        searchQueryPerf:{ platform: 'amazon', key: 'search_query_performance', label: 'Search Query Performance', getRecords: (d) => d },
+        skuEconomics:  { platform: 'amazon', key: 'sku_economics',       label: 'SKU Economics',         getRecords: (d) => d },
+      };
+      for (const [flatKey, mapping] of Object.entries(FLAT_TO_NESTED)) {
+        const data = newIntel[flatKey];
+        if (!data) continue;
+        const records = mapping.getRecords(data);
+        if (!records || (Array.isArray(records) && records.length === 0)) continue;
+        if (!newIntel[mapping.platform]) newIntel[mapping.platform] = {};
+        // Only write CSV data if no existing data or existing was also CSV-sourced
+        const existing = newIntel[mapping.platform][mapping.key];
+        if (!existing || existing.meta?.source !== 'amazon-ads-api') {
+          newIntel[mapping.platform][mapping.key] = {
+            records: Array.isArray(records) ? records : [records],
+            headers: Object.keys((Array.isArray(records) ? records[0] : records) || {}),
+            meta: { label: mapping.label, uploadedAt: new Date().toISOString(), source: 'csv-upload', rowCount: Array.isArray(records) ? records.length : 1 },
+          };
+        }
+      }
+
       setAdsIntelData(newIntel);
-      
+
       // If daily overview or historical files were processed, also write to allDaysData
       let trackingUpdated = false;
       let currentDays = allDaysData || {};
