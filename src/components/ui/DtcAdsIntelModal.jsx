@@ -1720,7 +1720,7 @@ const DtcAdsIntelModal = ({
       const prompts = buildDtcActionReportPrompt(dtcIntelData, storeName);
       if (!prompts) throw new Error('No data available');
       // DTC reports need high token limit for full campaign audit (no truncation)
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, 32000);
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, 32000, 0);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {

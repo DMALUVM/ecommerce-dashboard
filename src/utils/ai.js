@@ -36,7 +36,7 @@ const AI_CONFIG = {
 // Can be called as:
 //   callAI(prompt, systemPrompt) - for simple prompts
 //   callAI({ messages: [...], system: '...' }) - for chat with history or complex content
-const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, maxTokensOverride = null) => {
+const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, maxTokensOverride = null, temperatureOverride = null) => {
   // Model priority: explicit override > window global (report selector) > AI_CONFIG default
   // Guard: ensure model is always a string (window.__aiModelOverride could theoretically be corrupted)
   const rawModel = modelOverride || (typeof window !== 'undefined' && typeof window.__aiModelOverride === 'string' && window.__aiModelOverride) || AI_CONFIG.model;
@@ -57,6 +57,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
       messages: [{ role: 'user', content: promptOrOptions }],
       model: selectedModel,
       max_tokens: tokenLimit,
+      ...(temperatureOverride != null && { temperature: temperatureOverride }),
     };
   } else {
     // Options object with messages array (supports complex content like PDFs)
@@ -65,6 +66,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
       messages: sanitizeMessages(promptOrOptions.messages),
       model: selectedModel,
       max_tokens: tokenLimit,
+      ...(temperatureOverride != null && { temperature: temperatureOverride }),
     };
   }
 

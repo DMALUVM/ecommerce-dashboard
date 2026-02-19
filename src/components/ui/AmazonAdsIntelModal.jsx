@@ -1479,9 +1479,97 @@ ${isolationCandidates.map(t => `  "${t.term}" | ${t.orders} orders | ROAS ${t.ro
     }
   }
 
+  // ===== PRE-COMPUTE DETERMINISTIC ACCOUNT HEALTH GRADE =====
+  // This ensures the grade is identical across runs regardless of AI temperature/randomness
+  let healthScore = 0;
+  let healthFactors = [];
+  {
+    // Pull authoritative totals (same logic as AUTHORITATIVE ACCOUNT TOTALS above)
+    const apiCampaigns = intelData.campaignSummary || [];
+    let apiSpS = 0, apiSpR = 0, apiSbS = 0, apiSbR = 0, apiSdS = 0, apiSdR = 0;
+    apiCampaigns.forEach(c => {
+      const t = (c.type || '').toUpperCase();
+      if (t === 'SP') { apiSpS += c.spend || 0; apiSpR += c.revenue || 0; }
+      else if (t === 'SB') { apiSbS += c.spend || 0; apiSbR += c.revenue || 0; }
+      else if (t === 'SD') { apiSdS += c.spend || 0; apiSdR += c.revenue || 0; }
+    });
+    const spS = (intelData.spCampaign?.totalSpend > 0 && intelData.spCampaign.totalSpend) || (apiSpS > 0 && apiSpS) || (intelData.spSearchTerms?.totalSpend > 0 && intelData.spSearchTerms.totalSpend) || 0;
+    const spR = (intelData.spCampaign?.totalSales > 0 && intelData.spCampaign.totalSales) || (apiSpR > 0 && apiSpR) || (intelData.spSearchTerms?.totalSales > 0 && intelData.spSearchTerms.totalSales) || 0;
+    const sbS = (intelData.sbCampaign?.totalSpend > 0 && intelData.sbCampaign.totalSpend) || (apiSbS > 0 && apiSbS) || 0;
+    const sbR = (intelData.sbCampaign?.totalSales > 0 && intelData.sbCampaign.totalSales) || (apiSbR > 0 && apiSbR) || 0;
+    const sdS = (intelData.sdCampaign || []).reduce((s, c) => s + (c.spend || 0), 0) || (apiSdS > 0 && apiSdS) || 0;
+    const sdR = (intelData.sdCampaign || []).reduce((s, c) => s + (c.sales || 0), 0) || (apiSdR > 0 && apiSdR) || 0;
+    const tSpend = spS + sbS + sdS;
+    const tSales = spR + sbR + sdR;
+    const blendedACOS = tSales > 0 ? (tSpend / tSales * 100) : 100;
+    const blendedROAS = tSpend > 0 ? (tSales / tSpend) : 0;
+
+    // 1. ACOS efficiency (0-30 points)
+    if (blendedACOS <= 20) { healthScore += 30; healthFactors.push('Excellent ACOS (' + blendedACOS.toFixed(1) + '%)'); }
+    else if (blendedACOS <= 25) { healthScore += 25; healthFactors.push('Good ACOS (' + blendedACOS.toFixed(1) + '%)'); }
+    else if (blendedACOS <= 30) { healthScore += 20; healthFactors.push('Acceptable ACOS (' + blendedACOS.toFixed(1) + '%)'); }
+    else if (blendedACOS <= 40) { healthScore += 14; healthFactors.push('High ACOS (' + blendedACOS.toFixed(1) + '%) — above 30% target'); }
+    else if (blendedACOS <= 50) { healthScore += 8; healthFactors.push('Very high ACOS (' + blendedACOS.toFixed(1) + '%) — needs urgent attention'); }
+    else { healthScore += 3; healthFactors.push('Critical ACOS (' + blendedACOS.toFixed(1) + '%) — account is unprofitable'); }
+
+    // 2. ROAS (0-20 points)
+    if (blendedROAS >= 5.0) { healthScore += 20; healthFactors.push('Excellent ROAS (' + blendedROAS.toFixed(2) + 'x)'); }
+    else if (blendedROAS >= 4.0) { healthScore += 17; healthFactors.push('Strong ROAS (' + blendedROAS.toFixed(2) + 'x)'); }
+    else if (blendedROAS >= 3.0) { healthScore += 14; healthFactors.push('Adequate ROAS (' + blendedROAS.toFixed(2) + 'x)'); }
+    else if (blendedROAS >= 2.0) { healthScore += 9; healthFactors.push('Below-target ROAS (' + blendedROAS.toFixed(2) + 'x)'); }
+    else if (blendedROAS >= 1.0) { healthScore += 4; healthFactors.push('Marginal ROAS (' + blendedROAS.toFixed(2) + 'x) — barely profitable'); }
+    else { healthScore += 0; healthFactors.push('Negative ROAS (' + blendedROAS.toFixed(2) + 'x) — losing money'); }
+
+    // 3. Waste control (0-20 points) — % of spend with $0 sales
+    const wasteSpend = (intelData.spSearchTerms?.wasteful || []).reduce((s, t) => s + (t.spend || 0), 0);
+    const wastePct = tSpend > 0 ? (wasteSpend / tSpend * 100) : 0;
+    if (wastePct < 5) { healthScore += 20; healthFactors.push('Low waste (' + wastePct.toFixed(1) + '% zero-sale spend)'); }
+    else if (wastePct < 10) { healthScore += 16; healthFactors.push('Moderate waste (' + wastePct.toFixed(1) + '% zero-sale spend)'); }
+    else if (wastePct < 20) { healthScore += 10; healthFactors.push('High waste (' + wastePct.toFixed(1) + '% zero-sale spend)'); }
+    else if (wastePct < 30) { healthScore += 5; healthFactors.push('Very high waste (' + wastePct.toFixed(1) + '% zero-sale spend)'); }
+    else { healthScore += 0; healthFactors.push('Excessive waste (' + wastePct.toFixed(1) + '% zero-sale spend)'); }
+
+    // 4. Campaign profitability (0-15 points) — % of campaigns with ROAS > 1.0
+    const allCampaigns = intelData.spCampaign?.campaigns || [];
+    const sbCampaigns = intelData.sbCampaign?.campaigns || [];
+    const sdCampaigns = intelData.sdCampaign || [];
+    const allCamps = [...allCampaigns, ...sbCampaigns, ...sdCampaigns].filter(c => (c.spend || 0) > 5);
+    const profitablePct = allCamps.length > 0 ? (allCamps.filter(c => c.spend > 0 && (c.sales || c.revenue || 0) / c.spend > 1.0).length / allCamps.length * 100) : 50;
+    if (profitablePct >= 80) { healthScore += 15; healthFactors.push(Math.round(profitablePct) + '% of campaigns profitable'); }
+    else if (profitablePct >= 60) { healthScore += 11; healthFactors.push(Math.round(profitablePct) + '% of campaigns profitable'); }
+    else if (profitablePct >= 40) { healthScore += 7; healthFactors.push('Only ' + Math.round(profitablePct) + '% of campaigns profitable'); }
+    else { healthScore += 3; healthFactors.push('Only ' + Math.round(profitablePct) + '% of campaigns profitable — most losing money'); }
+
+    // 5. Ad type health (0-15 points) — SB/SD contribution
+    const sbROAS = sbS > 0 ? sbR / sbS : -1; // -1 = no SB data
+    const sdROAS = sdS > 0 ? sdR / sdS : -1;
+    if (sbROAS > 1.5 && sdROAS > 1.5) { healthScore += 15; healthFactors.push('SB + SD both profitable'); }
+    else if (sbROAS > 1.5 || sdROAS > 1.5) { healthScore += 12; healthFactors.push('Mixed SB/SD results — one profitable, one not'); }
+    else if (sbROAS === -1 && sdROAS === -1) { healthScore += 8; healthFactors.push('Only SP campaigns running — diversification opportunity'); }
+    else if (sbROAS > 0 || sdROAS > 0) { healthScore += 5; healthFactors.push('SB/SD present but underperforming'); }
+    else { healthScore += 2; healthFactors.push('SB/SD campaigns wasting budget with near-zero returns'); }
+  }
+
+  // Convert score to letter grade
+  const gradeMap = [
+    [93, 'A'], [90, 'A-'], [87, 'B+'], [83, 'B'], [80, 'B-'],
+    [77, 'C+'], [73, 'C'], [70, 'C-'], [67, 'D+'], [63, 'D'], [60, 'D-'], [0, 'F']
+  ];
+  const healthGrade = gradeMap.find(([min]) => healthScore >= min)?.[1] || 'F';
+  const healthGradeLine = `${healthGrade} (${healthScore}/100)`;
+
+  advancedContext += `
+=== PRE-COMPUTED ACCOUNT HEALTH GRADE (USE EXACTLY AS SHOWN) ===
+Account Health Grade: ${healthGradeLine}
+Scoring breakdown:
+${healthFactors.map(f => '  - ' + f).join('\n')}
+
+⚠️ You MUST use this exact grade "${healthGradeLine}" in the Executive Summary. Do not compute a different grade.
+`;
+
   // Build the full data context
   const dataContext = buildAdsIntelContext(intelData);
-  
+
   const systemPrompt = `You are a senior Amazon PPC strategist who has managed $100M+ in Amazon ad spend across 500+ brands. You specialize in scaling consumer brands on Amazon and have deep expertise across Sponsored Products, Sponsored Brands, Sponsored Display, and Amazon DSP.
 
 === ANALYSIS PRINCIPLES (MANDATORY) ===
@@ -1611,7 +1699,7 @@ You are not an advisor — you are the operator. Write as if you are the person 
 
   let sections = `
 ## 📊 EXECUTIVE SUMMARY & ACCOUNT HEALTH
-- Account health grade (A-F) with specific justification tied to data
+- Account Health Grade: USE THE EXACT PRE-COMPUTED GRADE from the data context ("${healthGradeLine}"). Do NOT compute a different grade.
 - Total spend, revenue, ROAS, ACOS across SP/SB/SD (pull exact numbers from data — do not round excessively)
 - Blended ACOS vs target (25%). Quantify the gap: "ACOS is X%, which is Y points above target — costing ~$Z/month in excess spend"
 - Funnel analysis: Impressions → Clicks (CTR) → Orders (Conv Rate) → Revenue. Which stage has the biggest drop-off?
@@ -2214,6 +2302,50 @@ const AmazonAdsIntelModal = ({
     }
   };
 
+  // Extract key strategic decisions from Part 1 output so Part 2 stays consistent
+  const extractPart1Decisions = (part1Text) => {
+    if (!part1Text) return '';
+    const decisions = [];
+
+    // Extract campaigns to pause (from Kill List, SB assessment, Top 5 actions, etc.)
+    const pauseMatches = part1Text.match(/PAUSE[D]?\s+(IMMEDIATELY|NOW)?[:\s]*[^\n]*?(?:campaign|SB[A-Z]*|SBV|SBPC)[^\n]*/gi) || [];
+    pauseMatches.forEach(m => {
+      const cleaned = m.replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (cleaned.length > 10) decisions.push('PAUSE: ' + cleaned);
+    });
+
+    // Extract campaigns to scale (from Scale List)
+    const scaleMatches = part1Text.match(/SCALE\s+(UP|AGGRESSIVELY)?[:\s]*[^\n]*?campaign[^\n]*/gi) || [];
+    scaleMatches.forEach(m => {
+      const cleaned = m.replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (cleaned.length > 10) decisions.push('SCALE: ' + cleaned);
+    });
+
+    // Extract budget changes
+    const budgetMatches = part1Text.match(/(?:budget|Budget)[^\n]*?\$\d+[^\n]*?→[^\n]*?\$\d+[^\n]*/g) || [];
+    budgetMatches.slice(0, 10).forEach(m => decisions.push('BUDGET: ' + m.trim().slice(0, 200)));
+
+    // Extract Top 5 Actions section verbatim (most important for consistency)
+    const top5Match = part1Text.match(/## ⚡ TOP 5 ACTIONS[^\n]*\n([\s\S]*?)(?=## |$)/);
+    if (top5Match) {
+      decisions.push('TOP 5 ACTIONS FROM PART 1:\n' + top5Match[1].trim().slice(0, 2000));
+    }
+
+    // Extract negative keyword additions
+    const negMatches = part1Text.match(/Adding these \d+ negatives saves[^\n]*/gi) || [];
+    negMatches.forEach(m => decisions.push('NEGATIVES: ' + m.trim()));
+
+    // Extract the account grade
+    const gradeMatch = part1Text.match(/Account Health Grade:\s*([^\n]+)/);
+    if (gradeMatch) decisions.push('GRADE: ' + gradeMatch[1].trim());
+
+    // Extract the verdict
+    const verdictMatch = part1Text.match(/Verdict:\s*([^\n]+)/i);
+    if (verdictMatch) decisions.push('VERDICT: ' + verdictMatch[1].trim());
+
+    return decisions.length > 0 ? decisions.join('\n') : '';
+  };
+
   const generateActionReport = async () => {
     if (!callAI || !adsIntelData?.lastUpdated) return;
     setGeneratingReport(true);
@@ -2226,11 +2358,17 @@ const AmazonAdsIntelModal = ({
       if (!prompts) throw new Error('No data available for report');
 
       // Two-part generation: strategy report + campaign audit (avoids timeout/truncation)
+      // Temperature 0 ensures deterministic, consistent output across runs
       setReportProgress('Part 1/2: Generating strategic analysis...');
-      const part1 = await callAI(prompts.userPromptPart1, prompts.systemPrompt, selectedModel, 32000);
+      const part1 = await callAI(prompts.userPromptPart1, prompts.systemPrompt, selectedModel, 32000, 0);
+
+      // Extract key decisions from Part 1 to pass as context to Part 2 for consistency
+      // This prevents Part 2 from contradicting Part 1's recommendations
+      const part1DecisionsSummary = extractPart1Decisions(part1);
 
       setReportProgress('Part 2/2: Generating campaign-by-campaign audit...');
-      const part2 = await callAI(prompts.userPromptPart2, prompts.systemPrompt, selectedModel, 32000);
+      const part2Prompt = prompts.userPromptPart2 + (part1DecisionsSummary ? `\n\n=== PART 1 STRATEGIC DECISIONS (your campaign audit MUST be consistent with these) ===\n${part1DecisionsSummary}\n\n⚠️ CONSISTENCY RULE: If Part 1 said to PAUSE a campaign, your audit for that campaign MUST also say PAUSE. If Part 1 said to SCALE a campaign, your audit MUST agree. Do NOT contradict the strategic analysis. The campaign-level detail should SUPPORT and ELABORATE on Part 1's decisions, not reverse them.` : '');
+      const part2 = await callAI(part2Prompt, prompts.systemPrompt, selectedModel, 32000, 0);
 
       const fullReport = part1 + '\n\n' + part2;
       setActionReport(fullReport);

@@ -19,9 +19,10 @@ const PROVIDERS = {
       'x-api-key': key,
       'anthropic-version': '2023-06-01',
     }),
-    buildBody: ({ model, messages, system, max_tokens }) => ({
+    buildBody: ({ model, messages, system, max_tokens, temperature }) => ({
       model, max_tokens, messages, stream: true,
       ...(system && { system }),
+      ...(temperature != null && { temperature }),
     }),
   },
   openai: {
@@ -31,10 +32,11 @@ const PROVIDERS = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`,
     }),
-    buildBody: ({ model, messages, system, max_tokens }) => ({
+    buildBody: ({ model, messages, system, max_tokens, temperature }) => ({
       model,
       max_completion_tokens: max_tokens,
       stream: true,
+      ...(temperature != null && { temperature }),
       messages: [
         ...(system ? [{ role: 'system', content: system }] : []),
         ...messages,
@@ -149,7 +151,7 @@ export default async function handler(req, res) {
       return res.status(413).json({ error: `Request too large (${Math.round(rawBody.length / 1024)}KB). Max ${Math.round(MAX_PAYLOAD_BYTES / 1024)}KB.` });
     }
 
-    const { system, messages, model = 'claude-sonnet-4-6', max_tokens = 4000 } = req.body || {};
+    const { system, messages, model = 'claude-sonnet-4-6', max_tokens = 4000, temperature } = req.body || {};
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages array required and must not be empty' });
@@ -192,6 +194,7 @@ export default async function handler(req, res) {
         messages,
         system,
         max_tokens: safeMaxTokens,
+        temperature: temperature != null ? Math.min(Math.max(0, Number(temperature)), 1) : undefined,
       })),
     });
 
