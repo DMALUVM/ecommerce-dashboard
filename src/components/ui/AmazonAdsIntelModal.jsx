@@ -1293,7 +1293,28 @@ Evaluate the current structure against best practices:
 - Count of campaigns with <$5/day spend — these lack data velocity. Recommend consolidation.
 - Naming convention audit: can you tell strategy/product/match from the name? Suggest renames.
 - Budget distribution: what % of budget goes to top 3 campaigns vs long tail? Is there concentration risk?
-Provide a specific restructuring plan with campaign names, what to move where, and estimated timeline.
+
+### RESTRUCTURING PLAN — MUST BE SPECIFIC, NOT GENERIC
+Do NOT give template campaign names like "[SP] SKU-Auto-Discovery". Instead, provide a CONCRETE migration plan using REAL campaign names and keywords from the data.
+
+For EACH proposed campaign in the new structure, specify ALL of the following:
+| New Campaign Name | Ad Type | Match Type | Strategy | SKU/ASIN | Keywords or Targets (list 5-15 actual terms from the data) | Starting Daily Budget | Starting Default Bid (show formula) |
+
+For EACH existing campaign, specify what happens to it:
+| Current Campaign Name | Current Spend | Action: KEEP / MERGE INTO [name] / RENAME TO [name] / PAUSE / RESTRUCTURE | Migration Steps |
+
+Migration Steps must be copy-pasteable instructions, e.g.:
+1. "Create new campaign 'SP-LipBalm-B0CLHVCPL5-Exact-TopTerms' with keywords: 'tallow lip balm' ($1.05 bid), 'beef tallow lip balm' ($0.92 bid), 'natural lip balm' ($0.78 bid)... Daily budget: $80"
+2. "Move keywords X, Y, Z from campaign 'SP body balm 2oz...' into the new campaign"
+3. "Add negative exact for moved keywords in the source campaign"
+4. "Pause source campaign after 7 days once new campaign has data"
+
+Include a phased timeline:
+- **Week 1**: Which campaigns to create/pause/merge (list each one)
+- **Week 2**: Which optimizations to make based on Week 1 data
+- **Week 3-4**: Scaling decisions and remaining consolidation
+
+BOTTOM LINE: "Restructuring from X campaigns to Y campaigns improves data velocity, reduces cannibalization, and is projected to improve blended ACOS by ~Z points based on [specific reasoning]."
 
 ## 📈 BUDGET REALLOCATION
 | From (Campaign) | Current $/day | ROAS | To (Campaign) | Current $/day | ROAS | Shift $/day | Expected Impact |
@@ -1310,15 +1331,34 @@ Ranked by estimated dollar impact (largest first). For each:
 5. **Time**: Minutes to implement
 6. **Confidence**: HIGH/MEDIUM/LOW based on data volume
 
-## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT (TOP 10 BY SPEND)
-For EACH campaign (sorted by spend, highest first):
-| Campaign | Type | Status | Spend | Sales | ROAS | ACOS | CPC | Conv Rate | Budget | Verdict |
-Then for each campaign, provide 2-3 SPECIFIC actions:
-- Keywords to negate (list them)
-- Keywords to increase/decrease bids on (with exact amounts and formula)
-- Budget verdict: increase to $X/day, maintain, or decrease to $X/day
-- Structural changes needed (split by match type, separate products, etc.)
-Cross-reference with placement data: does this campaign perform better on TOS or product pages?
+## 🎯 CAMPAIGN-BY-CAMPAIGN AUDIT — EVERY CAMPAIGN, NO EXCEPTIONS
+⚠️ CRITICAL: You MUST audit EVERY campaign in the data, not just the top 10. Do not stop early. Do not summarize remaining campaigns as "similar pattern." Each campaign gets its own entry.
+
+Sort by spend (highest first). For EACH campaign, provide this table row:
+| Campaign | Type (SP/SB/SD) | Status | Spend | Sales | ROAS | ACOS | CPC | Conv Rate | Impressions | Clicks | Orders | Budget/day | Verdict |
+
+Then for EACH campaign (not just the top ones), provide ALL of the following:
+
+**Performance Assessment:**
+- Is this campaign above or below the account average ROAS? By how much?
+- Is ACOS within the appropriate target range for its funnel stage (brand defense/high-intent/discovery/conquest)?
+- Revenue trend if data allows: growing, flat, or declining?
+
+**Specific Actions (minimum 3 per campaign):**
+1. **Keywords to negate** — list each one with spend wasted and the negative match type (exact/phrase). If no negatives needed, explain why.
+2. **Keywords to increase bids on** — list each one with current CPC, target bid (show formula: Target ACOS × AOV × Conv Rate), and expected incremental revenue
+3. **Keywords to decrease bids on** — list each one with current CPC, target bid, and expected savings
+4. **Budget verdict** — "Increase to $X/day" or "Decrease to $X/day" or "Maintain at $X/day" with reasoning (is it budget-capped? underperforming?)
+5. **Structural recommendation** — Keep as-is, merge into [specific campaign], split by [match type/product], or pause entirely
+
+**Cross-References:**
+- If placement data exists: TOS vs Product Page vs Rest of Search ROAS for this campaign
+- If search term data exists: top 3 converting and top 3 wasting search terms for this campaign
+- If SQP data exists: impression share for this campaign's primary keywords
+
+For campaigns with <$5 total spend: group into a "Low-Data Campaigns" section but still list each one with a verdict (maintain for data collection / pause / merge into X).
+
+DO NOT TRUNCATE THIS SECTION. Complete every campaign before moving to the next section.
 
 ## 📋 IMPLEMENTATION CHECKLIST
 Organized by time investment:
@@ -1348,6 +1388,10 @@ ${dataContext}
 ${advancedContext}
 
 === GENERATE ALL SECTIONS — SKIP NONE ===
+=== COMPLETENESS RULES ===
+1. The CAMPAIGN-BY-CAMPAIGN AUDIT must cover EVERY campaign in the data. Do not stop at 3 or 10 — finish them all.
+2. The CAMPAIGN STRUCTURE RECOMMENDATIONS must include REAL campaign names, REAL keywords from the data, and REAL bid amounts calculated with the formula. No template placeholders.
+3. If you are running low on output space, prioritize completing the campaign audit and structure sections over the implementation checklist — the checklist can be brief if needed, but the audit and structure MUST be complete.
 ${sections}`;
 
   return { systemPrompt, userPrompt };
@@ -1649,7 +1693,8 @@ const AmazonAdsIntelModal = ({
       const prompts = buildActionReportPrompt(adsIntelData, storeName);
       if (!prompts) throw new Error('No data available for report');
       
-      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel);
+      // Action reports need much higher token limit for full campaign-by-campaign audit
+      const response = await callAI(prompts.userPrompt, prompts.systemPrompt, selectedModel, 16000);
       setActionReport(response);
       // Save to report history
       if (saveReportToHistory) {
