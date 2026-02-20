@@ -670,23 +670,36 @@ const aggregateSDCampaign = (rows) => {
 };
 
 const aggregateBusinessReport = (rows) => {
+  // Helper: find a column by checking multiple possible header names (Amazon varies these)
+  const col = (r, ...names) => {
+    for (const n of names) { if (r[n] !== undefined && r[n] !== null && r[n] !== '') return r[n]; }
+    // Fuzzy: case-insensitive partial match
+    const keys = Object.keys(r);
+    for (const n of names) {
+      const lower = n.toLowerCase();
+      const match = keys.find(k => k.toLowerCase() === lower || k.toLowerCase().includes(lower));
+      if (match && r[match] !== undefined && r[match] !== null && r[match] !== '') return r[match];
+    }
+    return '';
+  };
   return rows.map(r => {
-    const asin = r['(Parent) ASIN'] || r['(Child) ASIN'] || '';
-    const childAsin = r['(Child) ASIN'] || '';
-    const title = r['Title'] || '';
-    const sessions = num(r['Sessions - Total']);
-    const pageViews = num(r['Page Views - Total']);
-    const units = num(r['Units Ordered']);
-    const sales = num(r['Ordered Product Sales']);
-    const buyBox = num(r['Featured Offer (Buy Box) Percentage']);
-    const refunds = num(r['Units Refunded']);
-    const convRate = num(r['Unit Session Percentage']);
+    const asin = col(r, '(Parent) ASIN', 'Parent ASIN', 'ASIN (Parent)', 'ASIN');
+    const childAsin = col(r, '(Child) ASIN', 'Child ASIN', 'ASIN (Child)');
+    const title = col(r, 'Title', 'Product Title', 'Product Name');
+    const sessions = num(col(r, 'Sessions - Total', 'Sessions', 'Sessions - Mobile App'));
+    const pageViews = num(col(r, 'Page Views - Total', 'Page Views'));
+    const units = num(col(r, 'Units Ordered', 'Units Ordered - Total'));
+    const sales = num(col(r, 'Ordered Product Sales', 'Ordered Product Sales - Total'));
+    const buyBox = num(col(r, 'Featured Offer (Buy Box) Percentage', 'Buy Box Percentage'));
+    const refunds = num(col(r, 'Units Refunded'));
+    const convRate = num(col(r, 'Unit Session Percentage', 'Unit Session Percentage - Total'));
     return {
       asin, childAsin, title: title.substring(0, 80),
       sessions, pageViews, units, sales, buyBox, refunds, convRate,
       refundRate: units > 0 ? (refunds / units) * 100 : 0,
     };
-  }).filter(r => r.sessions > 0 || r.units > 0).sort((a, b) => b.sales - a.sales);
+  // Keep rows that have an ASIN AND (have a title OR have any traffic/sales) — preserve titles for product catalog even with 0 sessions
+  }).filter(r => r.asin && (r.title || r.sessions > 0 || r.units > 0)).sort((a, b) => b.sales - a.sales);
 };
 
 const aggregateSearchQueryPerf = (rows) => {
@@ -729,29 +742,41 @@ const aggregateSearchQueryPerf = (rows) => {
 };
 
 const aggregateSkuEconomics = (rows) => {
+  // Helper: find a column by checking multiple possible header names
+  const col = (r, ...names) => {
+    for (const n of names) { if (r[n] !== undefined && r[n] !== null && r[n] !== '') return r[n]; }
+    const keys = Object.keys(r);
+    for (const n of names) {
+      const lower = n.toLowerCase();
+      const match = keys.find(k => k.toLowerCase() === lower);
+      if (match && r[match] !== undefined && r[match] !== null && r[match] !== '') return r[match];
+    }
+    return '';
+  };
   return rows.map(r => {
-    const asin = r['ASIN'] || r['Parent ASIN'] || '';
-    const msku = r['MSKU'] || '';
-    const fnsku = r['FNSKU'] || '';
+    const asin = col(r, 'ASIN', 'Parent ASIN', '(Child) ASIN');
+    const msku = col(r, 'MSKU');
+    const fnsku = col(r, 'FNSKU');
     return {
       asin,
-      parentAsin: r['Parent ASIN'] || '',
+      parentAsin: col(r, 'Parent ASIN'),
       msku,
       fnsku,
-      avgPrice: num(r['Average sales price']),
-      unitsSold: num(r['Units sold']),
-      unitsReturned: num(r['Units returned']),
-      netUnits: num(r['Net units sold']),
-      sales: num(r['Sales']),
-      netSales: num(r['Net sales']),
-      fbaFees: num(r['FBA fees'] || r['FBA Fulfillment Fee per unit'] || r['FBA fulfillment fees']),
-      referralFee: num(r['Referral fee'] || r['Referral fees'] || r['Referral Fee']),
-      adSpend: num(r['Advertising spend'] || r['Ad Spend'] || r['Advertising Spend']),
-      cogsPerUnit: num(r['Cost of goods per unit'] || r['Cost of Goods per unit'] || r['COGS per unit']),
-      contributionProfit: num(r['Contribution profit'] || r['Contribution Profit']),
-      contributionMargin: num(r['Contribution margin'] || r['Contribution Margin']),
+      avgPrice: num(col(r, 'Average sales price', 'Average Sales Price', 'Avg Price')),
+      unitsSold: num(col(r, 'Units sold', 'Units Sold')),
+      unitsReturned: num(col(r, 'Units returned', 'Units Returned')),
+      netUnits: num(col(r, 'Net units sold', 'Net Units Sold')),
+      sales: num(col(r, 'Sales', 'Ordered Product Sales')),
+      netSales: num(col(r, 'Net sales', 'Net Sales')),
+      fbaFees: num(col(r, 'FBA fees', 'FBA Fulfillment Fee per unit', 'FBA fulfillment fees')),
+      referralFee: num(col(r, 'Referral fee', 'Referral fees', 'Referral Fee')),
+      adSpend: num(col(r, 'Advertising spend', 'Ad Spend', 'Advertising Spend')),
+      cogsPerUnit: num(col(r, 'Cost of goods per unit', 'Cost of Goods per unit', 'COGS per unit')),
+      contributionProfit: num(col(r, 'Contribution profit', 'Contribution Profit')),
+      contributionMargin: num(col(r, 'Contribution margin', 'Contribution Margin')),
     };
-  }).filter(r => r.asin && (r.unitsSold > 0 || r.sales > 0)).sort((a, b) => b.sales - a.sales);
+  // Keep all rows with an ASIN — even 0-sales products have useful catalog data (price, margin, SKU mapping)
+  }).filter(r => r.asin).sort((a, b) => b.sales - a.sales);
 };
 
 // ============ BUILD AI CONTEXT ============
@@ -828,14 +853,21 @@ export const buildAdsIntelContext = (intelData) => {
         catalog[r.childAsin] = { title: r.title, source: 'Business Report (child)', sessions: r.sessions, sales: r.sales, convRate: r.convRate };
       }
     });
-    // SKU Economics — has pricing and margin data
+    // SKU Economics — has pricing and margin data; also use MSKU as fallback title if no Business Report
     (intelData.skuEconomics || []).forEach(r => {
       if (r.asin) {
         if (!catalog[r.asin]) catalog[r.asin] = {};
         catalog[r.asin].msku = r.msku;
         catalog[r.asin].avgPrice = r.avgPrice;
         catalog[r.asin].margin = r.contributionMargin;
+        if (!catalog[r.asin].title && r.msku) catalog[r.asin].title = r.msku;
         if (!catalog[r.asin].source) catalog[r.asin].source = 'SKU Economics';
+      }
+      // Also index by parentAsin if different
+      if (r.parentAsin && r.parentAsin !== r.asin) {
+        if (!catalog[r.parentAsin]) catalog[r.parentAsin] = {};
+        if (!catalog[r.parentAsin].title && r.msku) catalog[r.parentAsin].title = r.msku;
+        if (!catalog[r.parentAsin].source) catalog[r.parentAsin].source = 'SKU Economics (parent)';
       }
     });
     // SP Advertised — has SKU and ad spend data
