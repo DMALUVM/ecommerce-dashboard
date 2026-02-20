@@ -2636,12 +2636,33 @@ table.wide-table td { font-size: 6.5pt; padding: 4px 4px; }
                     ? `${adsIntelData._apiSdCampaign.length} SD campaigns (API)`
                     : adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`),
                   // Non-overlapping data sources (no API equivalent)
-                  adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
+                  adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs (${adsIntelData.businessReport.filter(r => r.title).length} with titles)`,
                   adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
-                  adsIntelData.skuEconomics?.length && `${adsIntelData.skuEconomics.length} SKU econ`,
+                  adsIntelData.skuEconomics?.length && `${adsIntelData.skuEconomics.length} SKU econ (${adsIntelData.skuEconomics.filter(r => r.contributionMargin).length} with margins)`,
                   adsIntelData.skuAdPerformance?.length && `${adsIntelData.skuAdPerformance.length} SKU ad perf (API)`,
                 ].filter(Boolean).join(' · ')}
               </p>
+              {/* Catalog health check: warn about ASINs missing titles */}
+              {(() => {
+                const brCount = adsIntelData.businessReport?.length || 0;
+                const brTitled = adsIntelData.businessReport?.filter(r => r.title).length || 0;
+                const skuCount = adsIntelData.skuEconomics?.length || 0;
+                // Count campaign ASINs not covered by business report
+                const brAsins = new Set((adsIntelData.businessReport || []).map(r => r.asin).filter(Boolean));
+                (adsIntelData.businessReport || []).forEach(r => { if (r.childAsin) brAsins.add(r.childAsin); });
+                (adsIntelData.skuEconomics || []).forEach(r => { if (r.asin) brAsins.add(r.asin); });
+                const allCamps = [...(adsIntelData.spCampaign?.campaigns || []), ...(adsIntelData.sbCampaign?.campaigns || []), ...(adsIntelData.sdCampaign || [])];
+                const campAsins = new Set();
+                allCamps.forEach(c => { const m = (c.campaign || c.name || '').match(/B0[A-Z0-9]{8,10}/g); if (m) m.forEach(a => campAsins.add(a)); });
+                const missing = [...campAsins].filter(a => !brAsins.has(a));
+                if (missing.length > 0 && brCount > 0) return (
+                  <p className="text-amber-400 text-xs mt-1">⚠ {missing.length} ASIN{missing.length !== 1 ? 's' : ''} found in campaign names but not in your Business Report or SKU Economics — these will show as "Unknown product"</p>
+                );
+                if (brCount > 0 && brTitled === 0) return (
+                  <p className="text-amber-400 text-xs mt-1">⚠ Business Report loaded but 0 products have titles — check that the "Title" column exists in your export</p>
+                );
+                return null;
+              })()}
               {/* Generate report from existing data */}
               {callAI && !actionReport && !generatingReport && (
                 <div className="mt-3 space-y-2">

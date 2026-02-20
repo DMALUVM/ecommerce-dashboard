@@ -136,6 +136,7 @@ const AdsView = ({
   const [uploadStatus, setUploadStatus] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showDataSources, setShowDataSources] = useState(false);
+  const [expandedReport, setExpandedReport] = useState(null); // track which checklist row is expanded
   const [dateRange, setDateRange] = useState(30);
   const [reportMode, setReportMode] = useState('all');
   const [viewingReportId, setViewingReportId] = useState(null);
@@ -1889,14 +1890,20 @@ ${kpiHtml}
                       const data = adsIntelData?.[platform]?.[key];
                       const hasData = data?.records?.length > 0;
                       const freshness = hasData ? getFreshness(data.meta?.uploadedAt || data.uploadedAt) : null;
+                      const rptId = `${platform}-${key}`;
+                      const isExpanded = expandedReport === rptId;
                       return (
-                        <div key={`${platform}-${key}`} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs ${hasData ? 'bg-slate-900/30' : 'bg-slate-900/15 border border-dashed border-slate-700/40'}`}>
+                        <div key={rptId}
+                          onClick={() => hasData && setExpandedReport(isExpanded ? null : rptId)}
+                          className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs ${hasData ? 'bg-slate-900/30 cursor-pointer hover:bg-slate-800/50 transition-colors' : 'bg-slate-900/15 border border-dashed border-slate-700/40'} ${isExpanded ? 'ring-1 ring-violet-500/50' : ''}`}
+                        >
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasData ? (freshness?.dot || platformColor[platform] || 'bg-emerald-500') : 'bg-slate-700'}`}/>
                           <span className={`flex-1 truncate ${hasData ? 'text-white' : 'text-slate-600'}`}>{data?.meta?.label || label}</span>
                           {hasData ? (
                             <span className="flex items-center gap-1.5 shrink-0">
                               <span className="text-slate-500 text-[10px]">{data.records.length} rows{data.meta?.source === 'amazon-ads-api' ? ' · API' : ''}</span>
                               {freshness && <span className={`text-[10px] ${freshness.text}`}>· {freshness.label}</span>}
+                              <ChevronDown className={`w-3 h-3 text-slate-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`}/>
                             </span>
                           ) : (
                             <span className="text-slate-700 text-[10px] italic shrink-0">{source}</span>
@@ -1905,6 +1912,90 @@ ${kpiHtml}
                       );
                     })}
                   </div>
+                  {/* Expanded detail panel for selected report */}
+                  {expandedReport && (() => {
+                    const rpt = ALL_REPORTS.find(r => `${r.platform}-${r.key}` === expandedReport);
+                    if (!rpt) return null;
+                    const data = adsIntelData?.[rpt.platform]?.[rpt.key];
+                    if (!data?.records?.length) return null;
+                    const records = data.records;
+                    const headers = data.headers || Object.keys(records[0] || {});
+                    // Build a smart summary based on report type
+                    const isBizReport = rpt.key.startsWith('business_report');
+                    const isSkuEcon = rpt.key === 'sku_economics';
+                    const isCampaign = rpt.key.includes('campaign');
+                    const isSearchTerms = rpt.key.includes('search_term');
+                    // Extract useful summary stats
+                    let summaryItems = [];
+                    if (isBizReport) {
+                      const asins = [...new Set(records.map(r => r['(Child) ASIN'] || r['(Parent) ASIN'] || r['ASIN'] || r.asin || '').filter(Boolean))];
+                      const titles = records.filter(r => (r['Title'] || r.title || '').trim()).length;
+                      summaryItems = [
+                        { label: 'Unique ASINs', value: asins.length },
+                        { label: 'With titles', value: titles, warn: titles === 0 },
+                        { label: 'Missing titles', value: records.length - titles, warn: records.length - titles > 0 },
+                      ];
+                    } else if (isSkuEcon) {
+                      const asins = [...new Set(records.map(r => r['ASIN'] || r['Parent ASIN'] || r.asin || '').filter(Boolean))];
+                      const withMargin = records.filter(r => Number(r['Contribution margin'] || r['Contribution Margin'] || r.contributionMargin || 0) !== 0).length;
+                      const withCogs = records.filter(r => Number(r['Cost of goods per unit'] || r['COGS per unit'] || r.cogsPerUnit || 0) !== 0).length;
+                      summaryItems = [
+                        { label: 'Unique ASINs', value: asins.length },
+                        { label: 'With margin data', value: withMargin },
+                        { label: 'With COGS', value: withCogs },
+                      ];
+                    } else if (isCampaign) {
+                      const campNames = [...new Set(records.map(r => r['Campaign Name'] || r['Campaign name'] || r.campaign || r.name || '').filter(Boolean))];
+                      summaryItems = [{ label: 'Campaigns', value: campNames.length }];
+                    } else if (isSearchTerms) {
+                      summaryItems = [{ label: 'Search terms', value: records.length }];
+                    }
+                    return (
+                      <div className="mt-2 bg-slate-900/60 border border-slate-700/50 rounded-lg p-3 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-white text-xs font-medium">{rpt.label} — Data Preview</p>
+                          <button onClick={(e) => { e.stopPropagation(); setExpandedReport(null); }} className="text-slate-500 hover:text-white text-[10px]">Close</button>
+                        </div>
+                        {/* Summary stats */}
+                        {summaryItems.length > 0 && (
+                          <div className="flex gap-3 flex-wrap">
+                            {summaryItems.map((s, i) => (
+                              <span key={i} className={`text-[10px] px-2 py-0.5 rounded-full ${s.warn ? 'bg-amber-900/40 text-amber-400' : 'bg-slate-800 text-slate-300'}`}>
+                                {s.label}: <span className="font-medium">{s.value}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Column headers detected */}
+                        <div>
+                          <p className="text-slate-500 text-[10px] mb-1">Columns detected ({headers.length}):</p>
+                          <p className="text-slate-400 text-[10px] leading-relaxed">{headers.join(' · ')}</p>
+                        </div>
+                        {/* Sample rows */}
+                        <div>
+                          <p className="text-slate-500 text-[10px] mb-1">Sample data (first {Math.min(5, records.length)} of {records.length} rows):</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-[10px]">
+                              <thead><tr className="border-b border-slate-700/50">
+                                {headers.slice(0, 6).map((h, i) => <th key={i} className="py-1 px-1.5 text-left text-slate-500 font-medium whitespace-nowrap">{h.length > 20 ? h.substring(0, 18) + '..' : h}</th>)}
+                                {headers.length > 6 && <th className="py-1 px-1.5 text-slate-600">+{headers.length - 6} more</th>}
+                              </tr></thead>
+                              <tbody>{records.slice(0, 5).map((row, ri) => (
+                                <tr key={ri} className="border-b border-slate-800/30">
+                                  {headers.slice(0, 6).map((h, ci) => {
+                                    const val = row[h];
+                                    const display = val == null ? '—' : String(val).length > 25 ? String(val).substring(0, 23) + '..' : String(val);
+                                    return <td key={ci} className="py-0.5 px-1.5 text-slate-300 whitespace-nowrap">{display}</td>;
+                                  })}
+                                  {headers.length > 6 && <td className="py-0.5 px-1.5 text-slate-600">…</td>}
+                                </tr>
+                              ))}</tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
