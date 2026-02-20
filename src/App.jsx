@@ -2952,7 +2952,9 @@ const handleLogout = async () => {
     checkForecastAge('60day', 60, '60-day');
     
     // Check Amazon Campaign data freshness (weekly upload reminder)
-    if (amazonCampaigns.lastUpdated) {
+    // Skip this check when the Ads API is connected — API data has its own freshness tracking via adsLastSync
+    const adsApiConnected = amazonCredentials?.adsConnected;
+    if (amazonCampaigns.lastUpdated && !adsApiConnected) {
       const lastUpdate = new Date(amazonCampaigns.lastUpdated);
       const daysSince = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
       if (daysSince >= 7) {
@@ -2960,12 +2962,12 @@ const handleLogout = async () => {
       } else if (daysSince >= 5) {
         alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Campaign refresh due in ${7 - daysSince} day(s)`, action: 'upcoming' });
       }
-    } else {
+    } else if (!amazonCampaigns.lastUpdated && !adsApiConnected) {
       alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'Upload Amazon Campaign data for PPC analysis', action: 'upload' });
     }
     
     return alerts;
-  }, [forecastMeta, amazonCampaigns.lastUpdated]);
+  }, [forecastMeta, amazonCampaigns.lastUpdated, amazonCredentials?.adsConnected]);
   
   // ============ COMPREHENSIVE DATA STATUS DASHBOARD ============
   // Shows all uploaded data, what's feeding into predictions, and what's needed
