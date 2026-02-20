@@ -2556,9 +2556,9 @@ table.wide-table td { font-size: 6.5pt; padding: 4px 4px; }
                 {[
                   adsIntelData.dailyOverview && `${adsIntelData.dailyOverview.totalDays}d overview`,
                   adsIntelData.historicalDaily && `${adsIntelData.historicalDaily.totalDays}d historical`,
-                  // SP Campaigns: show one entry whether from API or CSV (not both)
+                  // Campaigns: API campaignSummary includes SP+SB+SD; show one combined entry
                   adsIntelData.campaignSummary?.length
-                    ? `${adsIntelData.campaignSummary.length} campaigns (API)${adsIntelData.spCampaign ? ' + CSV' : ''}`
+                    ? `${adsIntelData.campaignSummary.length} campaigns (SP+SB+SD)${adsIntelData.spCampaign ? ' + CSV' : ''}`
                     : adsIntelData.spCampaign && `${adsIntelData.spCampaign.totalCampaigns} SP campaigns`,
                   // SP Search Terms: prefer API, fall back to CSV
                   adsIntelData._apiSpSearchTerms?.length
@@ -2580,10 +2580,10 @@ table.wide-table td { font-size: 6.5pt; padding: 4px 4px; }
                     ? `${adsIntelData._apiSbSearchTerms.length} SB terms (API)`
                     : adsIntelData.sbSearchTerms?.length && `${adsIntelData.sbSearchTerms.length} SB terms`,
                   !adsIntelData.campaignSummary?.length && adsIntelData.sbCampaign && `${adsIntelData.sbCampaign.totalCampaigns} SB campaigns`,
-                  // SD: prefer API, fall back to CSV
-                  adsIntelData._apiSdCampaign?.length
+                  // SD: skip if campaignSummary already includes them; prefer API, fall back to CSV
+                  !adsIntelData.campaignSummary?.length && (adsIntelData._apiSdCampaign?.length
                     ? `${adsIntelData._apiSdCampaign.length} SD campaigns (API)`
-                    : adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`,
+                    : adsIntelData.sdCampaign?.length && `${adsIntelData.sdCampaign.length} SD campaigns`),
                   // Non-overlapping data sources (no API equivalent)
                   adsIntelData.businessReport?.length && `${adsIntelData.businessReport.length} biz report ASINs`,
                   adsIntelData.searchQueryPerf?.length && `${adsIntelData.searchQueryPerf.length} queries`,
