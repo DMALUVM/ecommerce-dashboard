@@ -2273,7 +2273,18 @@ const AmazonAdsIntelModal = ({
           }
 
           newIntel[type] = summary;
-          processResults.push({ key: type, fileName: fileNames.join(', '), status: 'success', rows: allRows.length });
+          // Build diagnostic details for key report types
+          let diag = '';
+          if (type === 'businessReport' && Array.isArray(summary)) {
+            const withTitle = summary.filter(r => r.title).length;
+            const uniqueAsins = new Set(summary.map(r => r.asin).filter(Boolean)).size;
+            diag = `${uniqueAsins} ASINs, ${withTitle} with titles`;
+          } else if (type === 'skuEconomics' && Array.isArray(summary)) {
+            const uniqueAsins = new Set(summary.map(r => r.asin).filter(Boolean)).size;
+            const withMargin = summary.filter(r => r.contributionMargin).length;
+            diag = `${uniqueAsins} ASINs, ${withMargin} with margin data`;
+          }
+          processResults.push({ key: type, fileName: fileNames.join(', '), status: 'success', rows: allRows.length, diag });
         } catch (err) {
           console.error(`Error processing ${type}:`, err);
           processResults.push({ key: type, fileName: dets.map(d => d.file.name).join(', '), status: 'error', error: err.message });
@@ -2360,6 +2371,14 @@ const AmazonAdsIntelModal = ({
       }
       
       if (queueCloudSave) queueCloudSave();
+      // Compute product catalog diagnostic summary
+      const catalogAsins = new Set();
+      const titledAsins = new Set();
+      (newIntel.businessReport || []).forEach(r => { if (r.asin) { catalogAsins.add(r.asin); if (r.title) titledAsins.add(r.asin); } if (r.childAsin) { catalogAsins.add(r.childAsin); if (r.title) titledAsins.add(r.childAsin); } });
+      (newIntel.skuEconomics || []).forEach(r => { if (r.asin) catalogAsins.add(r.asin); });
+      if (catalogAsins.size > 0) {
+        processResults.push({ key: '_catalog', status: 'success', rows: catalogAsins.size, diag: `Product catalog: ${titledAsins.size} ASINs with titles, ${catalogAsins.size - titledAsins.size} without — ASINs without titles will show as "Unknown product" in AI reports` });
+      }
       setResults(processResults);
       if (setToast && processResults.length > 0) {
         const successCount = processResults.filter(r => r.status === 'success').length;
@@ -2783,12 +2802,21 @@ table.wide-table td { font-size: 6.5pt; padding: 4px 4px; }
             <div className="space-y-3">
               <div className="bg-slate-800/50 rounded-lg p-3 space-y-1">
                 <p className="text-slate-300 text-xs font-medium mb-2">Processing Results</p>
-                {results.map((r, i) => (
-                  <div key={i} className={`flex items-center gap-2 text-sm ${r.status === 'success' ? 'text-emerald-400' : r.status === 'skipped' ? 'text-amber-400' : 'text-red-400'}`}>
-                    {r.status === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-                    <span className="truncate">{r.fileName || typeLabels[r.key] || r.key}: {r.status === 'success' ? `${r.rows} rows → ${typeLabels[r.key]}` : r.error}</span>
+                {results.filter(r => r.key !== '_catalog').map((r, i) => (
+                  <div key={i} className={`${r.status === 'success' ? 'text-emerald-400' : r.status === 'skipped' ? 'text-amber-400' : 'text-red-400'}`}>
+                    <div className="flex items-center gap-2 text-sm">
+                      {r.status === 'success' ? <CheckCircle className="w-4 h-4 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0" />}
+                      <span className="truncate">{r.fileName || typeLabels[r.key] || r.key}: {r.status === 'success' ? `${r.rows} rows → ${typeLabels[r.key]}` : r.error}</span>
+                    </div>
+                    {r.diag && <p className="text-slate-400 text-xs ml-6 mt-0.5">{r.diag}</p>}
                   </div>
                 ))}
+                {/* Product catalog diagnostic summary */}
+                {results.find(r => r.key === '_catalog') && (() => { const c = results.find(r => r.key === '_catalog'); return (
+                  <div className="mt-2 pt-2 border-t border-slate-700/50">
+                    <p className="text-slate-300 text-xs font-medium">{c.diag}</p>
+                  </div>
+                ); })()}
               </div>
               
               {/* Success message and options */}
