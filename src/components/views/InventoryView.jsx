@@ -337,18 +337,10 @@ const InventoryView = ({
   
   const recalculatedItems = deduplicatedItems.map(item => {
     const weeklyVel = item.weeklyVel || 0;
-    // Re-derive correctedVel from live velocity using forecast correction factor
-    // This ensures DOS stays accurate when live velocity updates weeklyVel
-    let effectiveVel;
-    if (forecastCorrections?.confidence >= 30 && forecastCorrections?.samplesUsed >= 2 && weeklyVel > 0) {
-      const skuKey = item.sku;
-      const factor = (forecastCorrections.bySku?.[skuKey]?.samples >= 2)
-        ? forecastCorrections.bySku[skuKey].units
-        : (forecastCorrections.overall?.units || 1);
-      effectiveVel = weeklyVel * factor;
-    } else {
-      effectiveVel = item.correctedVel || weeklyVel;
-    }
+    // Use weeklyVel directly for DOS/stockout — this matches what's displayed in the Tot Vel column.
+    // AI correction factors are useful for forecasting/ordering but should not silently override
+    // the stockout calculation while displaying a different velocity to the user.
+    const effectiveVel = weeklyVel;
     const dailyVel = effectiveVel / 7;
     
     // Only adjust quantities if data is old (daysElapsed > 0)

@@ -8424,7 +8424,10 @@ const savePeriods = async (d) => {
         }
       }
       
-      const dos = correctedVel > 0 ? Math.round((totalQty / correctedVel) * 7) : 999;
+      // DOS uses raw totalVel (what's displayed) — not AI-corrected velocity.
+      // The correction factor is useful for ordering but should not silently
+      // change stockout dates while a different velocity is shown to the user.
+      const dos = totalVel > 0 ? Math.round((totalQty / totalVel) * 7) : 999;
       let health = 'unknown';
       if (totalVel > 0) {
         if (dos < criticalThreshold) { health = 'critical'; critical++; }
@@ -8455,9 +8458,9 @@ const savePeriods = async (d) => {
         ? Math.ceil(Z_SERVICE_LEVEL * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks))
         : 0;
       
-      // Seasonally-adjusted velocity (current month's factor)
+      // Seasonally-adjusted velocity (current month's factor) — uses raw velocity
       const seasonalFactor = demandStats?.currentSeasonalFactor || 1.0;
-      const seasonalVel = correctedVel * seasonalFactor;
+      const seasonalVel = totalVel * seasonalFactor;
       
       // Reorder point = (daily velocity × lead time) + safety stock
       const dailyVelForReorder = seasonalVel / 7;
