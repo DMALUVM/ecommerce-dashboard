@@ -11984,21 +11984,37 @@ const savePeriods = async (d) => {
               
               let adsData = null;
               let adsRetries = 0;
-              const maxAdsRetries = 6;
-              
+              const maxAdsRetries = 8;
+
               while (adsRetries < maxAdsRetries) {
-                const adsRes = await fetch('/api/amazon/ads-sync', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(adsSyncBody),
-                });
-                adsData = await adsRes.json();
-                
+                const adsController = new AbortController();
+                const adsTimeoutId = setTimeout(() => adsController.abort(), 100000); // 100s timeout
+                try {
+                  const adsRes = await fetch('/api/amazon/ads-sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(adsSyncBody),
+                    signal: adsController.signal,
+                  });
+                  clearTimeout(adsTimeoutId);
+                  adsData = await adsRes.json();
+                } catch (fetchErr) {
+                  clearTimeout(adsTimeoutId);
+                  console.warn(`[AutoSync] Amazon Ads fetch attempt ${adsRetries + 1} failed:`, fetchErr.message);
+                  adsRetries++;
+                  if (adsRetries < maxAdsRetries) {
+                    await new Promise(r => setTimeout(r, 10000));
+                    continue;
+                  }
+                  console.error('[AutoSync] Amazon Ads: all attempts timed out');
+                  break;
+                }
+
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 20s...`);
+                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 10s...`);
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
-                  await new Promise(r => setTimeout(r, 20000));
+                  await new Promise(r => setTimeout(r, 10000));
                   continue;
                 }
                 break;

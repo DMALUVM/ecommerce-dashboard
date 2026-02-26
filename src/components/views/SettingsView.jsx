@@ -2311,26 +2311,41 @@ const SettingsView = ({
                         adsProfileId: amazonCredentials.adsProfileId,
                       };
 
-                      while (retries < 5) {
+                      while (retries < 8) {
                         const elapsed = Math.round((Date.now() - startTime) / 1000);
                         if (retries === 0) {
                           setToast({ message: `📊 Waiting for Amazon to generate reports... (${elapsed}s)`, type: 'info', duration: 60000 });
                         } else {
                           const completed = data?.completedCount || 0;
                           const total = data?.totalCount || 8;
-                          setToast({ message: `⏳ Reports generating... ${completed}/${total} ready (retry ${retries}/5, ${elapsed}s)`, type: 'info', duration: 60000 });
+                          setToast({ message: `⏳ Reports generating... ${completed}/${total} ready (retry ${retries}/8, ${elapsed}s)`, type: 'info', duration: 60000 });
                         }
-                        const r = await fetch('/api/amazon/ads-sync', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify(syncBody),
-                        });
-                        data = await r.json();
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 100000); // 100s timeout per attempt
+                        try {
+                          const r = await fetch('/api/amazon/ads-sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(syncBody),
+                            signal: controller.signal,
+                          });
+                          clearTimeout(timeoutId);
+                          data = await r.json();
+                        } catch (fetchErr) {
+                          clearTimeout(timeoutId);
+                          console.warn(`[AdsSync] Fetch attempt ${retries + 1} failed:`, fetchErr.message);
+                          retries++;
+                          if (retries < 8) {
+                            await new Promise(r => setTimeout(r, 5000));
+                            continue;
+                          }
+                          throw new Error(`Ads sync timed out after ${retries} attempts — Amazon reports may still be generating. Try again in a minute.`);
+                        }
 
                         if (data.status === 'pending' && data.pendingReports) {
                           syncBody.pendingReports = data.pendingReports;
                           retries++;
-                          await new Promise(r => setTimeout(r, 8000));
+                          await new Promise(r => setTimeout(r, 5000));
                           continue;
                         }
                         break;

@@ -50,6 +50,7 @@ export default async function handler(req, res) {
   }
 
   const ADS_BASE = 'https://advertising-api.amazon.com';
+  const FETCH_TIMEOUT = 15000; // 15s timeout per Amazon API call
 
   // ============ LWA Token Exchange ============
   const getAdsToken = async () => {
@@ -62,6 +63,7 @@ export default async function handler(req, res) {
         client_id: adsClientId,
         client_secret: adsClientSecret,
       }).toString(),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT),
     });
     const text = await tokenRes.text();
     if (!tokenRes.ok) {
@@ -83,7 +85,7 @@ export default async function handler(req, res) {
     };
     if (adsProfileId) headers['Amazon-Advertising-API-Scope'] = adsProfileId;
 
-    const opts = { method, headers };
+    const opts = { method, headers, signal: AbortSignal.timeout(FETCH_TIMEOUT) };
     if (body) opts.body = JSON.stringify(body);
 
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
@@ -96,7 +98,7 @@ export default async function handler(req, res) {
           const wait = retryAfter ? retryAfter * 1000 : 3000 * attempt;
           console.log(`[AdsSync] 429 throttled on ${endpoint}, retry ${attempt}/2 in ${Math.round(wait/1000)}s...`);
           await new Promise(r => setTimeout(r, wait));
-          const retryRes = await fetch(`${ADS_BASE}${endpoint}`, opts);
+          const retryRes = await fetch(`${ADS_BASE}${endpoint}`, { ...opts, signal: AbortSignal.timeout(FETCH_TIMEOUT) });
           if (retryRes.ok) return retryRes.json();
           if (retryRes.status !== 429) {
             const retryErr = await retryRes.text();
@@ -402,32 +404,41 @@ export default async function handler(req, res) {
     const completed = reports.filter(r => r.status === 'COMPLETED');
     const errors = reports.filter(r => r.status === 'ERROR');
 
-    // Poll up to ~50 seconds (client retries will continue polling if needed)
+    // Poll up to ~80 seconds (parallel polling — much faster than sequential)
     let polls = 0;
-    while (pending.length > 0 && polls < 25) {
+    const maxPolls = 20;
+    while (pending.length > 0 && polls < maxPolls) {
       polls++;
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
 
-      for (let i = pending.length - 1; i >= 0; i--) {
-        const rpt = pending[i];
-        try {
-          const status = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
-          if (status.status === 'COMPLETED') {
-            rpt.status = 'COMPLETED';
-            rpt.downloadUrl = status.url;
-            completed.push(rpt);
-            pending.splice(i, 1);
-            console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls})`);
-          } else if (status.status === 'FAILURE') {
-            rpt.status = 'ERROR';
-            rpt.error = status.statusDetails || 'Report failed';
-            errors.push(rpt);
-            pending.splice(i, 1);
-          }
-        } catch (err) {
-          console.error(`[AdsSync] Poll error ${rpt.label}:`, err.message);
+      // Poll ALL pending reports in parallel instead of sequentially
+      const pollResults = await Promise.allSettled(
+        pending.map(rpt =>
+          adsRequest(token, `/reporting/reports/${rpt.reportId}`)
+            .then(status => ({ rpt, status }))
+        )
+      );
+
+      for (const result of pollResults) {
+        if (result.status !== 'fulfilled') {
+          console.error(`[AdsSync] Poll error:`, result.reason?.message);
+          continue;
+        }
+        const { rpt, status } = result.value;
+        if (status.status === 'COMPLETED') {
+          rpt.status = 'COMPLETED';
+          rpt.downloadUrl = status.url;
+          completed.push(rpt);
+          console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls})`);
+        } else if (status.status === 'FAILURE') {
+          rpt.status = 'ERROR';
+          rpt.error = status.statusDetails || 'Report failed';
+          errors.push(rpt);
         }
       }
+      // Remove completed/errored from pending
+      const doneIds = new Set([...completed, ...errors].map(r => r.reportId));
+      pending.splice(0, pending.length, ...pending.filter(r => !doneIds.has(r.reportId)));
     }
 
     // Return pending state if still waiting
@@ -450,7 +461,7 @@ export default async function handler(req, res) {
     for (const rpt of completed) {
       if (!rpt.downloadUrl) continue;
       try {
-        const dlRes = await fetch(rpt.downloadUrl);
+        const dlRes = await fetch(rpt.downloadUrl, { signal: AbortSignal.timeout(30000) });
         if (!dlRes.ok) throw new Error(`Download ${dlRes.status}`);
 
         let jsonText;
