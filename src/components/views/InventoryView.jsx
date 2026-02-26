@@ -168,8 +168,10 @@ const InventoryView = ({
           if (!item.sku) return;
           const u = item.unitsSold || item.units || 0;
           const vel = u / weeksEquiv;
-          [item.sku, item.sku.toUpperCase(), item.sku.toLowerCase(),
-           item.sku.replace(/shop$/i, '').toUpperCase()].forEach(k => {
+          // Use Set to avoid double-counting when SKU variants resolve to same string
+          const amzKeys = new Set([item.sku, item.sku.toUpperCase(), item.sku.toLowerCase(),
+           item.sku.replace(/shop$/i, '').toUpperCase()]);
+          amzKeys.forEach(k => {
             amzVel[k] = (amzVel[k] || 0) + vel;
           });
         });
@@ -187,8 +189,10 @@ const InventoryView = ({
           if (!item.sku) return;
           const u = item.unitsSold || item.units || 0;
           const vel = u / weeksEquiv;
-          [item.sku, item.sku.toUpperCase(), item.sku.toLowerCase(),
-           item.sku.replace(/shop$/i, '').toUpperCase(), item.sku.replace(/shop$/i, '') + 'Shop'].forEach(k => {
+          // Use Set to avoid double-counting when SKU variants resolve to same string
+          const shopKeys = new Set([item.sku, item.sku.toUpperCase(), item.sku.toLowerCase(),
+           item.sku.replace(/shop$/i, '').toUpperCase(), item.sku.replace(/shop$/i, '') + 'Shop']);
+          shopKeys.forEach(k => {
             shopVel[k] = (shopVel[k] || 0) + vel;
           });
         });
@@ -220,13 +224,15 @@ const InventoryView = ({
       // Fill gaps only - don't overwrite daily data
       Object.keys(weeklyAmz).forEach(sku => {
         const avg = weeklyAmz[sku] / sortedWeeks.length;
-        [sku, sku.toUpperCase(), sku.toLowerCase(), sku.replace(/shop$/i, '').toUpperCase()].forEach(k => {
+        const keys = new Set([sku, sku.toUpperCase(), sku.toLowerCase(), sku.replace(/shop$/i, '').toUpperCase()]);
+        keys.forEach(k => {
           if (!amzVel[k]) amzVel[k] = avg;
         });
       });
       Object.keys(weeklyShop).forEach(sku => {
         const avg = weeklyShop[sku] / sortedWeeks.length;
-        [sku, sku.toUpperCase(), sku.toLowerCase(), sku.replace(/shop$/i, '').toUpperCase()].forEach(k => {
+        const keys = new Set([sku, sku.toUpperCase(), sku.toLowerCase(), sku.replace(/shop$/i, '').toUpperCase()]);
+        keys.forEach(k => {
           if (!shopVel[k]) shopVel[k] = avg;
         });
       });
@@ -331,8 +337,18 @@ const InventoryView = ({
   
   const recalculatedItems = deduplicatedItems.map(item => {
     const weeklyVel = item.weeklyVel || 0;
-    // Use correctedVel (from forecast learning) if available, matching processInventory's dos calculation
-    const effectiveVel = item.correctedVel || weeklyVel;
+    // Re-derive correctedVel from live velocity using forecast correction factor
+    // This ensures DOS stays accurate when live velocity updates weeklyVel
+    let effectiveVel;
+    if (forecastCorrections?.confidence >= 30 && forecastCorrections?.samplesUsed >= 2 && weeklyVel > 0) {
+      const skuKey = item.sku;
+      const factor = (forecastCorrections.bySku?.[skuKey]?.samples >= 2)
+        ? forecastCorrections.bySku[skuKey].units
+        : (forecastCorrections.overall?.units || 1);
+      effectiveVel = weeklyVel * factor;
+    } else {
+      effectiveVel = item.correctedVel || weeklyVel;
+    }
     const dailyVel = effectiveVel / 7;
     
     // Only adjust quantities if data is old (daysElapsed > 0)
@@ -364,7 +380,12 @@ const InventoryView = ({
       stockout.setDate(stockout.getDate() + newDaysOfSupply);
       newStockoutDate = stockout.toISOString().split('T')[0];
       
-      newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - leadTimeDays;
+      // Match App.jsx reorder formula: accounts for safety stock via reorderPointDays
+      const seasonalVel = effectiveVel * (item.seasonalFactor || 1.0);
+      const dailyVelForReorder = seasonalVel / 7;
+      const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + (item.safetyStock || 0));
+      const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+      newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - reorderPointDays;
       const reorderBy = new Date(today);
       reorderBy.setDate(reorderBy.getDate() + newDaysUntilMustOrder);
       newReorderByDate = reorderBy.toISOString().split('T')[0];
