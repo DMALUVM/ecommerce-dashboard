@@ -2949,21 +2949,25 @@ const handleLogout = async () => {
     checkForecastAge('30day', 30, '30-day');
     checkForecastAge('60day', 60, '60-day');
     
-    // Check Amazon Campaign data freshness (weekly upload reminder)
-    if (amazonCampaigns.lastUpdated) {
-      const lastUpdate = new Date(amazonCampaigns.lastUpdated);
-      const daysSince = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
+    // Check Amazon Campaign data freshness — consider both CSV upload and API sync timestamps
+    const campaignLastUpdate = (() => {
+      const dates = [amazonCampaigns.lastUpdated, amazonCredentials.adsLastSync].filter(Boolean).map(d => new Date(d));
+      return dates.length > 0 ? new Date(Math.max(...dates)) : null;
+    })();
+    if (campaignLastUpdate) {
+      const daysSince = Math.floor((now - campaignLastUpdate) / (1000 * 60 * 60 * 24));
       if (daysSince >= 7) {
-        alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Campaign data is ${daysSince} days old (upload weekly)`, action: 'refresh' });
+        const source = amazonCredentials.adsLastSync && new Date(amazonCredentials.adsLastSync) >= campaignLastUpdate ? 'sync' : 'upload';
+        alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Campaign data is ${daysSince} days old (${source} weekly)`, action: 'refresh' });
       } else if (daysSince >= 5) {
         alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Campaign refresh due in ${7 - daysSince} day(s)`, action: 'upcoming' });
       }
     } else {
       alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'Upload Amazon Campaign data for PPC analysis', action: 'upload' });
     }
-    
+
     return alerts;
-  }, [forecastMeta, amazonCampaigns.lastUpdated]);
+  }, [forecastMeta, amazonCampaigns.lastUpdated, amazonCredentials.adsLastSync]);
   
   // ============ COMPREHENSIVE DATA STATUS DASHBOARD ============
   // Shows all uploaded data, what's feeding into predictions, and what's needed
