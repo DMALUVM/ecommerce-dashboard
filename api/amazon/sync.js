@@ -515,103 +515,13 @@ export default async function handler(req, res) {
   }
 
   // ============ ADS API SYNC ============
-  // Requires separate Ads API credentials
+  // DEPRECATED: Use /api/amazon/ads-sync instead (v3 API with full reporting).
+  // This stub redirects callers to the correct endpoint.
   if (syncType === 'ads') {
-    if (!adsClientId || !adsClientSecret || !adsRefreshToken || !adsProfileId) {
-      return res.status(400).json({ 
-        error: 'Missing Ads API credentials. Required: adsClientId, adsClientSecret, adsRefreshToken, adsProfileId' 
-      });
-    }
-
-    try {
-      // Get Ads API access token (different from SP-API)
-      const adsTokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: adsRefreshToken,
-          client_id: adsClientId,
-          client_secret: adsClientSecret,
-        }).toString(),
-      });
-
-      if (!adsTokenResponse.ok) {
-        throw new Error('Failed to get Ads API access token');
-      }
-
-      const adsTokenData = await adsTokenResponse.json();
-      const adsAccessToken = adsTokenData.access_token;
-
-      // Fetch Sponsored Products campaigns
-      const campaignsResponse = await fetch(
-        `https://advertising-api.amazon.com/sp/campaigns?stateFilter=enabled`,
-        {
-          headers: {
-            'Authorization': `Bearer ${adsAccessToken}`,
-            'Amazon-Advertising-API-ClientId': adsClientId,
-            'Amazon-Advertising-API-Scope': adsProfileId,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      if (!campaignsResponse.ok) {
-        const errorText = await campaignsResponse.text();
-        throw new Error(`Ads API error: ${campaignsResponse.status} - ${errorText.slice(0, 200)}`);
-      }
-
-      const campaigns = await campaignsResponse.json();
-
-      // Get performance data for date range
-      const reportStartDate = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const reportEndDate = endDate || new Date().toISOString().split('T')[0];
-
-      // Request a Sponsored Products report
-      const reportRequestResponse = await fetch(
-        `https://advertising-api.amazon.com/v2/sp/campaigns/report`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${adsAccessToken}`,
-            'Amazon-Advertising-API-ClientId': adsClientId,
-            'Amazon-Advertising-API-Scope': adsProfileId,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            reportDate: reportEndDate,
-            metrics: 'impressions,clicks,cost,sales,orders,acos,roas',
-          }),
-        }
-      );
-
-      let reportData = null;
-      if (reportRequestResponse.ok) {
-        const reportRequest = await reportRequestResponse.json();
-        // Note: Reports are async - you'd need to poll for completion
-        // For now, return the campaign list
-        reportData = reportRequest;
-      }
-
-      return res.status(200).json({
-        success: true,
-        syncType: 'ads',
-        campaigns: campaigns.slice(0, 50).map(c => ({
-          campaignId: c.campaignId,
-          name: c.name,
-          state: c.state,
-          budget: c.budget,
-          budgetType: c.budgetType,
-          targetingType: c.targetingType,
-        })),
-        dateRange: { start: reportStartDate, end: reportEndDate },
-        reportStatus: reportData ? 'requested' : 'unavailable',
-      });
-
-    } catch (err) {
-      console.error('Ads API sync error:', err);
-      return res.status(500).json({ error: `Ads sync failed: ${err.message}` });
-    }
+    return res.status(400).json({
+      error: 'Use /api/amazon/ads-sync endpoint instead. This endpoint uses the deprecated v2 Ads API.',
+      redirect: '/api/amazon/ads-sync',
+    });
   }
 
   // ============ SALES SYNC (Reports API - bulk SKU-level daily) ============
