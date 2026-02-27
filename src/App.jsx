@@ -1493,6 +1493,7 @@ const [conflictData, setConflictData] = useState(null); // { cloudData, cloudVer
 const conflictCheckRef = useRef(false); // Prevent multiple conflict checks
 const saveInProgressRef = useRef(false); // Prevent concurrent saves
 const pendingSaveDataRef = useRef(null); // Queue next save if one is in progress
+const debounceMergeRef = useRef(null); // Merge successive queueCloudSave calls before debounce fires
 
 // Multi-store support
 const [stores, setStores] = useState([]); // List of { id, name, createdAt }
@@ -4568,9 +4569,18 @@ const queueCloudSave = useCallback((nextDataObj) => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return;
 
+  // Merge with any pending (not yet flushed) data so rapid successive saves
+  // don't drop fields.  e.g. save3PLLedger() then save(weeks) in the same
+  // event handler — both set different keys that must reach the cloud.
+  debounceMergeRef.current = debounceMergeRef.current
+    ? { ...debounceMergeRef.current, ...nextDataObj }
+    : nextDataObj;
+
   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
   saveTimerRef.current = setTimeout(() => {
-    pushToCloudNow(nextDataObj);
+    const merged = debounceMergeRef.current;
+    debounceMergeRef.current = null;
+    pushToCloudNow(merged);
   }, 800);
 }, [session, pushToCloudNow]);
 
@@ -4593,7 +4603,7 @@ useEffect(() => {
   if (!session?.user?.id || !supabase) return;
   if (isLoadingDataRef.current) return; // Don't sync during initial load
   queueCloudSave(combinedData);
-}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, leadTimeSettings, appSettings, widgetConfig, salesTaxConfig, storeName, forecastCorrections]);
+}, [invoices, amazonForecasts, weekNotes, goals, savedProductNames, theme, productionPipeline, allDaysData, bankingData, confirmedRecurring, leadTimeSettings, appSettings, widgetConfig, salesTaxConfig, storeName, forecastCorrections, threeplLedger]);
 
 // ── Process ads file uploads (Tier 1 daily KPIs + Tier 2 deep analysis) ──
 const processAdsUpload = useCallback(async (fileList) => {
