@@ -12000,12 +12000,14 @@ const savePeriods = async (d) => {
               };
               
               let adsData = null;
-              let adsRetries = 0;
-              const maxAdsRetries = 8;
+              let pollAttempts = 0;
+              let fetchErrors = 0;
+              const maxPollAttempts = 12; // Amazon reports for 60 days can take several minutes
+              const maxFetchErrors = 3;   // Network/timeout failures — separate budget
 
-              while (adsRetries < maxAdsRetries) {
+              while (pollAttempts < maxPollAttempts && fetchErrors < maxFetchErrors) {
                 const adsController = new AbortController();
-                const adsTimeoutId = setTimeout(() => adsController.abort(), 100000); // 100s timeout
+                const adsTimeoutId = setTimeout(() => adsController.abort(), 120000); // 120s — match Vercel maxDuration
                 try {
                   const adsRes = await fetch('/api/amazon/ads-sync', {
                     method: 'POST',
@@ -12017,21 +12019,21 @@ const savePeriods = async (d) => {
                   adsData = await adsRes.json();
                 } catch (fetchErr) {
                   clearTimeout(adsTimeoutId);
-                  console.warn(`[AutoSync] Amazon Ads fetch attempt ${adsRetries + 1} failed:`, fetchErr.message);
-                  adsRetries++;
-                  if (adsRetries < maxAdsRetries) {
-                    await new Promise(r => setTimeout(r, 10000));
+                  fetchErrors++;
+                  console.warn(`[AutoSync] Amazon Ads fetch error ${fetchErrors}/${maxFetchErrors}:`, fetchErr.message);
+                  if (fetchErrors < maxFetchErrors) {
+                    await new Promise(r => setTimeout(r, 5000));
                     continue;
                   }
-                  console.error('[AutoSync] Amazon Ads: all attempts timed out');
+                  console.error('[AutoSync] Amazon Ads: too many fetch errors, giving up');
                   break;
                 }
 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 10s...`);
+                  pollAttempts++;
+                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, poll ${pollAttempts}/${maxPollAttempts}...`);
                   adsSyncBody.pendingReports = adsData.pendingReports;
-                  adsRetries++;
-                  await new Promise(r => setTimeout(r, 10000));
+                  await new Promise(r => setTimeout(r, 5000));
                   continue;
                 }
                 break;

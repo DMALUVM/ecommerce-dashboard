@@ -404,9 +404,11 @@ export default async function handler(req, res) {
     const completed = reports.filter(r => r.status === 'COMPLETED');
     const errors = reports.filter(r => r.status === 'ERROR');
 
-    // Poll up to ~80 seconds (parallel polling — much faster than sequential)
+    // Adaptive poll budget: use less time polling when we already have completed
+    // reports waiting to download.  Leaves headroom for parallel downloads + transform
+    // within the 120s Vercel function limit.
+    const maxPolls = pending.length > 0 && completed.length > 0 ? 8 : 14;
     let polls = 0;
-    const maxPolls = 20;
     while (pending.length > 0 && polls < maxPolls) {
       polls++;
       await new Promise(r => setTimeout(r, 3000));
@@ -455,12 +457,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---- Download all completed reports ----
+    // ---- Download all completed reports IN PARALLEL ----
+    // Sequential downloads were the main bottleneck: 8 reports × ~10s each = 80s,
+    // which combined with 60s polling exceeded the 120s Vercel function limit.
+    // Parallel downloads: ~10s total regardless of report count.
     const rawData = {}; // reportKey → array of raw JSON rows
 
-    for (const rpt of completed) {
-      if (!rpt.downloadUrl) continue;
-      try {
+    const downloadResults = await Promise.allSettled(
+      completed.filter(rpt => rpt.downloadUrl).map(async (rpt) => {
         const dlRes = await fetch(rpt.downloadUrl, { signal: AbortSignal.timeout(30000) });
         if (!dlRes.ok) throw new Error(`Download ${dlRes.status}`);
 
@@ -482,13 +486,19 @@ export default async function handler(req, res) {
             try { return JSON.parse(l); } catch (e2) { return null; }
           }).filter(Boolean);
         }
-        if (!Array.isArray(rows)) { console.error(`[AdsSync] ${rpt.label}: not an array`); continue; }
+        if (!Array.isArray(rows)) throw new Error(`${rpt.label}: not an array`);
 
+        return { rpt, rows };
+      })
+    );
+
+    for (const result of downloadResults) {
+      if (result.status === 'fulfilled') {
+        const { rpt, rows } = result.value;
         rawData[rpt.reportKey] = rows;
         console.log(`[AdsSync] ${rpt.label}: ${rows.length} rows`);
-      } catch (err) {
-        console.error(`[AdsSync] Download error ${rpt.label}:`, err.message);
-        errors.push({ ...rpt, error: err.message });
+      } else {
+        console.error(`[AdsSync] Download error:`, result.reason?.message);
       }
     }
 
