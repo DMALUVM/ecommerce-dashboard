@@ -2058,28 +2058,9 @@ const DashboardView = ({
                             const hasAdsOnly = dayData && !hasSales;
                             const isToday = dateKey === formatDateKey(now);
                             const revenue = dayData?.total?.revenue || 0;
-                            
-                            // Calculate profit - use stored value or calculate from components
-                            let profit = dayData?.total?.netProfit || 0;
-                            if (profit === 0 && revenue > 0) {
-                              // Fallback: calculate from amazon + shopify profits
-                              const amzProfit = dayData?.amazon?.netProfit || 0;
-                              const shopProfit = dayData?.shopify?.netProfit || 0;
-                              profit = amzProfit + shopProfit;
-                              // If still 0, try to calculate from revenue - cogs - ads
-                              if (profit === 0) {
-                                const amzRev = dayData?.amazon?.revenue || 0;
-                                const amzCogs = dayData?.amazon?.cogs || 0;
-                                const amzFees = dayData?.amazon?.fees || 0;
-                                const amzAds = dayData?.amazon?.adSpend || 0;
-                                const shopRev = dayData?.shopify?.revenue || 0;
-                                const shopCogs = dayData?.shopify?.cogs || 0;
-                                const shopAds = dayData?.shopify?.adSpend || dayData?.shopify?.metaSpend || 0;
-                                const metaAds = dayData?.metaSpend || dayData?.metaAds || 0;
-                                const googleAds = dayData?.googleSpend || dayData?.googleAds || 0;
-                                profit = (amzRev - amzCogs - amzFees - amzAds) + (shopRev - shopCogs - shopAds - metaAds - googleAds);
-                              }
-                            }
+
+                            // Compute profit from channel data (more reliable than stored total)
+                            const profit = (dayData?.amazon?.netProfit || dayData?.amazon?.netProceeds || 0) + (dayData?.shopify?.netProfit || 0);
                             
                             // Check if day has specific ads data - check ALL possible locations
                             const googleAds = dayData?.googleSpend || dayData?.googleAds || dayData?.shopify?.googleSpend || dayData?.shopify?.googleAds || 0;
