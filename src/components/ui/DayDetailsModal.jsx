@@ -214,10 +214,10 @@ const DayDetailsModal = ({
           <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
             <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Profit</p>
             {(() => {
-              const totalCogs = amazonCogs + shopifyCogs;
-              const totalFees = amazonFees + shopifyFees;
-              const totalAds = amazonAdSpend + shopifyAdSpend;
-              const calcTotalProfit = total.netProfit || (totalRevenue - totalCogs - totalFees - shopifyShipping - totalAds);
+              // Always sum channel profits - total.netProfit can be stale
+              // Amazon netProfit = net proceeds (already includes all fees/COGS)
+              const shopCalcProfit = shopify.netProfit || ((shopify.revenue || 0) - shopifyCogs - shopifyFees - shopifyShipping - shopifyAdSpend);
+              const calcTotalProfit = (amazon.netProfit || 0) + shopCalcProfit;
               return <p className={`text-base sm:text-xl font-bold ${calcTotalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(calcTotalProfit)}</p>;
             })()}
           </div>
@@ -228,10 +228,8 @@ const DayDetailsModal = ({
           <div className="bg-slate-900/50 rounded-lg sm:rounded-xl p-3 sm:p-4">
             <p className="text-slate-400 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Margin</p>
             {(() => {
-              const totalCogs = amazonCogs + shopifyCogs;
-              const totalFees = amazonFees + shopifyFees;
-              const totalAds = amazonAdSpend + shopifyAdSpend;
-              const calcTotalProfit = total.netProfit || (totalRevenue - totalCogs - totalFees - shopifyShipping - totalAds);
+              const shopCalcProfit = shopify.netProfit || ((shopify.revenue || 0) - shopifyCogs - shopifyFees - shopifyShipping - shopifyAdSpend);
+              const calcTotalProfit = (amazon.netProfit || 0) + shopCalcProfit;
               const calcMargin = totalRevenue > 0 ? (calcTotalProfit / totalRevenue) * 100 : 0;
               return <p className={`text-base sm:text-xl font-bold ${calcMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPercent(calcMargin)}</p>;
             })()}

@@ -2059,7 +2059,7 @@ const DashboardView = ({
                             const isToday = dateKey === formatDateKey(now);
                             const revenue = dayData?.total?.revenue || 0;
 
-                            // Compute profit from channel data (more reliable than stored total)
+                            // Always compute from channel data - stored total.netProfit can be stale
                             const profit = (dayData?.amazon?.netProfit || dayData?.amazon?.netProceeds || 0) + (dayData?.shopify?.netProfit || 0);
                             
                             // Check if day has specific ads data - check ALL possible locations
