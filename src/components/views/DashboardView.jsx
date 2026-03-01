@@ -2086,9 +2086,12 @@ const DashboardView = ({
                             const metaAds = dayData?.metaSpend || dayData?.metaAds || dayData?.shopify?.metaSpend || dayData?.shopify?.metaAds || 0;
                             const hasGoogle = googleAds > 0;
                             const hasMeta = metaAds > 0;
-                            
+                            const amzAdsTotal = dayData?.amazon?.adSpend || 0;
+                            const totalAds = amzAdsTotal + metaAds + googleAds;
+                            const hasTooltipData = hasSales || hasAdsOnly;
+
                             return (
-                              <div 
+                              <div
                                 key={dayNum}
                                 onClick={() => {
                                   if (hasSales) {
@@ -2099,14 +2102,32 @@ const DashboardView = ({
                                     setView('upload');
                                   }
                                 }}
-                                className={`h-16 rounded-lg p-1 text-center relative transition-all ${
-                                  hasSales 
-                                    ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 cursor-pointer' 
+                                className={`h-16 rounded-lg p-1 text-center relative transition-all group/cell ${
+                                  hasSales
+                                    ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 cursor-pointer'
                                     : hasAdsOnly
                                       ? 'bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 cursor-pointer'
                                       : 'bg-slate-800/50 border border-slate-700/50'
                                 } ${isToday ? 'ring-2 ring-white/50' : ''}`}
                               >
+                                {/* Hover tooltip */}
+                                {hasTooltipData && (
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/cell:block bg-slate-700 text-white text-xs px-3 py-2 rounded-lg whitespace-nowrap z-50 pointer-events-none shadow-xl border border-slate-600">
+                                    <p className="font-semibold text-slate-200 mb-1">{new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</p>
+                                    {hasSales && (
+                                      <>
+                                        <p>Revenue: <span className="text-cyan-400 font-medium">{formatCurrency(revenue)}</span></p>
+                                        {profit !== 0 && <p>Profit: <span className={`font-medium ${profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(profit)}</span></p>}
+                                      </>
+                                    )}
+                                    {amzAdsTotal > 0 && <p>Amazon Ads: <span className="text-orange-400 font-medium">{formatCurrency(amzAdsTotal)}</span></p>}
+                                    {metaAds > 0 && <p>Meta Ads: <span className="text-blue-400 font-medium">{formatCurrency(metaAds)}</span></p>}
+                                    {googleAds > 0 && <p>Google Ads: <span className="text-yellow-400 font-medium">{formatCurrency(googleAds)}</span></p>}
+                                    {totalAds > 0 && <p className="mt-1 pt-1 border-t border-slate-600">Total Ads: <span className="text-violet-400 font-medium">{formatCurrency(totalAds)}</span></p>}
+                                    {revenue > 0 && totalAds > 0 && <p>TACOS: <span className="text-amber-400 font-medium">{((totalAds / revenue) * 100).toFixed(1)}%</span></p>}
+                                    {hasSales && <p className="text-slate-400 text-[10px] mt-1">Click for details</p>}
+                                  </div>
+                                )}
                                 <div className={`text-xs font-medium ${hasSales ? 'text-cyan-300' : hasAdsOnly ? 'text-amber-400/60' : 'text-slate-500'}`}>
                                   {dayNum}
                                 </div>
