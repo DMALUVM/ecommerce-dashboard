@@ -47,7 +47,7 @@ const callAI = async (promptOrOptions, systemPrompt = '', modelOverride = null, 
   // Sanitize messages to ensure all content is plain strings (prevents circular refs from window/DOM leaking in)
   const sanitizeMessages = (msgs) => (msgs || []).map(m => ({
     role: String(m.role || 'user'),
-    content: typeof m.content === 'string' ? m.content : (m.content != null ? String(m.content) : ''),
+    content: Array.isArray(m.content) ? m.content : (typeof m.content === 'string' ? m.content : (m.content != null ? String(m.content) : '')),
   }));
   
   if (typeof promptOrOptions === 'string') {
