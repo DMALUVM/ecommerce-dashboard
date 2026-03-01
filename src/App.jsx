@@ -12011,8 +12011,10 @@ const savePeriods = async (d) => {
               const maxPollAttempts = 12;
               const maxFetchErrors = 3;
 
-              // Helper: process ads data response (works for both complete and partial)
-              const processAdsData = (data) => {
+              // Helper: write daily ad spend/revenue to allDaysData
+              // ONLY call on 'complete' responses — dailyData aggregates SP+SB+SD,
+              // so partial responses would overwrite previous batches' data.
+              const writeDailyData = (data) => {
                 if (!data?.dailyData || Object.keys(data.dailyData).length === 0) return;
                 let adsDaysUpdated = 0;
 
@@ -12052,42 +12054,43 @@ const savePeriods = async (d) => {
                   try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch (e) { devWarn('[AutoSync] Failed to persist ads data to localStorage'); }
                   return updated;
                 });
+              };
 
-                if (data.reports) {
-                  setAdsIntelData(prev => {
-                    const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
-                    if (data.reports.dailyOverview) updated._apiDailyOverview = data.reports.dailyOverview;
-                    if (data.reports.spCampaigns) updated._apiSpCampaigns = data.reports.spCampaigns;
-                    if (data.reports.spSearchTerms) updated._apiSpSearchTerms = data.reports.spSearchTerms;
-                    if (data.reports.spAdvertised) updated._apiSpAdvertised = data.reports.spAdvertised;
-                    if (data.reports.spPlacement) updated._apiSpPlacement = data.reports.spPlacement;
-                    if (data.reports.spTargeting) updated._apiSpTargeting = data.reports.spTargeting;
-                    if (data.reports.sbSearchTerms) updated._apiSbSearchTerms = data.reports.sbSearchTerms;
-                    if (data.reports.sdCampaign) updated._apiSdCampaign = data.reports.sdCampaign;
-                    if (data.skuSummary) updated.skuAdPerformance = data.skuSummary;
-                    if (data.campaigns) updated.campaignSummary = data.campaigns;
-                    updated.apiSyncSummary = data.summary;
+              // Helper: write per-report-type intel data (safe on partial — keyed by type, no overwrites)
+              const writeIntelData = (data) => {
+                if (!data?.reports) return;
+                setAdsIntelData(prev => {
+                  const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
+                  if (data.reports.dailyOverview) updated._apiDailyOverview = data.reports.dailyOverview;
+                  if (data.reports.spCampaigns) updated._apiSpCampaigns = data.reports.spCampaigns;
+                  if (data.reports.spSearchTerms) updated._apiSpSearchTerms = data.reports.spSearchTerms;
+                  if (data.reports.spAdvertised) updated._apiSpAdvertised = data.reports.spAdvertised;
+                  if (data.reports.spPlacement) updated._apiSpPlacement = data.reports.spPlacement;
+                  if (data.reports.spTargeting) updated._apiSpTargeting = data.reports.spTargeting;
+                  if (data.reports.sbSearchTerms) updated._apiSbSearchTerms = data.reports.sbSearchTerms;
+                  if (data.reports.sdCampaign) updated._apiSdCampaign = data.reports.sdCampaign;
+                  if (data.skuSummary) updated.skuAdPerformance = data.skuSummary;
+                  if (data.campaigns) updated.campaignSummary = data.campaigns;
+                  updated.apiSyncSummary = data.summary;
 
-                    const toIntelFormat = (rows, label) => {
-                      if (!rows || !rows.length) return null;
-                      return { records: rows, headers: Object.keys(rows[0] || {}), meta: { label, uploadedAt: new Date().toISOString(), source: 'amazon-ads-api', rowCount: rows.length } };
-                    };
+                  const toIntelFormat = (rows, label) => {
+                    if (!rows || !rows.length) return null;
+                    return { records: rows, headers: Object.keys(rows[0] || {}), meta: { label, uploadedAt: new Date().toISOString(), source: 'amazon-ads-api', rowCount: rows.length } };
+                  };
 
-                    if (!updated.amazon) updated.amazon = {};
-                    const rpts = data.reports;
-                    if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
-                    if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
-                    if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
-                    if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
-                    if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
-                    if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
-                    if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
-                    else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                  if (!updated.amazon) updated.amazon = {};
+                  const rpts = data.reports;
+                  if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
+                  if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
+                  if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
+                  if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
+                  if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
+                  if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
+                  if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
+                  else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
 
-                    return updated;
-                  });
-                }
-
+                  return updated;
+                });
                 queueCloudSave({ ...combinedData });
               };
 
@@ -12115,18 +12118,21 @@ const savePeriods = async (d) => {
                   break;
                 }
 
-                // Server returns partial data: some reports downloaded, others still generating
-                // Process what we have immediately and continue polling for the rest
-                if (adsData.status === 'partial' && adsData.dailyData) {
-                  processAdsData(adsData);
-                  console.log(`[AutoSync] Amazon Ads: partial data saved, ${adsData.pendingReports?.length || 0} reports still generating`);
+                // Server returns partial data: some reports downloaded, others still generating.
+                // Save per-report intel data (keyed by type — safe to accumulate) but NOT
+                // dailyData (it's an aggregate of SP+SB+SD that would overwrite previous batches).
+                // pendingReports includes ALL IDs (pending + completed), so the next call will
+                // re-download everything and build the full dailyData.
+                if (adsData.status === 'partial') {
+                  writeIntelData(adsData);
+                  console.log(`[AutoSync] Amazon Ads: partial intel saved, ${adsData.pendingReports?.length || 0} reports for next poll`);
                   if (adsData.pendingReports?.length > 0) {
                     adsSyncBody.pendingReports = adsData.pendingReports;
                     pollAttempts++;
                     await new Promise(r => setTimeout(r, 5000));
                     continue;
                   }
-                  break; // All done (partial was the final batch)
+                  break;
                 }
 
                 // Server still polling — no data yet
@@ -12140,8 +12146,9 @@ const savePeriods = async (d) => {
                 break; // Complete or error
               }
 
-              if (adsData?.success && adsData?.dailyData) {
-                processAdsData(adsData);
+              if (adsData?.success && adsData?.dailyData && adsData.status !== 'partial') {
+                writeDailyData(adsData);
+                writeIntelData(adsData);
                 // All reports finished — clear pending and update timestamp
                 setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString(), adsPendingReports: null }));
                 console.log(`[AutoSync] Amazon Ads COMPLETE: ${adsData.summary?.daysWithData} days, $${adsData.summary?.totalSpend?.toFixed(0)} spend, ${adsData.summary?.campaignCount} campaigns, ${adsData.summary?.skuCount} SKUs`);

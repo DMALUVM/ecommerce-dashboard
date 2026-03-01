@@ -847,11 +847,15 @@ export default async function handler(req, res) {
       errors: errors.length > 0 ? errors.map(r => ({ type: r.reportKey, label: r.label, error: r.error })) : undefined,
     };
 
-    // Include remaining pending report IDs so the client can resume polling on next cycle
+    // Include remaining pending report IDs so the client can resume polling on next cycle.
+    // IMPORTANT: Include ALL report IDs (pending + completed) so the next call re-downloads
+    // everything and builds the FULL dailyData aggregate. dailyData combines SP+SB+SD spend —
+    // if the client only sends back pending IDs, the final response would only have data from
+    // the late-finishing reports, producing a sparse/incomplete daily breakdown.
     if (isPartial) {
-      response.pendingReports = pending.map(r => ({
+      response.pendingReports = [...pending, ...completed].map(r => ({
         reportId: r.reportId, reportKey: r.reportKey, label: r.label,
-        status: r.status,
+        status: r.status, downloadUrl: r.downloadUrl,
       }));
     }
 

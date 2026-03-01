@@ -2345,10 +2345,11 @@ const SettingsView = ({
                           throw new Error(`Ads sync failed after ${fetchErrors} network errors — Amazon reports may still be generating. Try again in a minute.`);
                         }
 
-                        // Partial: server returned data for completed reports + pending IDs for the rest
-                        if (data.status === 'partial' && data.dailyData) {
-                          // Process what we got, then keep polling remaining reports
-                          processAdsResponse(data);
+                        // Partial: save per-report intel data (keyed by type, safe to accumulate)
+                        // but NOT dailyData (aggregate of SP+SB+SD — would overwrite other batches).
+                        // pendingReports includes ALL IDs, so next call re-downloads everything.
+                        if (data.status === 'partial') {
+                          writeIntelData(data);
                           if (data.pendingReports?.length > 0) {
                             syncBody.pendingReports = data.pendingReports;
                             pollAttempts++;
@@ -2367,8 +2368,43 @@ const SettingsView = ({
                         break;
                       }
 
-                      // Helper: write daily + intel data from any response that has dailyData
-                      function processAdsResponse(d) {
+                      // Helper: write per-report-type intel data (safe on partial — keyed by type)
+                      function writeIntelData(d) {
+                        if (!d?.reports || !setAdsIntelData) return;
+                        setAdsIntelData(prev => {
+                          const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
+                          if (d.reports.dailyOverview) updated._apiDailyOverview = d.reports.dailyOverview;
+                          if (d.reports.spCampaigns) updated._apiSpCampaigns = d.reports.spCampaigns;
+                          if (d.reports.spSearchTerms) updated._apiSpSearchTerms = d.reports.spSearchTerms;
+                          if (d.reports.spAdvertised) updated._apiSpAdvertised = d.reports.spAdvertised;
+                          if (d.reports.spPlacement) updated._apiSpPlacement = d.reports.spPlacement;
+                          if (d.reports.spTargeting) updated._apiSpTargeting = d.reports.spTargeting;
+                          if (d.reports.sbSearchTerms) updated._apiSbSearchTerms = d.reports.sbSearchTerms;
+                          if (d.reports.sdCampaign) updated._apiSdCampaign = d.reports.sdCampaign;
+                          if (d.skuSummary) updated.skuAdPerformance = d.skuSummary;
+                          if (d.campaigns) updated.campaignSummary = d.campaigns;
+                          updated.apiSyncSummary = d.summary;
+                          const toIntelFormat = (rows, label) => {
+                            if (!rows || !rows.length) return null;
+                            return { records: rows, headers: Object.keys(rows[0] || {}), meta: { label, uploadedAt: new Date().toISOString(), source: 'amazon-ads-api', rowCount: rows.length } };
+                          };
+                          if (!updated.amazon) updated.amazon = {};
+                          const rpts = d.reports;
+                          if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
+                          if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
+                          if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
+                          if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
+                          if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
+                          if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
+                          if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
+                          else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
+                          return updated;
+                        });
+                        if (queueCloudSave) queueCloudSave();
+                      }
+
+                      // Helper: write daily ad spend/revenue to allDaysData
+                      function writeDailyData(d) {
                         if (!d?.dailyData) return;
                         setAllDaysData(prev => {
                           const updated = { ...prev };
@@ -2395,50 +2431,19 @@ const SettingsView = ({
                           try { localStorage.setItem('ecommerce_daily_sales_v1', JSON.stringify(updated)); } catch(e) {}
                           return updated;
                         });
-                        if (setAdsIntelData && d.reports) {
-                          setAdsIntelData(prev => {
-                            const updated = { ...(prev || {}), lastUpdated: new Date().toISOString(), source: 'amazon-ads-api' };
-                            if (d.reports.dailyOverview) updated._apiDailyOverview = d.reports.dailyOverview;
-                            if (d.reports.spCampaigns) updated._apiSpCampaigns = d.reports.spCampaigns;
-                            if (d.reports.spSearchTerms) updated._apiSpSearchTerms = d.reports.spSearchTerms;
-                            if (d.reports.spAdvertised) updated._apiSpAdvertised = d.reports.spAdvertised;
-                            if (d.reports.spPlacement) updated._apiSpPlacement = d.reports.spPlacement;
-                            if (d.reports.spTargeting) updated._apiSpTargeting = d.reports.spTargeting;
-                            if (d.reports.sbSearchTerms) updated._apiSbSearchTerms = d.reports.sbSearchTerms;
-                            if (d.reports.sdCampaign) updated._apiSdCampaign = d.reports.sdCampaign;
-                            if (d.skuSummary) updated.skuAdPerformance = d.skuSummary;
-                            if (d.campaigns) updated.campaignSummary = d.campaigns;
-                            updated.apiSyncSummary = d.summary;
-                            const toIntelFormat = (rows, label) => {
-                              if (!rows || !rows.length) return null;
-                              return { records: rows, headers: Object.keys(rows[0] || {}), meta: { label, uploadedAt: new Date().toISOString(), source: 'amazon-ads-api', rowCount: rows.length } };
-                            };
-                            if (!updated.amazon) updated.amazon = {};
-                            const rpts = d.reports;
-                            if (rpts.spSearchTerms?.length) updated.amazon.sp_search_terms = toIntelFormat(rpts.spSearchTerms, 'SP Search Terms (API)');
-                            if (rpts.spAdvertised?.length) updated.amazon.sp_advertised_product = toIntelFormat(rpts.spAdvertised, 'SP Advertised Product (API)');
-                            if (rpts.spPlacement?.length) updated.amazon.sp_placement = toIntelFormat(rpts.spPlacement, 'SP Placement (API)');
-                            if (rpts.spTargeting?.length) updated.amazon.sp_targeting = toIntelFormat(rpts.spTargeting, 'SP Targeting (API)');
-                            if (rpts.sbSearchTerms?.length) updated.amazon.sb_search_terms = toIntelFormat(rpts.sbSearchTerms, 'SB Search Terms (API)');
-                            if (rpts.sdCampaign?.length) updated.amazon.sd_campaigns = toIntelFormat(rpts.sdCampaign, 'SD Campaigns (API)');
-                            if (rpts.spCampaigns?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.spCampaigns, 'SP Campaigns (API)');
-                            else if (rpts.dailyOverview?.length) updated.amazon.sp_campaigns = toIntelFormat(rpts.dailyOverview, 'SP Campaigns Daily (API)');
-                            return updated;
-                          });
-                        }
                         if (queueCloudSave) queueCloudSave();
                       }
 
-                      if (data?.success && data?.dailyData) {
-                        processAdsResponse(data);
+                      if (data?.success && data?.dailyData && data.status !== 'partial') {
+                        writeDailyData(data);
+                        writeIntelData(data);
                         setAmazonCredentials(prev => ({ ...prev, adsLastSync: new Date().toISOString(), adsPendingReports: null }));
 
                         const rc = data.summary?.reportCounts || {};
                         const elapsed = Math.round((Date.now() - startTime) / 1000);
                         const parts = [`${data.summary.daysWithData} days`, `$${data.summary.totalSpend.toFixed(0)} spend`, `${data.summary.campaignCount} campaigns`, `${data.summary.skuCount || 0} SKUs`];
                         if (rc.spSearchTerms) parts.push(`${rc.spSearchTerms} search terms`);
-                        const statusLabel = data.status === 'partial' ? 'Partial sync' : 'Ads synced';
-                        setToast({ message: `${statusLabel} in ${elapsed}s: ${parts.join(' · ')}`, type: 'success' });
+                        setToast({ message: `Ads synced in ${elapsed}s: ${parts.join(' · ')}`, type: 'success' });
                       } else if (data?.status === 'pending') {
                         setAmazonCredentials(prev => ({ ...prev, adsLastSync: new Date().toISOString(), adsPendingReports: data.pendingReports || null }));
                         setToast({ message: 'Reports still generating — will complete on next sync', type: 'info' });
