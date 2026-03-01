@@ -443,16 +443,19 @@ export default async function handler(req, res) {
       pending.splice(0, pending.length, ...pending.filter(r => !doneIds.has(r.reportId)));
     }
 
-    // Return pending state if still waiting
-    if (pending.length > 0) {
+    // If some reports completed but others are still pending, download what we have.
+    // The client will get partial data now and can poll the remaining reports next cycle.
+    // Previously, ALL completed reports were thrown away when ANY were still pending.
+    if (pending.length > 0 && completed.length === 0) {
+      // Nothing ready yet — just tell client to retry
       return res.status(200).json({
         success: true, status: 'pending',
-        message: `${completed.length} ready, ${pending.length} generating`,
-        completedCount: completed.length,
-        totalCount: completed.length + pending.length,
-        pendingReports: [...pending, ...completed].map(r => ({
+        message: `0 ready, ${pending.length} generating`,
+        completedCount: 0,
+        totalCount: pending.length,
+        pendingReports: pending.map(r => ({
           reportId: r.reportId, reportKey: r.reportKey, label: r.label,
-          status: r.status, downloadUrl: r.downloadUrl,
+          status: r.status,
         })),
       });
     }
@@ -814,12 +817,13 @@ export default async function handler(req, res) {
       reportCounts[key] = Array.isArray(rows) ? rows.length : 0;
     }
 
-    console.log(`[AdsSync] Complete: ${dates.length} days, ${totalRows} rows, ${campaigns.length} campaigns, ${skuSummary.length} SKUs, $${totals.spend.toFixed(2)} spend`);
+    const isPartial = pending.length > 0;
+    console.log(`[AdsSync] ${isPartial ? 'Partial' : 'Complete'}: ${dates.length} days, ${totalRows} rows, ${campaigns.length} campaigns, ${skuSummary.length} SKUs, $${totals.spend.toFixed(2)} spend${isPartial ? ` (${pending.length} reports still generating)` : ''}`);
 
-    return res.status(200).json({
+    const response = {
       success: true,
       syncType: 'daily',
-      status: 'complete',
+      status: isPartial ? 'partial' : 'complete',
       summary: {
         dateRange: { start: dates[0] || startStr, end: dates[dates.length - 1] || endStr },
         daysWithData: dates.length,
@@ -841,6 +845,16 @@ export default async function handler(req, res) {
       campaigns,
       reports: transformedReports,
       errors: errors.length > 0 ? errors.map(r => ({ type: r.reportKey, label: r.label, error: r.error })) : undefined,
-    });
+    };
+
+    // Include remaining pending report IDs so the client can resume polling on next cycle
+    if (isPartial) {
+      response.pendingReports = pending.map(r => ({
+        reportId: r.reportId, reportKey: r.reportKey, label: r.label,
+        status: r.status,
+      }));
+    }
+
+    return res.status(200).json(response);
   }
 }
