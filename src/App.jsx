@@ -12096,7 +12096,7 @@ const savePeriods = async (d) => {
 
               while (pollAttempts < maxPollAttempts && fetchErrors < maxFetchErrors) {
                 const adsController = new AbortController();
-                const adsTimeoutId = setTimeout(() => adsController.abort(), 120000);
+                const adsTimeoutId = setTimeout(() => adsController.abort(), 130000);
                 try {
                   const adsRes = await fetch('/api/amazon/ads-sync', {
                     method: 'POST',
@@ -12105,13 +12105,23 @@ const savePeriods = async (d) => {
                     signal: adsController.signal,
                   });
                   clearTimeout(adsTimeoutId);
+                  if (!adsRes.ok) {
+                    // Server returned an HTTP error (e.g. 504 gateway timeout)
+                    const errText = await adsRes.text().catch(() => '');
+                    throw new Error(`HTTP ${adsRes.status}: ${errText.slice(0, 200) || adsRes.statusText}`);
+                  }
                   adsData = await adsRes.json();
+                  fetchErrors = 0; // Reset on success — only consecutive errors should count
                 } catch (fetchErr) {
                   clearTimeout(adsTimeoutId);
                   fetchErrors++;
-                  console.warn(`[AutoSync] Amazon Ads fetch error ${fetchErrors}/${maxFetchErrors}:`, fetchErr.message);
+                  const isTimeout = fetchErr.name === 'AbortError' || fetchErr.name === 'TimeoutError';
+                  console.warn(`[AutoSync] Amazon Ads ${isTimeout ? 'timeout' : 'fetch error'} ${fetchErrors}/${maxFetchErrors}:`, fetchErr.message);
                   if (fetchErrors < maxFetchErrors) {
-                    await new Promise(r => setTimeout(r, 5000));
+                    // Exponential backoff: 10s, 20s, 40s
+                    const backoff = 10000 * Math.pow(2, fetchErrors - 1);
+                    console.log(`[AutoSync] Retrying in ${backoff / 1000}s...`);
+                    await new Promise(r => setTimeout(r, backoff));
                     continue;
                   }
                   console.error('[AutoSync] Amazon Ads: too many fetch errors, giving up');

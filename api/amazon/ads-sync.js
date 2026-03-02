@@ -33,6 +33,13 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  // Self-imposed deadline: return a response before Vercel kills us at 120s.
+  // Leaving 12s of headroom for final JSON serialization + network flush.
+  const FUNCTION_START = Date.now();
+  const DEADLINE_MS = 108_000; // 108s — must respond before Vercel's 120s limit
+  const timeRemaining = () => DEADLINE_MS - (Date.now() - FUNCTION_START);
+  const isNearDeadline = () => timeRemaining() < 8_000; // <8s left → stop new work
+
   const {
     adsClientId,
     adsClientSecret,
@@ -307,6 +314,10 @@ export default async function handler(req, res) {
       const createdReports = [];
 
       for (const spec of REPORT_SPECS) {
+        if (isNearDeadline()) {
+          console.log(`[AdsSync] Deadline approaching after ${Math.round((Date.now() - FUNCTION_START) / 1000)}s — skipping remaining report creation`);
+          break;
+        }
         try {
           const body = {
             startDate: startStr,
@@ -410,6 +421,11 @@ export default async function handler(req, res) {
     const maxPolls = pending.length > 0 && completed.length > 0 ? 8 : 14;
     let polls = 0;
     while (pending.length > 0 && polls < maxPolls) {
+      // Deadline check: stop polling and return what we have before Vercel kills us
+      if (isNearDeadline()) {
+        console.log(`[AdsSync] Deadline approaching (${Math.round(timeRemaining() / 1000)}s left) — stopping poll loop`);
+        break;
+      }
       polls++;
       await new Promise(r => setTimeout(r, 3000));
 
@@ -466,9 +482,12 @@ export default async function handler(req, res) {
     // Parallel downloads: ~10s total regardless of report count.
     const rawData = {}; // reportKey → array of raw JSON rows
 
+    // Cap download timeout to time remaining (with 5s headroom for transform + response)
+    const dlTimeout = Math.min(30000, Math.max(5000, timeRemaining() - 5000));
+
     const downloadResults = await Promise.allSettled(
       completed.filter(rpt => rpt.downloadUrl).map(async (rpt) => {
-        const dlRes = await fetch(rpt.downloadUrl, { signal: AbortSignal.timeout(30000) });
+        const dlRes = await fetch(rpt.downloadUrl, { signal: AbortSignal.timeout(dlTimeout) });
         if (!dlRes.ok) throw new Error(`Download ${dlRes.status}`);
 
         let jsonText;
