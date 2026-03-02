@@ -11975,7 +11975,7 @@ const savePeriods = async (d) => {
               console.log('[AutoSync] Amazon Ads: starting background sync (non-blocking)...');
               const adsSyncBody = {
                 syncType: 'daily',
-                daysBack: 60,
+                daysBack: 30,
                 adsClientId: amazonCredentials.adsClientId,
                 adsClientSecret: amazonCredentials.adsClientSecret,
                 adsRefreshToken: amazonCredentials.adsRefreshToken,
@@ -11985,14 +11985,32 @@ const savePeriods = async (d) => {
               let adsData = null;
               let adsRetries = 0;
               const maxAdsRetries = 6;
-              
+              const maxFetchRetries = 3;
+
+              // Helper: fetch with retry for network-level failures (timeout, CORS, connection reset)
+              const adsFetchWithRetry = async (body) => {
+                for (let attempt = 1; attempt <= maxFetchRetries; attempt++) {
+                  try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 130000); // 130s — just above Vercel's 120s max
+                    const r = await fetch('/api/amazon/ads-sync', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(body),
+                      signal: controller.signal,
+                    });
+                    clearTimeout(timeout);
+                    return await r.json();
+                  } catch (fetchErr) {
+                    console.warn(`[AutoSync] Amazon Ads fetch error ${attempt}/${maxFetchRetries}: ${fetchErr.message}`);
+                    if (attempt === maxFetchRetries) throw fetchErr;
+                    await new Promise(r => setTimeout(r, 5000 * attempt)); // 5s, 10s backoff
+                  }
+                }
+              };
+
               while (adsRetries < maxAdsRetries) {
-                const adsRes = await fetch('/api/amazon/ads-sync', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(adsSyncBody),
-                });
-                adsData = await adsRes.json();
+                adsData = await adsFetchWithRetry(adsSyncBody);
                 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
                   console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 20s...`);
