@@ -397,7 +397,24 @@ export default async function handler(req, res) {
         return res.status(200).json({ success: false, error: 'No reports could be created. Check your Profile ID and that campaigns exist.', details: createdReports });
       }
 
-      return await pollDownloadTransform(token, createdReports, startStr, endStr, res);
+      // Return created reports immediately — don't try to poll/download in the same
+      // invocation.  Report creation alone takes ~30s (8 reports × ~3-4s each).
+      // Polling + downloading + transforming in the remaining ~80s was the main cause
+      // of Vercel 120s timeouts.  The client already handles 'pending' responses and
+      // will re-call with pendingReports to do the poll/download phase separately.
+      const withReportIds = createdReports.filter(r => r.reportId);
+      console.log(`[AdsSync] ${withReportIds.length} reports created — returning for client to poll`);
+      return res.status(200).json({
+        success: true,
+        status: 'pending',
+        message: `${withReportIds.length} reports created, awaiting generation`,
+        completedCount: 0,
+        totalCount: withReportIds.length,
+        pendingReports: withReportIds.map(r => ({
+          reportId: r.reportId, reportKey: r.reportKey, label: r.label,
+          status: r.status,
+        })),
+      });
 
     } catch (err) {
       console.error('[AdsSync] Error:', err);
