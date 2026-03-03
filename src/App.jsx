@@ -12728,12 +12728,15 @@ const savePeriods = async (d) => {
                 // Update inventory snapshot with Packiyo data + recalculated velocities
                 if (data.inventoryBySku) {
                   const todayStr = new Date().toISOString().split('T')[0];
-                  const targetDate = invHistory[todayStr] ? todayStr :
+                  // Always save under today's date.  Use today's snapshot if it exists,
+                  // otherwise clone from selectedInvDate or latest as the starting base.
+                  const sourceDate = invHistory[todayStr] ? todayStr :
                     (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
                     Object.keys(invHistory).sort().reverse()[0];
-                  
-                  if (targetDate && invHistory[targetDate]) {
-                    const currentSnapshot = invHistory[targetDate];
+                  const targetDate = todayStr;
+
+                  if (sourceDate && invHistory[sourceDate]) {
+                    const currentSnapshot = invHistory[sourceDate];
                     const packiyoData = data.inventoryBySku;
                     const today = new Date();
                     const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
@@ -13005,12 +13008,15 @@ const savePeriods = async (d) => {
       if ((freshAmazonFbaData || freshHomeInvData) && !fbaDataMergedIntoSnapshot) {
         try {
           const todayStr = new Date().toISOString().split('T')[0];
-          const targetDate = invHistory[todayStr] ? todayStr :
+          // Always save under today's date.  Use today's snapshot if it exists,
+          // otherwise clone from selectedInvDate or latest as the starting base.
+          const sourceDate = invHistory[todayStr] ? todayStr :
             (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
             Object.keys(invHistory).sort().reverse()[0];
-          
-          if (targetDate && invHistory[targetDate]) {
-            const currentSnapshot = invHistory[targetDate];
+          const targetDate = todayStr;
+
+          if (sourceDate && invHistory[sourceDate]) {
+            const currentSnapshot = invHistory[sourceDate];
             const today = new Date();
             const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
             const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
