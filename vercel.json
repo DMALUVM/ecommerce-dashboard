@@ -19,6 +19,10 @@
       "maxDuration": 120,
       "memory": 1024
     },
+    "api/amazon/ads-sync.js": {
+      "maxDuration": 120,
+      "memory": 1024
+    },
     "api/chat.js": {
       "maxDuration": 300,
       "memory": 1024

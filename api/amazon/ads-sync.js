@@ -81,6 +81,10 @@ export default async function handler(req, res) {
       'Amazon-Advertising-API-ClientId': adsClientId,
       'Content-Type': 'application/json',
     };
+    // v3 reporting endpoints require Accept header to get proper JSON responses
+    if (endpoint.startsWith('/reporting/')) {
+      headers['Accept'] = 'application/vnd.createasyncreport.v3+json';
+    }
     if (adsProfileId) headers['Amazon-Advertising-API-Scope'] = adsProfileId;
 
     const opts = { method, headers };
@@ -97,7 +101,12 @@ export default async function handler(req, res) {
           console.log(`[AdsSync] 429 throttled on ${endpoint}, retry ${attempt}/2 in ${Math.round(wait/1000)}s...`);
           await new Promise(r => setTimeout(r, wait));
           const retryRes = await fetch(`${ADS_BASE}${endpoint}`, opts);
-          if (retryRes.ok) return retryRes.json();
+          if (retryRes.ok) {
+            const retryCt = retryRes.headers.get('content-type') || '';
+            if (retryCt.includes('json')) return retryRes.json();
+            const retryText = await retryRes.text();
+            try { return JSON.parse(retryText); } catch { return retryText; }
+          }
           if (retryRes.status !== 429) {
             const retryErr = await retryRes.text();
             throw new Error(`Ads API ${retryRes.status}: ${retryErr.slice(0, 2000)}`);
@@ -116,7 +125,12 @@ export default async function handler(req, res) {
       throw new Error(`Ads API ${response.status}: ${errText.slice(0, 2000)}`);
     }
     const ct = response.headers.get('content-type') || '';
-    return ct.includes('application/json') ? response.json() : response.text();
+    // Amazon v3 reporting returns 'application/vnd.createasyncreport.v3+json'
+    // which does NOT contain 'application/json' — check for 'json' substring
+    if (ct.includes('json')) return response.json();
+    // Fallback: try parsing as JSON anyway (Amazon sometimes omits content-type)
+    const text = await response.text();
+    try { return JSON.parse(text); } catch { return text; }
   };
 
   // ============ TEST CONNECTION ============
@@ -426,8 +440,32 @@ export default async function handler(req, res) {
       );
 
       for (const result of pollResults) {
-        if (result.status !== 'fulfilled') continue;
+        if (result.status !== 'fulfilled') {
+          console.error(`[AdsSync] Poll request failed (poll ${polls}):`, result.reason?.message || result.reason);
+          continue;
+        }
         const { rpt, status } = result.value;
+        if (typeof status === 'string') {
+          // Response wasn't parsed as JSON — try parsing it now
+          try {
+            const parsed = JSON.parse(status);
+            if (parsed.status === 'COMPLETED') {
+              rpt.status = 'COMPLETED';
+              rpt.downloadUrl = parsed.url;
+              completed.push(rpt);
+              pending.splice(pending.indexOf(rpt), 1);
+              console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls}, ${((Date.now() - startTime) / 1000).toFixed(0)}s) [text-parsed]`);
+              continue;
+            } else if (parsed.status === 'FAILURE') {
+              rpt.status = 'ERROR';
+              rpt.error = parsed.statusDetails || 'Report failed';
+              errors.push(rpt);
+              pending.splice(pending.indexOf(rpt), 1);
+              continue;
+            }
+          } catch { console.warn(`[AdsSync] Poll returned unparseable text for ${rpt.label}`); }
+          continue;
+        }
         if (status.status === 'COMPLETED') {
           rpt.status = 'COMPLETED';
           rpt.downloadUrl = status.url;
