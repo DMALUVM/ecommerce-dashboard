@@ -963,14 +963,14 @@ const UploadView = ({
                   )}
                 </div>
                 
-                {/* 3PL / Packiyo */}
+                {/* 3PL / Ship Sidekick */}
                 <div className={`rounded-xl p-4 border ${packiyoCredentials.connected ? 'bg-violet-900/20 border-violet-500/30' : 'bg-slate-700/30 border-slate-600/50'}`}>
                   <div className="flex items-center gap-3 mb-3">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center ${packiyoCredentials.connected ? 'bg-violet-500/20' : 'bg-slate-600/50'}`}>
                       <Truck className={`w-5 h-5 ${packiyoCredentials.connected ? 'text-violet-400' : 'text-slate-400'}`} />
                     </div>
                     <div>
-                      <p className="text-white font-medium">3PL (Packiyo)</p>
+                      <p className="text-white font-medium">3PL (Ship Sidekick)</p>
                       <p className={`text-xs ${packiyoCredentials.connected ? 'text-violet-400' : 'text-slate-500'}`}>
                         {packiyoCredentials.connected ? 'Connected' : 'Not connected'}
                       </p>
@@ -1071,7 +1071,7 @@ const UploadView = ({
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FileBox type="amazon" label="Amazon FBA Inventory" desc="FBA Manage Inventory report" req isInv />
-                    <FileBox type="threepl" label="3PL Inventory" desc="Products export (if Packiyo not connected)" isInv />
+                    <FileBox type="threepl" label="3PL Inventory" desc="Products export (if Ship Sidekick not connected)" isInv />
                   </div>
                   
                   <button onClick={processInventory} disabled={isProcessing || (!invFiles.amazon && !amazonCredentials.connected) || !invSnapshotDate} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2">

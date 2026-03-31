@@ -373,9 +373,9 @@ const EMPTY_STATE_PRESETS = {
   '3pl': {
     icon: Database,
     title: 'No 3PL Data',
-    description: 'Upload your Packiyo or 3PL billing reports to track fulfillment costs by order and week.',
+    description: 'Upload your Ship Sidekick or 3PL billing reports to track fulfillment costs by order and week.',
     primaryAction: { label: 'Upload 3PL Data', icon: Upload },
-    secondaryAction: { label: 'Connect Packiyo', icon: Settings },
+    secondaryAction: { label: 'Connect Ship Sidekick', icon: Settings },
   },
   generic: {
     icon: FileText,

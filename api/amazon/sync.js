@@ -5,7 +5,7 @@
 // Supports FBA Inventory, AWD (Amazon Warehousing & Distribution), and Ads API
 //
 // IMPORTANT: This integration is ADDITIVE - it only syncs Amazon FBA and AWD inventory
-// It does NOT overwrite 3PL inventory (Packiyo) or Shopify Wormans Mill inventory
+// It does NOT overwrite 3PL inventory (Ship Sidekick) or Shopify Wormans Mill inventory
 //
 // Features:
 // - FBA Inventory levels with inbound quantities

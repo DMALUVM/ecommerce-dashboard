@@ -249,7 +249,7 @@ export default async function handler(req, res) {
             nameLower.includes('home') || nameLower.includes('office')) {
           locType = 'home';
         } else if (nameLower.includes('excel') || nameLower.includes('3pl') ||
-                   nameLower.includes('packiyo') || nameLower.includes('warehouse') ||
+                   nameLower.includes('packiyo') || nameLower.includes('shipsidekick') || nameLower.includes('warehouse') ||
                    nameLower.includes('fulfillment')) {
           locType = '3pl';
         }
@@ -267,7 +267,7 @@ export default async function handler(req, res) {
       });
      
       // FILTER: Only sync from home location (Wormans Mill), NOT 3PL
-      // 3PL inventory comes from Packiyo sync instead
+      // 3PL inventory comes from Ship Sidekick sync instead
       const homeLocations = allLocations.filter(loc => {
         const nameLower = loc.name.toLowerCase();
         return nameLower.includes('wormans') || nameLower.includes('worman') ||
@@ -279,7 +279,7 @@ export default async function handler(req, res) {
         const non3plLocations = allLocations.filter(loc => {
           const nameLower = loc.name.toLowerCase();
           return !nameLower.includes('excel') && !nameLower.includes('3pl') &&
-                 !nameLower.includes('packiyo') && !nameLower.includes('warehouse') &&
+                 !nameLower.includes('packiyo') && !nameLower.includes('shipsidekick') && !nameLower.includes('warehouse') &&
                  !nameLower.includes('fulfillment');
         });
         homeLocations.push(...non3plLocations);
@@ -454,7 +454,7 @@ export default async function handler(req, res) {
           skuCount: Object.keys(inventoryBySku).length,
           skippedNoSku, // Items without SKU cannot be matched across systems
           locationCount: locations.length,
-          note: '3PL inventory excluded - use Packiyo sync for 3PL',
+          note: '3PL inventory excluded - use Ship Sidekick sync for 3PL',
         },
         items: Object.values(inventoryBySku)
           .map(item => ({

@@ -88,29 +88,29 @@ export default async function handler(req, res) {
       }
     }
     
-    // Packiyo Sync - uses /api/packiyo/sync
-    if (packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY) {
+    // Ship Sidekick Sync - uses /api/shipsidekick/sync
+    if (packiyoCredentials?.apiKey || process.env.SHIPSIDEKICK_API_KEY) {
       try {
-        console.log('Syncing Packiyo...');
-        const packiyoRes = await fetch(`${baseUrl}/api/packiyo/sync`, {
+        console.log('Syncing Ship Sidekick...');
+        const sskRes = await fetch(`${baseUrl}/api/shipsidekick/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            syncType: 'inventory', // Use inventory for cron sync
-            apiKey: packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY,
-            customerId: packiyoCredentials?.customerId || process.env.PACKIYO_CUSTOMER_ID || '134',
-            baseUrl: packiyoCredentials?.baseUrl || 'https://excel3pl.packiyo.com/api/v1',
+            syncType: 'inventory',
+            apiKey: packiyoCredentials?.apiKey || process.env.SHIPSIDEKICK_API_KEY,
+            clientSlug: packiyoCredentials?.clientSlug || process.env.SHIPSIDEKICK_CLIENT_SLUG || '',
+            baseUrl: packiyoCredentials?.baseUrl || 'https://www.shipsidekick.com/api/v1',
           }),
         });
-        const data = await packiyoRes.json();
+        const data = await sskRes.json();
         results.push({
-          service: 'Packiyo',
-          success: !data.error && packiyoRes.ok,
+          service: 'Ship Sidekick',
+          success: !data.error && sskRes.ok,
           skus: data.summary?.skuCount || data.products?.length || 0,
           error: data.error,
         });
       } catch (err) {
-        results.push({ service: 'Packiyo', success: false, error: err.message });
+        results.push({ service: 'Ship Sidekick', success: false, error: err.message });
       }
     }
     

@@ -76,7 +76,7 @@ const UploadHelpModal = ({ showUploadHelp, setShowUploadHelp }) => {
           
           <HelpSection 
             icon={<Truck className="w-5 h-5" />}
-            title="3PL Inventory (Packiyo)"
+            title="3PL Inventory (Ship Sidekick)"
             color="amber"
             steps={[
               'Go to Inventory → Products',

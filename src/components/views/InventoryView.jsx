@@ -327,17 +327,17 @@ const InventoryView = ({
   })();
   
   // RECALCULATE health, daysOfSupply, and dates dynamically based on current date
-  // If data comes from a recent API sync (Packiyo), use that date to avoid double-subtracting sales
+  // If data comes from a recent API sync (Ship Sidekick), use that date to avoid double-subtracting sales
   const today = new Date();
   
   // Check if we have recent API sync data
-  const lastPackiyoSync = data.sources?.lastPackiyoSync ? new Date(data.sources.lastPackiyoSync) : null;
+  const lastShipsidekickSync = data.sources?.lastShipsidekickSync ? new Date(data.sources.lastShipsidekickSync) : null;
   const lastAmazonSync = data.sources?.lastAmazonSync ? new Date(data.sources.lastAmazonSync) : null;
   
-  // Use the most recent sync date (Packiyo or Amazon), falling back to snapshot date
+  // Use the most recent sync date (Ship Sidekick or Amazon), falling back to snapshot date
   let effectiveDataDate = new Date(selectedInvDate + 'T12:00:00');
-  if (lastPackiyoSync && lastPackiyoSync > effectiveDataDate) {
-    effectiveDataDate = lastPackiyoSync;
+  if (lastShipsidekickSync && lastShipsidekickSync > effectiveDataDate) {
+    effectiveDataDate = lastShipsidekickSync;
   }
   if (lastAmazonSync && lastAmazonSync > effectiveDataDate) {
     effectiveDataDate = lastAmazonSync;

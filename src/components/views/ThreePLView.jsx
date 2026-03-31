@@ -319,7 +319,7 @@ const ThreePLView = ({
               </button>
               <div className="text-slate-500 text-sm">
                 <p>Upload multiple 3PL Excel files at once</p>
-                <p>Supports .xlsx format from Packiyo • Auto-deduplication</p>
+                <p>Supports .xlsx format from Ship Sidekick • Auto-deduplication</p>
               </div>
             </div>
           </div>

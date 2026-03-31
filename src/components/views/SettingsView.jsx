@@ -470,11 +470,11 @@ const SettingsView = ({
             </div>
           </div>
           
-          {/* 3PL / Packiyo Inventory Alerts */}
+          {/* 3PL / Ship Sidekick Inventory Alerts */}
           <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-4 mb-4">
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-cyan-400 font-medium flex items-center gap-2">
-                📦 3PL / Packiyo Inventory
+                📦 3PL / Ship Sidekick Inventory
               </h4>
               <label className="flex items-center gap-2">
                 <input 
@@ -1084,9 +1084,9 @@ const SettingsView = ({
           )}
         </SettingSection>
         
-        {/* Packiyo 3PL Connection */}
-        <SettingSection title="📦 Packiyo 3PL Connection">
-          <p className="text-slate-400 text-sm mb-4">Connect directly to Packiyo for accurate 3PL inventory (Excel3PL)</p>
+        {/* Ship Sidekick 3PL Connection */}
+        <SettingSection title="📦 Ship Sidekick 3PL Connection">
+          <p className="text-slate-400 text-sm mb-4">Connect directly to Ship Sidekick for accurate 3PL inventory</p>
           
           {packiyoCredentials.connected ? (
             <div className="space-y-4">
@@ -1097,8 +1097,8 @@ const SettingsView = ({
                       <Check className="w-5 h-5 text-emerald-400" />
                     </div>
                     <div>
-                      <p className="text-emerald-400 font-medium">Connected to Excel3PL</p>
-                      <p className="text-slate-400 text-sm">{packiyoCredentials.customerName || 'Packiyo'}</p>
+                      <p className="text-emerald-400 font-medium">Connected to Ship Sidekick</p>
+                      <p className="text-slate-400 text-sm">{packiyoCredentials.customerName || 'Ship Sidekick'}</p>
                       {packiyoCredentials.lastSync && (
                         <p className="text-slate-500 text-xs">Last sync: {new Date(packiyoCredentials.lastSync).toLocaleString()}</p>
                       )}
@@ -1106,10 +1106,10 @@ const SettingsView = ({
                   </div>
                   <button
                     onClick={() => {
-                      if (confirm('Disconnect from Packiyo? Your synced inventory will remain.')) {
-                        setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
+                      if (confirm('Disconnect from Ship Sidekick? Your synced inventory will remain.')) {
+                        setPackiyoCredentials({ apiKey: '', clientSlug: '', baseUrl: 'https://www.shipsidekick.com/api/v1', connected: false, lastSync: null, customerName: '' });
                         setPackiyoInventoryData(null);
-                        setToast({ message: 'Packiyo disconnected', type: 'success' });
+                        setToast({ message: 'Ship Sidekick disconnected', type: 'success' });
                       }
                     }}
                     className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
@@ -1120,17 +1120,17 @@ const SettingsView = ({
               </div>
               
               {/* Sync Inventory Button */}
-              <SettingRow label="Sync 3PL Inventory" desc="Pull latest inventory from Packiyo and update inventory">
+              <SettingRow label="Sync 3PL Inventory" desc="Pull latest inventory from Ship Sidekick and update inventory">
                 <button
                   onClick={async () => {
                     setPackiyoInventoryStatus({ loading: true, error: null, lastSync: null });
                     try {
-                      const res = await fetch('/api/packiyo/sync', {
+                      const res = await fetch('/api/shipsidekick/sync', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                           apiKey: packiyoCredentials.apiKey,
-                          customerId: packiyoCredentials.customerId,
+                          clientSlug: packiyoCredentials.clientSlug,
                           baseUrl: packiyoCredentials.baseUrl,
                           syncType: 'inventory',
                         }),
@@ -1164,7 +1164,7 @@ const SettingsView = ({
                       const skuCount = data.summary?.skuCount || data.summary?.productsWithSku || 0;
                       const totalValue = data.summary?.totalValue || 0;
                       setToast({ 
-                        message: `Synced ${skuCount} SKUs from Packiyo (${formatCurrency(totalValue)} value)`, 
+                        message: `Synced ${skuCount} SKUs from Ship Sidekick (${formatCurrency(totalValue)} value)`, 
                         type: 'success' 
                       });
                       
@@ -1424,7 +1424,7 @@ const SettingsView = ({
                         return { amazon, shopify, total, corrected, correctionApplied, trend };
                       };
                       
-                      // Update current inventory snapshot with fresh Packiyo 3PL data
+                      // Update current inventory snapshot with fresh Ship Sidekick 3PL data
                       const today = new Date().toISOString().split('T')[0];
                       
                       // Find the best snapshot to update: today's, selected, or most recent
@@ -1468,7 +1468,7 @@ const SettingsView = ({
                           // Normalize the item SKU the same way
                           const normalizedItemSku = normalizeSkuKey(item.sku);
                           
-                          // Look up in normalized Packiyo lookup
+                          // Look up in normalized Ship Sidekick lookup
                           let packiyoItem = packiyoLookup[normalizedItemSku];
                           
                           // Handle both snake_case and camelCase field names
@@ -1560,8 +1560,8 @@ const SettingsView = ({
                         });
                         
                         
-                        // If no matches were found, we need to add Packiyo items as new items
-                        // Filter out 0-qty items (digital products) from Packiyo
+                        // If no matches were found, we need to add Ship Sidekick items as new items
+                        // Filter out 0-qty items (digital products) from Ship Sidekick
                         const physicalPackiyoItems = Object.entries(packiyoData)
                           .filter(([sku, item]) => {
                             const qty = item.quantityOnHand || item.quantity_on_hand || item.totalQty || 0;
@@ -1576,7 +1576,7 @@ const SettingsView = ({
                           .filter((entry, idx, arr) => arr.findIndex(e => e[0] === entry[0]) === idx);
                         
                         
-                        // If no matches, add Packiyo items directly
+                        // If no matches, add Ship Sidekick items directly
                         if (matchedCount === 0 && physicalPackiyoItems.length > 0) {
                           
                           // Reset totals since we're creating fresh
@@ -1588,7 +1588,7 @@ const SettingsView = ({
                           const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
                           const defaultLeadTime = leadTimeSettings.defaultLeadTimeDays || 14;
                           
-                          // Create new items from Packiyo physical products
+                          // Create new items from Ship Sidekick physical products
                           const packiyoOnlyItems = physicalPackiyoItems.map(([normalizedSku, item]) => {
                             const qty = item.quantityOnHand || item.quantity_on_hand || item.totalQty || 0;
                             const cost = item.cost || savedCogs[normalizedSku] || savedCogs[normalizedSku + 'Shop'] || 0;
@@ -1631,7 +1631,7 @@ const SettingsView = ({
                               totalQty: qty,
                               cost,
                               totalValue: qty * cost,
-                              source: 'packiyo',
+                              source: 'shipsidekick',
                               weeklyVel,
                               rawWeeklyVel,
                               amzWeeklyVel,
@@ -1656,7 +1656,7 @@ const SettingsView = ({
                           updatedItems.length = 0;
                           updatedItems.push(...combinedItems);
                         } else if (matchedCount < physicalPackiyoItems.length) {
-                          // Some Packiyo items weren't matched - add them as new items
+                          // Some Ship Sidekick items weren't matched - add them as new items
                           const matchedSkus = new Set(updatedItems.filter(i => i.threeplQty > 0).map(i => normalizeSkuKey(i.sku)));
                           
                           const today = new Date();
@@ -1708,7 +1708,7 @@ const SettingsView = ({
                                 totalQty: qty,
                                 cost,
                                 totalValue: qty * cost,
-                                source: 'packiyo',
+                                source: 'shipsidekick',
                                 weeklyVel,
                                 rawWeeklyVel,
                                 amzWeeklyVel,
@@ -1769,9 +1769,9 @@ const SettingsView = ({
                           },
                           sources: {
                             ...currentSnapshot.sources,
-                            threepl: 'packiyo-direct',
-                            packiyoConnected: true,
-                            lastPackiyoSync: new Date().toISOString(),
+                            threepl: 'shipsidekick-direct',
+                            shipsidekickConnected: true,
+                            lastShipsidekickSync: new Date().toISOString(),
                           },
                         };
                         
@@ -1790,7 +1790,7 @@ const SettingsView = ({
                           // MERGE with existing today snapshot - don't overwrite!
                           const packiyoData = data.inventoryBySku;
                           
-                          // Create Packiyo lookup with normalized keys
+                          // Create Ship Sidekick lookup with normalized keys
                           const packiyoLookup = {};
                           Object.entries(packiyoData).forEach(([sku, item]) => {
                             const normalizedKey = normalizeSkuKey(sku);
@@ -1800,7 +1800,7 @@ const SettingsView = ({
                           let newTplTotal = 0;
                           let newTplValue = 0;
                           
-                          // Update existing items with Packiyo quantities
+                          // Update existing items with Ship Sidekick quantities
                           const updatedItems = existingTodaySnapshot.items.map(item => {
                             const normalizedItemSku = normalizeSkuKey(item.sku);
                             const packiyoItem = packiyoLookup[normalizedItemSku];
@@ -1837,9 +1837,9 @@ const SettingsView = ({
                             },
                             sources: {
                               ...existingTodaySnapshot.sources,
-                              threepl: 'packiyo-direct',
-                              packiyoConnected: true,
-                              lastPackiyoSync: new Date().toISOString(),
+                              threepl: 'shipsidekick-direct',
+                              shipsidekickConnected: true,
+                              lastShipsidekickSync: new Date().toISOString(),
                             },
                           };
                           
@@ -1851,15 +1851,15 @@ const SettingsView = ({
                         } else {
                           // No snapshot exists for today - don't create 3PL-only snapshot that would lose Amazon data
                           // Instead, tell user to create inventory snapshot first
-                          setToast({ 
-                            message: 'Packiyo synced but no inventory snapshot exists for today. Go to Inventory tab and create a new snapshot to include Amazon + 3PL data.', 
-                            type: 'warning' 
+                          setToast({
+                            message: 'Ship Sidekick synced but no inventory snapshot exists for today. Go to Inventory tab and create a new snapshot to include Amazon + 3PL data.',
+                            type: 'warning'
                           });
                         }
                       }
                     } catch (err) {
                       setPackiyoInventoryStatus({ loading: false, error: err.message, lastSync: null });
-                      setToast({ message: 'Packiyo sync failed: ' + err.message, type: 'error' });
+                      setToast({ message: 'Ship Sidekick sync failed: ' + err.message, type: 'error' });
                     }
                   }}
                   disabled={packiyoInventoryStatus.loading}
@@ -1876,7 +1876,7 @@ const SettingsView = ({
               {/* Show inventory preview if available */}
               {packiyoInventoryData && (
                 <div className="bg-slate-800/50 rounded-xl p-4 mt-4">
-                  <h4 className="text-white font-medium mb-3">Packiyo Inventory</h4>
+                  <h4 className="text-white font-medium mb-3">Ship Sidekick Inventory</h4>
                   {(() => {
                     // Calculate total value using COGS lookup
                     const items = packiyoInventoryData.items || [];
@@ -1929,7 +1929,7 @@ const SettingsView = ({
                           </div>
                           <div className="bg-slate-900/50 rounded-lg p-3">
                             <p className="text-slate-400 text-xs">Source</p>
-                            <p className="text-sm font-medium text-violet-400">Excel3PL Direct</p>
+                            <p className="text-sm font-medium text-violet-400">Ship Sidekick</p>
                           </div>
                         </div>
                         
@@ -1970,68 +1970,57 @@ const SettingsView = ({
                     <label className="block text-slate-300 text-sm font-medium mb-2">API Token</label>
                     <input
                       type="text" style={{WebkitTextSecurity: "disc"}}
-                      placeholder="Your Packiyo API token"
+                      placeholder="Your Ship Sidekick API key"
                       value={packiyoCredentials.apiKey}
                       onChange={(e) => setPackiyoCredentials(p => ({ ...p, apiKey: e.target.value }))}
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
                     />
-                    <p className="text-slate-500 text-xs mt-1">From Packiyo → Settings → API Keys</p>
+                    <p className="text-slate-500 text-xs mt-1">From Ship Sidekick → Settings → API Keys</p>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-slate-300 text-sm font-medium mb-2">Customer ID</label>
-                      <input
-                        type="text"
-                        placeholder="134"
-                        value={packiyoCredentials.customerId}
-                        onChange={(e) => setPackiyoCredentials(p => ({ ...p, customerId: e.target.value }))}
-                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-300 text-sm font-medium mb-2">Base URL</label>
-                      <input
-                        type="text"
-                        placeholder="https://excel3pl.packiyo.com/api/v1"
-                        value={packiyoCredentials.baseUrl}
-                        onChange={(e) => setPackiyoCredentials(p => ({ ...p, baseUrl: e.target.value }))}
-                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Slug (optional)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. acme-corp (leave empty if not multi-client)"
+                      value={packiyoCredentials.clientSlug || ''}
+                      onChange={(e) => setPackiyoCredentials(p => ({ ...p, clientSlug: e.target.value }))}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <p className="text-slate-500 text-xs mt-1">Only needed if you manage multiple client organizations</p>
                   </div>
                   <button
                     onClick={async () => {
-                      if (!packiyoCredentials.apiKey || !packiyoCredentials.customerId) {
-                        setToast({ message: 'Please enter API Token and Customer ID', type: 'error' });
+                      if (!packiyoCredentials.apiKey) {
+                        setToast({ message: 'Please enter your Ship Sidekick API key', type: 'error' });
                         return;
                       }
                       try {
-                        const res = await fetch('/api/packiyo/sync', {
+                        const res = await fetch('/api/shipsidekick/sync', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
                             apiKey: packiyoCredentials.apiKey,
-                            customerId: packiyoCredentials.customerId,
-                            baseUrl: packiyoCredentials.baseUrl,
+                            clientSlug: packiyoCredentials.clientSlug,
+                            baseUrl: packiyoCredentials.baseUrl || 'https://www.shipsidekick.com/api/v1',
                             test: true,
                           }),
                         });
                         const data = await res.json();
                         if (data.error) throw new Error(data.error);
                         if (data.success) {
-                          const updatedCreds = { ...packiyoCredentials, connected: true, customerName: data.customerName || 'Excel3PL' };
+                          const updatedCreds = { ...packiyoCredentials, connected: true, customerName: data.customerName || 'Ship Sidekick' };
                           setPackiyoCredentials(updatedCreds);
                           // IMMEDIATELY save to cloud to persist across sessions
                           if (session?.user?.id && supabase) {
                             pushToCloudNow({ ...combinedData, packiyoCredentials: updatedCreds }, true);
                           }
-                          setToast({ message: `Connected to ${data.customerName || 'Packiyo'}!`, type: 'success' });
+                          setToast({ message: `Connected to ${data.customerName || 'Ship Sidekick'}!`, type: 'success' });
                         }
                       } catch (err) {
                         setToast({ message: 'Connection failed: ' + err.message, type: 'error' });
                       }
                     }}
-                    disabled={!packiyoCredentials.apiKey || !packiyoCredentials.customerId}
+                    disabled={!packiyoCredentials.apiKey}
                     className="w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:hover:bg-violet-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
                   >
                     <Boxes className="w-5 h-5" />
@@ -2043,14 +2032,14 @@ const SettingsView = ({
               <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4">
                 <h4 className="text-violet-400 font-medium mb-2 flex items-center gap-2">
                   <HelpCircle className="w-4 h-4" />
-                  Your Packiyo Connection Info
+                  Ship Sidekick Connection Info
                 </h4>
                 <div className="text-slate-300 text-sm space-y-1">
-                  <p><strong>URL:</strong> https://excel3pl.packiyo.com/api/v1</p>
-                  <p><strong>Tenant:</strong> excel3pl</p>
-                  <p><strong>Customer ID:</strong> 134</p>
+                  <p><strong>API:</strong> https://www.shipsidekick.com/api/v1</p>
+                  <p><strong>Auth:</strong> Bearer token (API key)</p>
+                  <p><strong>Multi-client:</strong> Use Client Slug if managing multiple orgs</p>
                 </div>
-                <p className="text-slate-500 text-xs mt-3">This will pull inventory directly from Packiyo, separate from Shopify's inventory sync.</p>
+                <p className="text-slate-500 text-xs mt-3">This will pull inventory directly from Ship Sidekick, separate from Shopify's inventory sync.</p>
               </div>
             </div>
           )}
@@ -2396,7 +2385,7 @@ const SettingsView = ({
                   <p>3. Copy your LWA Client ID, Client Secret, and Refresh Token</p>
                   <p>4. Required permissions: <code className="bg-slate-800 px-1 rounded">Inventory</code></p>
                 </div>
-                <p className="text-slate-500 text-xs mt-3">This syncs FBA and AWD inventory only. 3PL (Packiyo) and Wormans Mill (Shopify) inventory are preserved separately.</p>
+                <p className="text-slate-500 text-xs mt-3">This syncs FBA and AWD inventory only. 3PL (Ship Sidekick) and Wormans Mill (Shopify) inventory are preserved separately.</p>
               </div>
             </div>
           )}
@@ -2735,7 +2724,7 @@ const SettingsView = ({
         </SettingSection>
         <SettingSection title="🔄 Auto-Sync Settings">
           <p className="text-slate-400 text-sm mb-4">
-            Automatically sync Amazon, Shopify, and Packiyo data to keep inventory velocity accurate
+            Automatically sync Amazon, Shopify, and Ship Sidekick data to keep inventory velocity accurate
           </p>
           
           {/* Master Toggle */}
@@ -2871,11 +2860,11 @@ const SettingsView = ({
                     </button>
                   </div>
                   
-                  {/* Packiyo */}
+                  {/* Ship Sidekick */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className={`w-2 h-2 rounded-full ${packiyoCredentials.connected ? 'bg-violet-400' : 'bg-slate-500'}`} />
-                      <span className="text-slate-300">Packiyo 3PL</span>
+                      <span className="text-slate-300">Ship Sidekick 3PL</span>
                       {packiyoCredentials.lastSync && (
                         <span className="text-slate-500 text-xs">
                           Last: {new Date(packiyoCredentials.lastSync).toLocaleString()}
@@ -2885,12 +2874,12 @@ const SettingsView = ({
                     <button
                       onClick={() => setAppSettings(prev => ({
                         ...prev,
-                        autoSync: { ...prev.autoSync, packiyo: !prev.autoSync?.packiyo }
+                        autoSync: { ...prev.autoSync, shipsidekick: !prev.autoSync?.shipsidekick }
                       }))}
                       disabled={!packiyoCredentials.connected}
-                      className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected ? 'bg-violet-500' : 'bg-slate-600'} ${!packiyoCredentials.connected ? 'opacity-50' : ''}`}
+                      className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.shipsidekick !== false && packiyoCredentials.connected ? 'bg-violet-500' : 'bg-slate-600'} ${!packiyoCredentials.connected ? 'opacity-50' : ''}`}
                     >
-                      <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.packiyo !== false ? 'left-5' : 'left-0.5'}`} />
+                      <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.shipsidekick !== false ? 'left-5' : 'left-0.5'}`} />
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
@@ -2965,13 +2954,13 @@ const SettingsView = ({
                   <Truck className="w-4 h-4 text-violet-400" />
                 </div>
                 <div>
-                  <p className="text-white font-medium">3PL Inventory (Excel3PL)</p>
+                  <p className="text-white font-medium">3PL Inventory (Ship Sidekick)</p>
                   <p className="text-slate-400 text-xs">Fulfillment center stock</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 {packiyoCredentials.connected ? (
-                  <span className="px-2 py-1 bg-violet-500/20 text-violet-400 text-xs rounded-full">Packiyo Direct</span>
+                  <span className="px-2 py-1 bg-violet-500/20 text-violet-400 text-xs rounded-full">Ship Sidekick Direct</span>
                 ) : (
                   <span className="px-2 py-1 bg-slate-600/50 text-slate-400 text-xs rounded-full">Not Connected</span>
                 )}
@@ -3018,7 +3007,7 @@ const SettingsView = ({
           </div>
           
           <p className="text-slate-500 text-xs mt-4">
-            ℹ️ Inventory sources are additive and don't overwrite each other. Amazon FBA/AWD, 3PL (Packiyo), and Wormans Mill (Shopify) inventories are tracked separately.
+            ℹ️ Inventory sources are additive and don't overwrite each other. Amazon FBA/AWD, 3PL (Ship Sidekick), and Wormans Mill (Shopify) inventories are tracked separately.
           </p>
         </SettingSection>
         
@@ -3981,7 +3970,7 @@ const SettingsView = ({
                 <Truck className="w-8 h-8 text-blue-400" />
                 <div>
                   <p className="text-white font-medium">3PL Bulk Upload</p>
-                  <p className="text-slate-400 text-xs">Import Packiyo Excel files</p>
+                  <p className="text-slate-400 text-xs">Import 3PL Excel files</p>
                 </div>
               </button>
             </div>
