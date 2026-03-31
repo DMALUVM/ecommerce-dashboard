@@ -2008,7 +2008,7 @@ const SettingsView = ({
                         const data = await res.json();
                         if (data.error) throw new Error(data.error);
                         if (data.success) {
-                          const updatedCreds = { ...packiyoCredentials, connected: true, customerName: data.customerName || 'Ship Sidekick' };
+                          const updatedCreds = { ...packiyoCredentials, connected: true, customerName: data.customerName || 'Ship Sidekick', baseUrl: data.baseUrl || 'https://www.shipsidekick.com/api/v1' };
                           setPackiyoCredentials(updatedCreds);
                           // IMMEDIATELY save to cloud to persist across sessions
                           if (session?.user?.id && supabase) {

@@ -42,6 +42,7 @@ export default async function handler(req, res) {
   const buildHeaders = () => {
     const headers = {
       'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
     // Multi-client support: scope requests to a specific child org
@@ -51,50 +52,77 @@ export default async function handler(req, res) {
     return headers;
   };
 
-  // Test connection
+  // Ship Sidekick has production and test environments
+  // Try the provided baseUrl first, then fall back to the other environment
+  const SSK_URLS = [
+    baseUrl,
+    baseUrl.includes('test.') ? 'https://www.shipsidekick.com/api/v1' : 'https://test.shipsidekick.com/api/v1',
+  ];
+
+  // Test connection - try both production and test environments
   if (test) {
-    try {
-      const testUrl = `${baseUrl}/inventory/levels?limit=1`;
-      console.log('Testing Ship Sidekick connection to:', testUrl);
-      console.log('API key length:', apiKey.length, 'first 8 chars:', apiKey.slice(0, 8) + '...');
+    let lastError = null;
 
-      const testRes = await fetch(testUrl, {
-        method: 'GET',
-        headers: buildHeaders(),
-      });
+    for (const tryUrl of SSK_URLS) {
+      try {
+        const testEndpoint = `${tryUrl}/inventory/levels?limit=1`;
+        console.log('Testing Ship Sidekick connection to:', testEndpoint);
+        console.log('API key length:', apiKey.length, 'first 8 chars:', apiKey.slice(0, 8) + '...');
 
-      console.log('Response status:', testRes.status);
-
-      if (testRes.ok) {
-        const data = await testRes.json();
-        return res.status(200).json({
-          success: true,
-          customerName: clientSlug || 'Ship Sidekick',
+        const testRes = await fetch(testEndpoint, {
+          method: 'GET',
+          headers: buildHeaders(),
         });
-      } else {
-        // Read response body for better error info
-        let errorBody = '';
-        try { errorBody = await testRes.text(); } catch (e) {}
-        console.log('Error response:', testRes.status, errorBody.slice(0, 500));
 
-        if (testRes.status === 401) {
+        console.log('Response status:', testRes.status, 'from:', tryUrl);
+
+        if (testRes.ok) {
+          const data = await testRes.json();
           return res.status(200).json({
-            error: `Invalid API key (401). Please verify your Ship Sidekick API key is correct. Server: ${errorBody.slice(0, 100)}`
-          });
-        } else if (testRes.status === 403) {
-          return res.status(200).json({
-            error: `Access forbidden (403). Your API key may not have permission. ${errorBody.slice(0, 100)}`
+            success: true,
+            customerName: clientSlug || 'Ship Sidekick',
+            baseUrl: tryUrl, // Return which URL worked so client can save it
           });
         } else {
-          return res.status(200).json({
-            error: `Ship Sidekick returned ${testRes.status}: ${errorBody.slice(0, 200)}`
-          });
+          let errorBody = '';
+          try { errorBody = await testRes.text(); } catch (e) {}
+          console.log('Error response:', testRes.status, errorBody.slice(0, 500));
+          lastError = { status: testRes.status, body: errorBody, url: tryUrl };
+
+          // If 401 or 403, the URL is reachable but auth failed - try next URL
+          if (testRes.status === 401 || testRes.status === 403) {
+            console.log(`Auth failed on ${tryUrl}, trying next...`);
+            continue;
+          }
+
+          // For other errors, also try next URL
+          continue;
         }
+      } catch (err) {
+        console.log(`Connection error on ${tryUrl}:`, err.message);
+        lastError = { status: 0, body: err.message, url: tryUrl };
+        continue;
       }
-    } catch (err) {
-      console.error('Connection test error:', err);
-      return res.status(200).json({ error: 'Connection failed: ' + (err.message || 'Network error') });
     }
+
+    // All URLs failed
+    if (lastError) {
+      if (lastError.status === 401) {
+        return res.status(200).json({
+          error: `Invalid API key (401). Tried both production and test URLs. Server response: ${(lastError.body || '').slice(0, 150)}`
+        });
+      } else if (lastError.status === 403) {
+        return res.status(200).json({
+          error: `Access forbidden (403). Your API key may not have permission. ${(lastError.body || '').slice(0, 150)}`
+        });
+      } else {
+        return res.status(200).json({
+          error: `Could not connect to Ship Sidekick (tried ${SSK_URLS.join(' and ')}). Last error: ${lastError.status} - ${(lastError.body || '').slice(0, 200)}`
+        });
+      }
+    }
+
+    return res.status(200).json({ error: 'Connection failed - no URLs succeeded' });
   }
 
   // ============ INVENTORY SYNC ============
