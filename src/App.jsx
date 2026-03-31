@@ -4263,9 +4263,19 @@ const loadFromLocal = useCallback(() => {
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
   
   // Load Ship Sidekick credentials from localStorage
+  // Force baseUrl to Ship Sidekick (migrating from old Packiyo URL if present)
   try {
     const r = lsGet('ecommerce_packiyo_creds_v1');
-    if (r) setPackiyoCredentials(JSON.parse(r));
+    if (r) {
+      const parsed = JSON.parse(r);
+      // Migrate from old Packiyo baseUrl to Ship Sidekick
+      if (!parsed.baseUrl || parsed.baseUrl.includes('packiyo')) {
+        parsed.baseUrl = 'https://www.shipsidekick.com/api/v1';
+      }
+      // Trim API key whitespace
+      if (parsed.apiKey) parsed.apiKey = parsed.apiKey.trim();
+      setPackiyoCredentials(parsed);
+    }
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
   
   // Load Amazon credentials from localStorage
@@ -4296,13 +4306,20 @@ useEffect(() => {
       const raw = lsGet(key);
       if (raw) {
         const parsed = JSON.parse(raw);
+        // Migrate old Packiyo baseUrl to Ship Sidekick
+        if (key === 'ecommerce_packiyo_creds_v1') {
+          if (!parsed.baseUrl || parsed.baseUrl.includes('packiyo')) {
+            parsed.baseUrl = 'https://www.shipsidekick.com/api/v1';
+          }
+          if (parsed.apiKey) parsed.apiKey = parsed.apiKey.trim();
+        }
         // Only apply if it has real data (not empty defaults)
-        const hasData = parsed.connected || parsed.storeUrl || parsed.apiKey || 
+        const hasData = parsed.connected || parsed.storeUrl || parsed.apiKey ||
                         parsed.refreshToken || parsed.accessToken || parsed.clientId;
         if (hasData) {
           setter(prev => {
             // Don't overwrite if state already has more complete data (from cloud)
-            const prevHasData = prev.connected || prev.storeUrl || prev.apiKey || 
+            const prevHasData = prev.connected || prev.storeUrl || prev.apiKey ||
                                prev.refreshToken || prev.accessToken || prev.clientId;
             return prevHasData ? prev : parsed;
           });

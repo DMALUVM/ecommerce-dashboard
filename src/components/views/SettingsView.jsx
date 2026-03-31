@@ -1129,9 +1129,9 @@ const SettingsView = ({
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                          apiKey: packiyoCredentials.apiKey,
+                          apiKey: packiyoCredentials.apiKey.trim(),
                           clientSlug: packiyoCredentials.clientSlug,
-                          baseUrl: packiyoCredentials.baseUrl,
+                          baseUrl: 'https://www.shipsidekick.com/api/v1',
                           syncType: 'inventory',
                         }),
                       });
@@ -1999,9 +1999,9 @@ const SettingsView = ({
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
-                            apiKey: packiyoCredentials.apiKey,
+                            apiKey: packiyoCredentials.apiKey.trim(),
                             clientSlug: packiyoCredentials.clientSlug,
-                            baseUrl: packiyoCredentials.baseUrl || 'https://www.shipsidekick.com/api/v1',
+                            baseUrl: 'https://www.shipsidekick.com/api/v1',
                             test: true,
                           }),
                         });

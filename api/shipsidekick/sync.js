@@ -23,14 +23,20 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { apiKey, clientSlug, syncType, test } = req.body;
+  const { clientSlug, syncType, test } = req.body;
+  // Trim whitespace from API key
+  const apiKey = (req.body.apiKey || '').trim();
 
   // Validate required fields
   if (!apiKey) {
     return res.status(400).json({ error: 'Ship Sidekick API key is required' });
   }
 
-  const baseUrl = req.body.baseUrl || 'https://www.shipsidekick.com/api/v1';
+  // Force Ship Sidekick base URL (ignore any old Packiyo URLs from stored credentials)
+  let baseUrl = req.body.baseUrl || 'https://www.shipsidekick.com/api/v1';
+  if (baseUrl.includes('packiyo')) {
+    baseUrl = 'https://www.shipsidekick.com/api/v1';
+  }
 
   // Build headers - Ship Sidekick uses simple Bearer auth + optional client header
   const buildHeaders = () => {
@@ -48,8 +54,11 @@ export default async function handler(req, res) {
   // Test connection
   if (test) {
     try {
-      console.log('Testing Ship Sidekick connection...');
-      const testRes = await fetch(`${baseUrl}/inventory/levels?limit=1`, {
+      const testUrl = `${baseUrl}/inventory/levels?limit=1`;
+      console.log('Testing Ship Sidekick connection to:', testUrl);
+      console.log('API key length:', apiKey.length, 'first 8 chars:', apiKey.slice(0, 8) + '...');
+
+      const testRes = await fetch(testUrl, {
         method: 'GET',
         headers: buildHeaders(),
       });
@@ -62,19 +71,29 @@ export default async function handler(req, res) {
           success: true,
           customerName: clientSlug || 'Ship Sidekick',
         });
-      } else if (testRes.status === 401) {
-        return res.status(200).json({ error: 'Invalid API key. Please check your Ship Sidekick API key.' });
-      } else if (testRes.status === 403) {
-        return res.status(200).json({ error: 'Access forbidden. Your API key may not have permission for this organization.' });
       } else {
-        const errorText = await testRes.text();
-        return res.status(200).json({
-          error: `Could not connect to Ship Sidekick: ${testRes.status} - ${errorText.slice(0, 200)}`
-        });
+        // Read response body for better error info
+        let errorBody = '';
+        try { errorBody = await testRes.text(); } catch (e) {}
+        console.log('Error response:', testRes.status, errorBody.slice(0, 500));
+
+        if (testRes.status === 401) {
+          return res.status(200).json({
+            error: `Invalid API key (401). Please verify your Ship Sidekick API key is correct. Server: ${errorBody.slice(0, 100)}`
+          });
+        } else if (testRes.status === 403) {
+          return res.status(200).json({
+            error: `Access forbidden (403). Your API key may not have permission. ${errorBody.slice(0, 100)}`
+          });
+        } else {
+          return res.status(200).json({
+            error: `Ship Sidekick returned ${testRes.status}: ${errorBody.slice(0, 200)}`
+          });
+        }
       }
     } catch (err) {
       console.error('Connection test error:', err);
-      return res.status(200).json({ error: err.message || 'Connection failed' });
+      return res.status(200).json({ error: 'Connection failed: ' + (err.message || 'Network error') });
     }
   }
 
