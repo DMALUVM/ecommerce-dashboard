@@ -38,13 +38,17 @@ export default async function handler(req, res) {
     baseUrl = 'https://www.shipsidekick.com/api/v1';
   }
 
-  // Build headers - Ship Sidekick uses simple Bearer auth + optional client header
-  const buildHeaders = () => {
+  // Build headers - Ship Sidekick uses Bearer auth + optional client header
+  // See: https://docs.shipsidekick.com
+  const buildHeaders = (method = 'GET') => {
     const headers = {
       'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
+    // Only set Content-Type on requests with a body (POST/PUT/PATCH)
+    if (method !== 'GET' && method !== 'DELETE') {
+      headers['Content-Type'] = 'application/json';
+    }
     // Multi-client support: scope requests to a specific child org
     if (clientSlug) {
       headers['X-SSK-Client'] = clientSlug;
@@ -83,7 +87,7 @@ export default async function handler(req, res) {
         const startTime = Date.now();
         const testRes = await fetch(testEndpoint, {
           method: 'GET',
-          headers: buildHeaders(),
+          headers: buildHeaders('GET'),
         });
         const elapsed = Date.now() - startTime;
 
@@ -116,11 +120,23 @@ export default async function handler(req, res) {
       }
     }
 
-    // All URLs failed - return full debug log
+    // All URLs failed - return full debug log with actionable guidance
     log(`=== All URLs failed ===`);
-    const errorMsg = lastError
-      ? `Ship Sidekick connection failed (HTTP ${lastError.status} from ${lastError.url}). Response: ${(lastError.body || '').slice(0, 300)}`
-      : 'Connection failed - no URLs succeeded';
+    let errorMsg;
+    if (lastError?.status === 401) {
+      errorMsg = 'Invalid API key. Please verify your Ship Sidekick API key is correct and has not expired. '
+        + 'You can find or regenerate your key in the Ship Sidekick dashboard under Settings > API Keys.';
+      if (!clientSlug) {
+        errorMsg += ' If your account is a child organization under a parent, you may also need to provide a Client Slug.';
+      }
+    } else if (lastError?.status === 403) {
+      errorMsg = 'Access forbidden. Your API key may not have permission to access inventory data. '
+        + 'Check your API key permissions in the Ship Sidekick dashboard.';
+    } else if (lastError) {
+      errorMsg = `Ship Sidekick connection failed (HTTP ${lastError.status} from ${lastError.url}). Response: ${(lastError.body || '').slice(0, 300)}`;
+    } else {
+      errorMsg = 'Connection failed - could not reach Ship Sidekick servers. Check your network connection.';
+    }
 
     return res.status(200).json({
       error: errorMsg,
@@ -130,7 +146,7 @@ export default async function handler(req, res) {
 
   // ============ INVENTORY SYNC ============
   if (syncType === 'inventory') {
-    const headers = buildHeaders();
+    const headers = buildHeaders('GET');
 
     try {
       // Fetch all inventory levels with pagination
@@ -375,7 +391,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Start and end dates required for shipments sync' });
     }
 
-    const headers = buildHeaders();
+    const headers = buildHeaders('GET');
 
     try {
       const shipments = [];
