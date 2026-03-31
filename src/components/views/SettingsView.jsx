@@ -2006,10 +2006,22 @@ const SettingsView = ({
                           }),
                         });
                         const data = await res.json();
-                        if (data.error) throw new Error(data.error);
+                        // Show debug log in console for diagnostics
+                        if (data.debugLog) {
+                          console.log('=== Ship Sidekick Connection Debug Log ===');
+                          data.debugLog.forEach(line => console.log(line));
+                          console.log('=== End Debug Log ===');
+                        }
+                        if (data.error) {
+                          // Show debug log in an alert so user can share it
+                          const debugInfo = data.debugLog ? '\n\nDebug Log:\n' + data.debugLog.join('\n') : '';
+                          setPackiyoInventoryStatus(prev => ({ ...prev, error: data.error + debugInfo }));
+                          throw new Error(data.error);
+                        }
                         if (data.success) {
                           const updatedCreds = { ...packiyoCredentials, connected: true, customerName: data.customerName || 'Ship Sidekick', baseUrl: data.baseUrl || 'https://www.shipsidekick.com/api/v1' };
                           setPackiyoCredentials(updatedCreds);
+                          setPackiyoInventoryStatus(prev => ({ ...prev, error: null }));
                           // IMMEDIATELY save to cloud to persist across sessions
                           if (session?.user?.id && supabase) {
                             pushToCloudNow({ ...combinedData, packiyoCredentials: updatedCreds }, true);
@@ -2028,7 +2040,21 @@ const SettingsView = ({
                   </button>
                 </div>
               </div>
-              
+
+              {/* Debug log panel - shows when connection fails */}
+              {packiyoInventoryStatus.error && (
+                <div className="bg-rose-900/20 border border-rose-500/30 rounded-xl p-4">
+                  <h4 className="text-rose-400 font-medium mb-2 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    Connection Debug Log
+                  </h4>
+                  <pre className="text-slate-300 text-xs whitespace-pre-wrap max-h-64 overflow-y-auto bg-slate-900/50 rounded-lg p-3 font-mono">
+                    {packiyoInventoryStatus.error}
+                  </pre>
+                  <p className="text-slate-500 text-xs mt-2">Share this log to help diagnose the issue.</p>
+                </div>
+              )}
+
               <div className="bg-violet-900/20 border border-violet-500/30 rounded-xl p-4">
                 <h4 className="text-violet-400 font-medium mb-2 flex items-center gap-2">
                   <HelpCircle className="w-4 h-4" />
