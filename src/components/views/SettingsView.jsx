@@ -50,6 +50,7 @@ const SettingsView = ({
   packiyoInventoryData,
   packiyoInventoryStatus,
   qboCredentials,
+  shipSidekickCredentials,
   runAutoSync,
   savedCogs,
   savedProductNames,
@@ -81,6 +82,7 @@ const SettingsView = ({
   setPackiyoInventoryData,
   setPackiyoInventoryStatus,
   setQboCredentials,
+  setShipSidekickCredentials,
   setSavedCogs,
   setSelectedDay,
   setSelectedInvDate,
@@ -2059,7 +2061,175 @@ const SettingsView = ({
             </div>
           )}
         </SettingSection>
-        
+
+        {/* Ship Sidekick Shipping API */}
+        <SettingSection title="🚚 Ship Sidekick Shipping API">
+          <p className="text-slate-400 text-sm mb-4">Connect to Ship Sidekick for shipping rate lookups and carrier management</p>
+
+          {shipSidekickCredentials?.connected ? (
+            <div className="space-y-4">
+              <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                      <Check className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <p className="text-emerald-400 font-medium">Connected</p>
+                      <p className="text-slate-400 text-sm">{shipSidekickCredentials.accountName || 'Ship Sidekick'}</p>
+                      <p className="text-slate-500 text-xs">
+                        Environment: {shipSidekickCredentials.environment === 'production' ? 'Production' : 'Test'}
+                        {shipSidekickCredentials.clientSlug && ` | Org: ${shipSidekickCredentials.clientSlug}`}
+                      </p>
+                      {shipSidekickCredentials.lastSync && (
+                        <p className="text-slate-500 text-xs">Last sync: {new Date(shipSidekickCredentials.lastSync).toLocaleString()}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (confirm('Disconnect from Ship Sidekick?')) {
+                        setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+                        setToast({ message: 'Ship Sidekick disconnected', type: 'success' });
+                      }
+                    }}
+                    className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 rounded-lg text-sm text-rose-300"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-slate-900/50 rounded-xl p-4">
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">API Key</label>
+                    <input
+                      type="text" style={{WebkitTextSecurity: "disc"}}
+                      placeholder="e.g. 70da6ee1-f263-44ae-a6f7-4b544c31548b"
+                      value={shipSidekickCredentials?.apiKey || ''}
+                      onChange={(e) => setShipSidekickCredentials(p => ({ ...p, apiKey: e.target.value.trim() }))}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-slate-500 text-xs mt-1">From Ship Sidekick dashboard: Settings &gt; API Keys</p>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Client Slug <span className="text-slate-500 font-normal">(optional — required for child/sub-org accounts)</span></label>
+                    <input
+                      type="text"
+                      placeholder="e.g. acme-corp"
+                      value={shipSidekickCredentials?.clientSlug || ''}
+                      onChange={(e) => setShipSidekickCredentials(p => ({ ...p, clientSlug: e.target.value.trim() }))}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-slate-500 text-xs mt-1">If your account is a child org under a parent, enter your org slug here</p>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 text-sm font-medium mb-2">Environment</label>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setShipSidekickCredentials(p => ({ ...p, environment: 'production' }))}
+                        className={`flex-1 py-2 rounded-lg text-sm font-medium border ${
+                          (shipSidekickCredentials?.environment || 'production') === 'production'
+                            ? 'bg-blue-600/30 border-blue-500/50 text-blue-300'
+                            : 'bg-slate-800 border-slate-600 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        Production
+                      </button>
+                      <button
+                        onClick={() => setShipSidekickCredentials(p => ({ ...p, environment: 'test' }))}
+                        className={`flex-1 py-2 rounded-lg text-sm font-medium border ${
+                          shipSidekickCredentials?.environment === 'test'
+                            ? 'bg-amber-600/30 border-amber-500/50 text-amber-300'
+                            : 'bg-slate-800 border-slate-600 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        Test / Sandbox
+                      </button>
+                    </div>
+                    <p className="text-slate-500 text-xs mt-1">Production uses www.shipsidekick.com — Test uses test.shipsidekick.com. Make sure your API key matches the environment.</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!shipSidekickCredentials?.apiKey) {
+                        setToast({ message: 'Please enter your Ship Sidekick API key', type: 'error' });
+                        return;
+                      }
+
+                      setToast({ message: 'Connecting to Ship Sidekick...', type: 'info' });
+
+                      const controller = new AbortController();
+                      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+                      try {
+                        const res = await fetch('/api/shipsidekick/sync', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          signal: controller.signal,
+                          body: JSON.stringify({
+                            apiKey: shipSidekickCredentials.apiKey,
+                            clientSlug: shipSidekickCredentials.clientSlug,
+                            environment: shipSidekickCredentials.environment || 'production',
+                            test: true,
+                          }),
+                        });
+                        clearTimeout(timeoutId);
+
+                        if (!res.ok) {
+                          const errorText = await res.text();
+                          throw new Error(`API error ${res.status}: ${errorText.slice(0, 100)}`);
+                        }
+
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        if (data.success) {
+                          const updatedCreds = {
+                            ...shipSidekickCredentials,
+                            connected: true,
+                            lastSync: new Date().toISOString(),
+                            accountName: data.accountName || 'Ship Sidekick',
+                          };
+                          setShipSidekickCredentials(updatedCreds);
+                          if (session?.user?.id && supabase) {
+                            pushToCloudNow({ ...combinedData, shipSidekickCredentials: updatedCreds }, true);
+                          }
+                          setToast({ message: `Connected to ${data.accountName || 'Ship Sidekick'} (${data.environment})!`, type: 'success' });
+                        }
+                      } catch (err) {
+                        clearTimeout(timeoutId);
+                        const errorMsg = err.name === 'AbortError'
+                          ? 'Request timed out. Make sure api/shipsidekick/sync.js is deployed to Vercel.'
+                          : err.message;
+                        setToast({ message: 'Connection failed: ' + errorMsg, type: 'error' });
+                      }
+                    }}
+                    disabled={!shipSidekickCredentials?.apiKey}
+                    className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
+                  >
+                    <Truck className="w-5 h-5" />
+                    Test & Connect
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
+                <h4 className="text-blue-400 font-medium mb-2 flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4" />
+                  Troubleshooting 401 Errors
+                </h4>
+                <ul className="text-slate-300 text-sm space-y-2">
+                  <li><strong>API Key:</strong> Regenerate it in Ship Sidekick dashboard under Settings &gt; API Keys</li>
+                  <li><strong>Client Slug:</strong> If your account is a child org under a parent, you must provide the org slug (e.g. acme-corp)</li>
+                  <li><strong>Environment:</strong> Use a production key with Production and a test key with Test/Sandbox — do not mix them</li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </SettingSection>
+
         {/* Amazon SP-API Connection */}
         <SettingSection title="🛒 Amazon SP-API Connection">
           <p className="text-slate-400 text-sm mb-4">Connect to Amazon Selling Partner API for FBA and AWD inventory sync. This does NOT overwrite your 3PL or Shopify Wormans Mill inventory.</p>

@@ -1213,12 +1213,13 @@ async function decryptCreds(userId, encObj) {
 
 // ── Store Credentials Table Helpers ──────────────────────────────────────
 // Credentials now live in store_credentials table, not in app_data rows
-const CRED_PROVIDERS = ['shopify', 'packiyo', 'amazon', 'qbo'];
+const CRED_PROVIDERS = ['shopify', 'packiyo', 'amazon', 'qbo', 'shipsidekick'];
 const CRED_PROVIDER_MAP = {
   shopifyCredentials: 'shopify',
   packiyoCredentials: 'packiyo',
   amazonCredentials: 'amazon',
   qboCredentials: 'qbo',
+  shipSidekickCredentials: 'shipsidekick',
 };
 
 async function saveCredentialToCloud(supabase, userId, storeId, provider, credObj) {
@@ -1437,6 +1438,16 @@ export default function Dashboard() {
   });
   const [packiyoInventoryStatus, setPackiyoInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
   const [packiyoInventoryData, setPackiyoInventoryData] = useState(null);
+
+  // Ship Sidekick Shipping API Integration
+  const [shipSidekickCredentials, setShipSidekickCredentials] = useState({
+    apiKey: '',
+    clientSlug: '',
+    environment: 'production',
+    connected: false,
+    lastSync: null,
+    accountName: '',
+  });
   
   // Amazon SP-API Integration (FBA + AWD Inventory)
   const [amazonCredentials, setAmazonCredentials] = useState({
@@ -1556,7 +1567,8 @@ const handleLogout = async () => {
   // CRITICAL: Clear localStorage to prevent data leakage between users
   const keysToKeep = ['ecommerce_theme',
     'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
-    'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1']; // Keep theme + API credentials
+    'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
+    'ecommerce_shipsidekick_creds_v1']; // Keep theme + API credentials
   const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
   allKeys.forEach(k => {
     if (!keysToKeep.includes(k)) {
@@ -1624,7 +1636,8 @@ const handleLogout = async () => {
   // === Integrations ===
   setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
   setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
-  
+  setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+
   // === Stores ===
   setStores([]);
   setActiveStoreId(null);
@@ -4275,6 +4288,12 @@ const loadFromLocal = useCallback(() => {
     const r = lsGet('ecommerce_qbo_creds_v1');
     if (r) setQboCredentials(JSON.parse(r));
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
+
+  // Load Ship Sidekick credentials from localStorage
+  try {
+    const r = lsGet('ecommerce_shipsidekick_creds_v1');
+    if (r) setShipSidekickCredentials(JSON.parse(r));
+  } catch (e) { if (e.message) devWarn("[init]", e.message); }
 }, []);
 
 // ALWAYS load API credentials from localStorage on mount, even when Supabase is configured.
@@ -4286,6 +4305,7 @@ useEffect(() => {
     { key: 'ecommerce_packiyo_creds_v1', setter: setPackiyoCredentials },
     { key: 'ecommerce_amazon_creds_v1', setter: setAmazonCredentials },
     { key: 'ecommerce_qbo_creds_v1', setter: setQboCredentials },
+    { key: 'ecommerce_shipsidekick_creds_v1', setter: setShipSidekickCredentials },
   ];
   credKeys.forEach(({ key, setter }) => {
     try {
@@ -4496,7 +4516,7 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   
   // Credentials now stored in separate store_credentials table
   // Save each credential to its own row, then strip from app_data payload
-  const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials'];
+  const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials', 'shipSidekickCredentials'];
   if (session?.user?.id && activeStoreId) {
     for (const key of CREDENTIAL_KEYS) {
       const cred = cloudDataObj[key];
@@ -4641,6 +4661,21 @@ useEffect(() => {
     } catch (e) { if (e.message) devWarn("[init]", e.message); }
   }
 }, [packiyoCredentials]);
+
+// Persist Ship Sidekick credentials to localStorage + store_credentials table
+useEffect(() => {
+  if (shipSidekickCredentials.apiKey || shipSidekickCredentials.connected) {
+    try {
+      if (shipSidekickCredentials.connected && !shipSidekickCredentials.apiKey) {
+        return;
+      }
+      lsSet('ecommerce_shipsidekick_creds_v1', JSON.stringify(shipSidekickCredentials));
+      if (session?.user?.id && activeStoreId && !isLoadingDataRef.current) {
+        saveCredentialToCloud(supabase, session.user.id, activeStoreId, 'shipsidekick', shipSidekickCredentials);
+      }
+    } catch (e) { if (e.message) devWarn("[init]", e.message); }
+  }
+}, [shipSidekickCredentials]);
 
 // Persist Amazon credentials to localStorage + store_credentials table
 useEffect(() => {
@@ -4820,7 +4855,8 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setPackiyoCredentials({ apiKey: '', warehouseId: '', connected: false, lastSync: null, warehouseName: '' });
     setAmazonCredentials({ clientId: '', clientSecret: '', refreshToken: '', marketplaceId: '', sellerId: '', connected: false, lastSync: null, adsRefreshToken: '', adsClientId: '', adsClientSecret: '', adsProfileId: '', adsConnected: false, adsLastSync: null });
     setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
-    
+    setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+
     // Now apply the new store's data (overwriting the cleared defaults)
     // Also clear localStorage to prevent stale data from previous store
     try {
@@ -4833,6 +4869,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
         'ecommerce_recurring_v1', 'ecommerce_widget_config_v1',
         'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
         'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
+        'ecommerce_shipsidekick_creds_v1',
       ];
       lsKeysToClear.forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
     } catch (e) {}
@@ -4963,6 +5000,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
         packiyo: { setter: setPackiyoCredentials, lsKey: 'ecommerce_packiyo_creds_v1', stateKey: 'packiyoCredentials' },
         amazon: { setter: setAmazonCredentials, lsKey: 'ecommerce_amazon_creds_v1', stateKey: 'amazonCredentials' },
         qbo: { setter: setQboCredentials, lsKey: 'ecommerce_qbo_creds_v1', stateKey: 'qboCredentials' },
+        shipsidekick: { setter: setShipSidekickCredentials, lsKey: 'ecommerce_shipsidekick_creds_v1', stateKey: 'shipSidekickCredentials' },
       };
       const storeCreds = await loadCredentialsFromCloud(supabase, session.user.id, loadedStoreId);
       let migratedFromAppData = false;
@@ -4980,6 +5018,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
           { key: 'packiyoCredentials', provider: 'packiyo' },
           { key: 'amazonCredentials', provider: 'amazon' },
           { key: 'qboCredentials', provider: 'qbo' },
+          { key: 'shipSidekickCredentials', provider: 'shipsidekick' },
         ];
         for (const { key, provider } of OLD_CRED_KEYS) {
           const oldCred = cloud[key];
@@ -5180,8 +5219,9 @@ const createStore = useCallback(async (name) => {
   setPackiyoCredentials({ apiKey: '', warehouseId: '', connected: false, lastSync: null, warehouseName: '' });
   setAmazonCredentials({ clientId: '', clientSecret: '', refreshToken: '', marketplaceId: '', sellerId: '', connected: false, lastSync: null, adsRefreshToken: '', adsClientId: '', adsClientSecret: '', adsProfileId: '', adsConnected: false, adsLastSync: null });
   setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
+  setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
   // Clear credential localStorage to prevent bleed
-  ['ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1', 'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1'].forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
+  ['ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1', 'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1', 'ecommerce_shipsidekick_creds_v1'].forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
   
   setToast({ message: `Created store "${name}"`, type: 'success' });
   setShowStoreSelector(false);
@@ -5330,7 +5370,8 @@ useEffect(() => {
         // Different user - clear localStorage (but keep credentials and theme)
         const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
           'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
-          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1'];
+          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
+          'ecommerce_shipsidekick_creds_v1'];
         Object.keys(localStorage).filter(k => k.startsWith('ecommerce_')).forEach(k => {
           if (!keysToKeep.includes(k)) localStorage.removeItem(k);
         });
@@ -5349,7 +5390,8 @@ useEffect(() => {
         // Different user logging in - clear previous user's localStorage (keep credentials)
         const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
           'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
-          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1'];
+          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
+          'ecommerce_shipsidekick_creds_v1'];
         const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
         allKeys.forEach(k => {
           if (!keysToKeep.includes(k)) {
@@ -5501,6 +5543,7 @@ useEffect(() => {
             setAdsAiMessages([]);
             setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
             setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
+            setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
             setAppSettings({
               inventoryDaysOptimal: 60, inventoryDaysLow: 30, inventoryDaysCritical: 14,
               tacosOptimal: 15, tacosWarning: 25, tacosMax: 35, roasTarget: 3.0,
@@ -18072,6 +18115,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       packiyoCredentials={packiyoCredentials}
       packiyoInventoryData={packiyoInventoryData}
       packiyoInventoryStatus={packiyoInventoryStatus}
+      shipSidekickCredentials={shipSidekickCredentials}
       qboCredentials={qboCredentials}
       runAutoSync={runAutoSync}
       savedCogs={savedCogs}
@@ -18103,6 +18147,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setPackiyoCredentials={setPackiyoCredentials}
       setPackiyoInventoryData={setPackiyoInventoryData}
       setPackiyoInventoryStatus={setPackiyoInventoryStatus}
+      setShipSidekickCredentials={setShipSidekickCredentials}
       setQboCredentials={setQboCredentials}
       setSavedCogs={setSavedCogs}
       setSelectedDay={setSelectedDay}
