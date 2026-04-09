@@ -1486,8 +1486,8 @@ const SettingsView = ({
                           newTplTotal += newTplQty;
                           newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
                           
-                          const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
-                          
+                          const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0) + (item.awdQty || 0) + (item.amazonInbound || 0) + (item.awdInbound || 0) + newTplInbound;
+
                           // Get velocities from lookup with corrections applied
                           const velocityData = getVelocitiesForSku(item.sku);
                           const amzWeeklyVel = velocityData.amazon > 0 ? velocityData.amazon : (item.amzWeeklyVel || 0);
@@ -1764,8 +1764,8 @@ const SettingsView = ({
                             ...currentSnapshot.summary,
                             threeplUnits: newTplTotal,
                             threeplValue: newTplValue,
-                            totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0),
-                            totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0),
+                            totalUnits: (currentSnapshot.summary?.amazonUnits || 0) + newTplTotal + (currentSnapshot.summary?.homeUnits || 0) + (currentSnapshot.summary?.awdUnits || 0) + (currentSnapshot.summary?.amazonInbound || 0),
+                            totalValue: (currentSnapshot.summary?.amazonValue || 0) + newTplValue + (currentSnapshot.summary?.homeValue || 0) + (currentSnapshot.summary?.awdValue || 0),
                             skuCount: updatedItems.length,
                             critical: critical2, low: low2, healthy: healthy2, overstock: overstock2,
                             avgTurnover: Math.round(avgTurnover2 * 10) / 10,
@@ -1817,19 +1817,19 @@ const SettingsView = ({
                             newTplTotal += newTplQty;
                             newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || savedCogs[normalizedItemSku] || 0);
                             
-                            const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0);
-                            
+                            const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0) + (item.awdQty || 0) + (item.amazonInbound || 0) + (item.awdInbound || 0) + newTplInbound;
+
                             return {
-                              ...item, // PRESERVE Amazon data!
+                              ...item, // PRESERVE Amazon + AWD data!
                               threeplQty: newTplQty,
                               threeplInbound: newTplInbound,
                               totalQty: newTotalQty,
                               totalValue: newTotalQty * (item.cost || 0),
                             };
                           });
-                          
+
                           updatedItems.sort((a, b) => b.totalValue - a.totalValue);
-                          
+
                           const mergedSnapshot = {
                             ...existingTodaySnapshot,
                             items: updatedItems,
@@ -1837,8 +1837,8 @@ const SettingsView = ({
                               ...existingTodaySnapshot.summary,
                               threeplUnits: newTplTotal,
                               threeplValue: newTplValue,
-                              totalUnits: (existingTodaySnapshot.summary?.amazonUnits || 0) + newTplTotal + (existingTodaySnapshot.summary?.homeUnits || 0),
-                              totalValue: (existingTodaySnapshot.summary?.amazonValue || 0) + newTplValue + (existingTodaySnapshot.summary?.homeValue || 0),
+                              totalUnits: (existingTodaySnapshot.summary?.amazonUnits || 0) + newTplTotal + (existingTodaySnapshot.summary?.homeUnits || 0) + (existingTodaySnapshot.summary?.awdUnits || 0) + (existingTodaySnapshot.summary?.amazonInbound || 0),
+                              totalValue: (existingTodaySnapshot.summary?.amazonValue || 0) + newTplValue + (existingTodaySnapshot.summary?.homeValue || 0) + (existingTodaySnapshot.summary?.awdValue || 0),
                               skuCount: updatedItems.length,
                             },
                             sources: {
@@ -2246,11 +2246,27 @@ const SettingsView = ({
                             else if (i.health === 'overstock') overstock++;
                           });
 
+                          // Recalculate all inventory totals from items for accuracy
+                          const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+                          const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+                          const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+                          const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+                          const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+                          const newHomeUnits = updatedItems.reduce((s, i) => s + (i.homeQty || 0), 0);
+                          const newHomeValue = updatedItems.reduce((s, i) => s + ((i.homeQty || 0) * (i.cost || 0)), 0);
+
                           const updatedSnapshot = {
                             ...currentSnapshot,
                             items: updatedItems,
                             summary: {
                               ...currentSnapshot.summary,
+                              amazonUnits: newAmzTotal,
+                              amazonValue: newAmzValue,
+                              amazonInbound: newAmzInbound,
+                              awdUnits: newAwdTotal,
+                              awdValue: newAwdValue,
+                              homeUnits: newHomeUnits,
+                              homeValue: newHomeValue,
                               threeplUnits: newTplTotal,
                               threeplValue: newTplValue,
                               totalUnits: updatedItems.reduce((s, i) => s + (i.totalQty || 0), 0),
