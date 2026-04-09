@@ -1442,7 +1442,7 @@ export default function Dashboard() {
   // Ship Sidekick Shipping API Integration
   const [shipSidekickCredentials, setShipSidekickCredentials] = useState({
     apiKey: '',
-    clientSlug: '',
+    clientSlug: 'tallowbourn',
     environment: 'production',
     connected: false,
     lastSync: null,
@@ -1636,7 +1636,7 @@ const handleLogout = async () => {
   // === Integrations ===
   setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
   setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
-  setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+  setShipSidekickCredentials({ apiKey: '', clientSlug: 'tallowbourn', environment: 'production', connected: false, lastSync: null, accountName: ''});
 
   // === Stores ===
   setStores([]);
@@ -4855,7 +4855,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setPackiyoCredentials({ apiKey: '', warehouseId: '', connected: false, lastSync: null, warehouseName: '' });
     setAmazonCredentials({ clientId: '', clientSecret: '', refreshToken: '', marketplaceId: '', sellerId: '', connected: false, lastSync: null, adsRefreshToken: '', adsClientId: '', adsClientSecret: '', adsProfileId: '', adsConnected: false, adsLastSync: null });
     setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
-    setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+    setShipSidekickCredentials({ apiKey: '', clientSlug: 'tallowbourn', environment: 'production', connected: false, lastSync: null, accountName: ''});
 
     // Now apply the new store's data (overwriting the cleared defaults)
     // Also clear localStorage to prevent stale data from previous store
@@ -5219,7 +5219,7 @@ const createStore = useCallback(async (name) => {
   setPackiyoCredentials({ apiKey: '', warehouseId: '', connected: false, lastSync: null, warehouseName: '' });
   setAmazonCredentials({ clientId: '', clientSecret: '', refreshToken: '', marketplaceId: '', sellerId: '', connected: false, lastSync: null, adsRefreshToken: '', adsClientId: '', adsClientSecret: '', adsProfileId: '', adsConnected: false, adsLastSync: null });
   setQboCredentials({ clientId: '', clientSecret: '', accessToken: '', refreshToken: '', realmId: '', connected: false, lastSync: null, autoSync: false });
-  setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+  setShipSidekickCredentials({ apiKey: '', clientSlug: 'tallowbourn', environment: 'production', connected: false, lastSync: null, accountName: ''});
   // Clear credential localStorage to prevent bleed
   ['ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1', 'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1', 'ecommerce_shipsidekick_creds_v1'].forEach(k => { try { localStorage.removeItem(k); } catch(e) {} });
   
@@ -5543,7 +5543,7 @@ useEffect(() => {
             setAdsAiMessages([]);
             setShopifyCredentials({ storeUrl: '', clientId: '', clientSecret: '', connected: false, lastSync: null });
             setPackiyoCredentials({ apiKey: '', customerId: '134', baseUrl: 'https://excel3pl.packiyo.com/api/v1', connected: false, lastSync: null, customerName: '' });
-            setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+            setShipSidekickCredentials({ apiKey: '', clientSlug: 'tallowbourn', environment: 'production', connected: false, lastSync: null, accountName: ''});
             setAppSettings({
               inventoryDaysOptimal: 60, inventoryDaysLow: 30, inventoryDaysCritical: 14,
               tacosOptimal: 15, tacosWarning: 25, tacosMax: 35, roasTarget: 3.0,

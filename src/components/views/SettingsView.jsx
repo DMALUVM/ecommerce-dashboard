@@ -2089,7 +2089,7 @@ const SettingsView = ({
                   <button
                     onClick={() => {
                       if (confirm('Disconnect from Ship Sidekick?')) {
-                        setShipSidekickCredentials({ apiKey: '', clientSlug: '', environment: 'production', connected: false, lastSync: null, accountName: '' });
+                        setShipSidekickCredentials({ apiKey: '', clientSlug: 'tallowbourn', environment: 'production', connected: false, lastSync: null, accountName: '' });
                         setToast({ message: 'Ship Sidekick disconnected', type: 'success' });
                       }
                     }}
@@ -2108,7 +2108,7 @@ const SettingsView = ({
                     <label className="block text-slate-300 text-sm font-medium mb-2">API Key</label>
                     <input
                       type="text" style={{WebkitTextSecurity: "disc"}}
-                      placeholder="e.g. 70da6ee1-f263-44ae-a6f7-4b544c31548b"
+                      placeholder="e.g. ea9003f9-4af7-4e13-8999-a89ab3d3ab59"
                       value={shipSidekickCredentials?.apiKey || ''}
                       onChange={(e) => setShipSidekickCredentials(p => ({ ...p, apiKey: e.target.value.trim() }))}
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
