@@ -189,7 +189,8 @@ export default async function handler(req, res) {
     });
   }
 
-  // For non-test requests (rates, carriers), use the most common patterns
+  // For non-test requests, build headers using the auth pattern that worked during test
+  // We send both common auth headers — the server will use whichever it recognizes
   const headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -198,83 +199,171 @@ export default async function handler(req, res) {
   };
   if (clientSlug) {
     headers['x-client-slug'] = clientSlug;
+    headers['X-Client-Slug'] = clientSlug;
   }
 
-  const baseUrl = `https://${host}/api/v1`;
+  // Try multiple base URL patterns for data endpoints
+  const baseUrls = [
+    `https://${host}`,
+    `https://${host}/api`,
+    `https://${host}/api/v1`,
+    `https://${host}/api/v2`,
+  ];
 
-  // Fetch shipping rates
+  // Helper: try a fetch against multiple base URLs
+  async function tryFetch(pathSuffixes, method = 'GET', body = null) {
+    let lastError = null;
+    for (const base of baseUrls) {
+      for (const path of pathSuffixes) {
+        const url = `${base}${path}`;
+        try {
+          const opts = { method, headers };
+          if (body) opts.body = JSON.stringify(body);
+          const r = await fetch(url, opts);
+          if (r.ok) {
+            const data = await r.json();
+            return { success: true, data, url };
+          }
+          if (r.status === 404) continue; // try next path
+          const errorText = await r.text().catch(() => '');
+          lastError = `${r.status}: ${errorText.slice(0, 200)}`;
+          if (r.status === 401 || r.status === 403) {
+            return { success: false, error: `Auth failed (${r.status}): ${errorText.slice(0, 200)}` };
+          }
+        } catch (err) {
+          lastError = err.message;
+        }
+      }
+    }
+    return { success: false, error: lastError || 'All endpoints returned 404' };
+  }
+
+  // ========== INVENTORY SYNC ==========
+  if (syncType === 'inventory') {
+    console.log('[ShipSidekick] Starting inventory sync...');
+    const inventoryPaths = ['/inventory', '/products', '/stock', '/items', '/inventory/products', '/warehouse/inventory'];
+    const result = await tryFetch(inventoryPaths);
+
+    if (!result.success) {
+      return res.status(200).json({ error: `Inventory sync failed: ${result.error}` });
+    }
+
+    console.log(`[ShipSidekick] Inventory fetched from: ${result.url}`);
+    const raw = result.data;
+
+    // Normalize response — Ship Sidekick may return data in various shapes
+    const items = raw.items || raw.products || raw.inventory || raw.data || (Array.isArray(raw) ? raw : []);
+    const inventoryBySku = {};
+    let totalUnits = 0;
+    let skuCount = 0;
+
+    for (const item of items) {
+      const sku = item.sku || item.SKU || item.product_sku || item.item_sku || item.code || '';
+      if (!sku) continue;
+
+      const qtyOnHand = item.quantity_on_hand ?? item.qty_on_hand ?? item.on_hand ?? item.quantity ?? item.stock ?? item.available ?? 0;
+      const qtyAvailable = item.quantity_available ?? item.qty_available ?? item.available ?? qtyOnHand;
+      const qtyInbound = item.quantity_inbound ?? item.qty_inbound ?? item.inbound ?? item.in_transit ?? 0;
+      const qtyAllocated = item.quantity_allocated ?? item.qty_allocated ?? item.allocated ?? item.reserved ?? 0;
+      const cost = item.cost ?? item.unit_cost ?? item.cogs ?? 0;
+      const name = item.name || item.product_name || item.title || item.description || sku;
+
+      inventoryBySku[sku] = {
+        sku,
+        name,
+        barcode: item.barcode || item.upc || item.ean || '',
+        totalQty: qtyOnHand,
+        quantityOnHand: qtyOnHand,
+        quantityAvailable: qtyAvailable,
+        quantityInbound: qtyInbound,
+        quantityAllocated: qtyAllocated,
+        cost,
+        totalValue: qtyOnHand * cost,
+        source: 'shipsidekick',
+      };
+
+      totalUnits += qtyOnHand;
+      skuCount++;
+    }
+
+    console.log(`[ShipSidekick] Inventory processed: ${skuCount} SKUs, ${totalUnits} total units`);
+
+    return res.status(200).json({
+      success: true,
+      syncType: 'inventory',
+      date: new Date().toISOString().split('T')[0],
+      source: 'shipsidekick-direct',
+      summary: {
+        totalUnits,
+        skuCount,
+        productsFetched: items.length,
+        productsWithInventory: skuCount,
+      },
+      items: Object.values(inventoryBySku),
+      inventoryBySku,
+      products: items,
+    });
+  }
+
+  // ========== SHIPMENTS SYNC ==========
+  if (syncType === 'shipments') {
+    const { startDate, endDate } = req.body;
+    const shipmentPaths = ['/shipments', '/orders/shipments', '/fulfillments', '/shipping/history'];
+    const result = await tryFetch(shipmentPaths);
+
+    if (!result.success) {
+      return res.status(200).json({ error: `Shipments sync failed: ${result.error}` });
+    }
+
+    const raw = result.data;
+    const shipments = raw.shipments || raw.data || raw.orders || (Array.isArray(raw) ? raw : []);
+
+    return res.status(200).json({
+      success: true,
+      syncType: 'shipments',
+      shipmentCount: shipments.length,
+      dateRange: { startDate, endDate },
+      shipments,
+    });
+  }
+
+  // ========== CARRIERS ==========
+  if (syncType === 'carriers') {
+    const carrierPaths = ['/carriers', '/shipping/carriers', '/services'];
+    const result = await tryFetch(carrierPaths);
+
+    if (!result.success) {
+      return res.status(200).json({ error: `Carrier fetch failed: ${result.error}` });
+    }
+
+    const raw = result.data;
+    const carriers = raw.carriers || raw.data || raw.services || (Array.isArray(raw) ? raw : []);
+    return res.status(200).json({ success: true, carriers });
+  }
+
+  // ========== RATES ==========
   if (syncType === 'rates') {
     const { shipment } = req.body;
     if (!shipment) {
       return res.status(400).json({ error: 'Shipment details required for rate lookup' });
     }
 
-    try {
-      const ratesRes = await fetch(`${baseUrl}/rates`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(shipment),
-      });
+    const ratePaths = ['/rates', '/shipping/rates', '/quotes'];
+    const result = await tryFetch(ratePaths, 'POST', shipment);
 
-      if (!ratesRes.ok) {
-        if (ratesRes.status === 401) {
-          return res.status(200).json({ error: 'Authentication failed. Check your API key and client slug.' });
-        }
-        const errorText = await ratesRes.text().catch(() => '');
-        return res.status(200).json({ error: `Rate lookup failed (${ratesRes.status}): ${errorText.slice(0, 200)}` });
-      }
-
-      const data = await ratesRes.json();
-      return res.status(200).json({ success: true, rates: data.rates || data });
-    } catch (err) {
-      console.error('[ShipSidekick] Rate lookup error:', err);
-      return res.status(500).json({ error: `Rate lookup failed: ${err.message}` });
+    if (!result.success) {
+      return res.status(200).json({ error: `Rate lookup failed: ${result.error}` });
     }
-  }
 
-  // Fetch carriers / account info
-  if (syncType === 'carriers') {
-    try {
-      const carriersRes = await fetch(`${baseUrl}/carriers`, {
-        method: 'GET',
-        headers,
-      });
-
-      if (!carriersRes.ok) {
-        if (carriersRes.status === 401) {
-          return res.status(200).json({ error: 'Authentication failed. Check your API key and client slug.' });
-        }
-        const errorText = await carriersRes.text().catch(() => '');
-        return res.status(200).json({ error: `Carrier fetch failed (${carriersRes.status}): ${errorText.slice(0, 200)}` });
-      }
-
-      const data = await carriersRes.json();
-      return res.status(200).json({ success: true, carriers: data.carriers || data });
-    } catch (err) {
-      console.error('[ShipSidekick] Carriers fetch error:', err);
-      return res.status(500).json({ error: `Carrier fetch failed: ${err.message}` });
-    }
+    const raw = result.data;
+    return res.status(200).json({ success: true, rates: raw.rates || raw.data || raw });
   }
 
   // Default: return account info
-  try {
-    const accountRes = await fetch(`${baseUrl}/account`, {
-      method: 'GET',
-      headers,
-    });
-
-    if (!accountRes.ok) {
-      if (accountRes.status === 401) {
-        return res.status(200).json({ error: 'Authentication failed. Check your API key and client slug.' });
-      }
-      const errorText = await accountRes.text().catch(() => '');
-      return res.status(200).json({ error: `Account fetch failed (${accountRes.status}): ${errorText.slice(0, 200)}` });
-    }
-
-    const data = await accountRes.json();
-    return res.status(200).json({ success: true, account: data });
-  } catch (err) {
-    console.error('[ShipSidekick] Account fetch error:', err);
-    return res.status(500).json({ error: `Account fetch failed: ${err.message}` });
+  const accountPaths = ['/account', '/me', '/profile'];
+  const result = await tryFetch(accountPaths);
+  if (!result.success) {
+    return res.status(200).json({ error: `Account fetch failed: ${result.error}` });
   }
+  return res.status(200).json({ success: true, account: result.data });
 }

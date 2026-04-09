@@ -23,6 +23,7 @@ export default async function handler(req, res) {
       amazonCredentials,
       shopifyCredentials,
       packiyoCredentials,
+      shipSidekickCredentials,
     } = req.body || {};
     
     const baseUrl = process.env.VERCEL_URL 
@@ -88,15 +89,41 @@ export default async function handler(req, res) {
       }
     }
     
-    // Packiyo Sync - uses /api/packiyo/sync
-    if (packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY) {
+    // Ship Sidekick 3PL Sync - uses /api/shipsidekick/sync
+    if (shipSidekickCredentials?.apiKey) {
       try {
-        console.log('Syncing Packiyo...');
+        console.log('Syncing Ship Sidekick inventory...');
+        const sskRes = await fetch(`${baseUrl}/api/shipsidekick/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            syncType: 'inventory',
+            apiKey: shipSidekickCredentials.apiKey,
+            clientSlug: shipSidekickCredentials.clientSlug || 'tallowbourn',
+            environment: shipSidekickCredentials.environment || 'production',
+          }),
+        });
+        const data = await sskRes.json();
+        results.push({
+          service: 'Ship Sidekick',
+          success: !data.error && sskRes.ok,
+          skus: data.summary?.skuCount || data.products?.length || 0,
+          error: data.error,
+        });
+      } catch (err) {
+        results.push({ service: 'Ship Sidekick', success: false, error: err.message });
+      }
+    }
+
+    // Legacy Packiyo Sync (fallback if Ship Sidekick not configured)
+    if (!shipSidekickCredentials?.apiKey && (packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY)) {
+      try {
+        console.log('Syncing Packiyo (legacy)...');
         const packiyoRes = await fetch(`${baseUrl}/api/packiyo/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            syncType: 'inventory', // Use inventory for cron sync
+            syncType: 'inventory',
             apiKey: packiyoCredentials?.apiKey || process.env.PACKIYO_API_KEY,
             customerId: packiyoCredentials?.customerId || process.env.PACKIYO_CUSTOMER_ID || '134',
             baseUrl: packiyoCredentials?.baseUrl || 'https://excel3pl.packiyo.com/api/v1',

@@ -1086,9 +1086,9 @@ const SettingsView = ({
           )}
         </SettingSection>
         
-        {/* Packiyo 3PL Connection */}
-        <SettingSection title="📦 Packiyo 3PL Connection">
-          <p className="text-slate-400 text-sm mb-4">Connect directly to Packiyo for accurate 3PL inventory (Excel3PL)</p>
+        {/* Packiyo 3PL Connection (Legacy) */}
+        <SettingSection title="📦 Packiyo 3PL (Legacy — replaced by Ship Sidekick)">
+          <p className="text-slate-400 text-sm mb-4">This integration has been replaced by Ship Sidekick above. If you still need Packiyo access, the connection is preserved below.</p>
           
           {packiyoCredentials.connected ? (
             <div className="space-y-4">
@@ -2062,9 +2062,9 @@ const SettingsView = ({
           )}
         </SettingSection>
 
-        {/* Ship Sidekick Shipping API */}
-        <SettingSection title="🚚 Ship Sidekick Shipping API">
-          <p className="text-slate-400 text-sm mb-4">Connect to Ship Sidekick for shipping rate lookups and carrier management</p>
+        {/* Ship Sidekick 3PL + Shipping */}
+        <SettingSection title="🚚 Ship Sidekick (3PL + Shipping)">
+          <p className="text-slate-400 text-sm mb-4">Your primary 3PL provider — syncs inventory, carriers, and shipping rates directly to the Inventory page</p>
 
           {shipSidekickCredentials?.connected ? (
             <div className="space-y-4">
@@ -2100,6 +2100,46 @@ const SettingsView = ({
                 </div>
               </div>
 
+              {/* Sync 3PL Inventory */}
+              <SettingRow label="Sync 3PL Inventory" desc="Pull latest inventory from Ship Sidekick and update inventory page">
+                <button
+                  onClick={async () => {
+                    setPackiyoInventoryStatus({ loading: true, error: null, lastSync: null });
+                    try {
+                      const res = await fetch('/api/shipsidekick/sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          apiKey: shipSidekickCredentials.apiKey,
+                          clientSlug: shipSidekickCredentials.clientSlug,
+                          environment: shipSidekickCredentials.environment || 'production',
+                          syncType: 'inventory',
+                        }),
+                      });
+                      const data = await res.json();
+                      if (data.error) throw new Error(data.error);
+                      if (data.inventoryBySku || data.products) {
+                        setPackiyoInventoryData(data);
+                      }
+                      setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                      setPackiyoInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
+                      setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Ship Sidekick`, type: 'success' });
+                    } catch (err) {
+                      setPackiyoInventoryStatus({ loading: false, error: err.message, lastSync: null });
+                      setToast({ message: 'Inventory sync failed: ' + err.message, type: 'error' });
+                    }
+                  }}
+                  disabled={packiyoInventoryStatus?.loading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm text-white flex items-center gap-2"
+                >
+                  {packiyoInventoryStatus?.loading ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" />Syncing...</>
+                  ) : (
+                    <><RefreshCw className="w-4 h-4" />Sync Inventory</>
+                  )}
+                </button>
+              </SettingRow>
+
               {/* Sync Carriers */}
               <SettingRow label="Sync Carriers" desc="Fetch available carriers from Ship Sidekick">
                 <button
@@ -2118,25 +2158,15 @@ const SettingsView = ({
                       });
                       const data = await res.json();
                       if (data.error) throw new Error(data.error);
-                      setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                      setShipSidekickCredentials(p => ({ ...p, carriers: data.carriers }));
                       setToast({ message: `Synced ${data.carriers?.length || 0} carriers from Ship Sidekick`, type: 'success' });
                     } catch (err) {
                       setToast({ message: 'Carrier sync failed: ' + err.message, type: 'error' });
                     }
                   }}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white flex items-center gap-2"
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white flex items-center gap-2"
                 >
                   <RefreshCw className="w-4 h-4" />Sync Carriers
-                </button>
-              </SettingRow>
-
-              {/* Fetch Rates */}
-              <SettingRow label="Get Shipping Rates" desc="Look up live shipping rates for an order">
-                <button
-                  onClick={() => { setUploadTab('shopify-sync'); setView('upload'); }}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white flex items-center gap-2"
-                >
-                  <Truck className="w-4 h-4" />Rate Lookup
                 </button>
               </SettingRow>
             </div>
@@ -2958,26 +2988,26 @@ const SettingsView = ({
                     </button>
                   </div>
                   
-                  {/* Packiyo */}
+                  {/* Ship Sidekick 3PL */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${packiyoCredentials.connected ? 'bg-violet-400' : 'bg-slate-500'}`} />
-                      <span className="text-slate-300">Packiyo 3PL</span>
-                      {packiyoCredentials.lastSync && (
+                      <div className={`w-2 h-2 rounded-full ${shipSidekickCredentials?.connected ? 'bg-blue-400' : 'bg-slate-500'}`} />
+                      <span className="text-slate-300">Ship Sidekick 3PL</span>
+                      {shipSidekickCredentials?.lastSync && (
                         <span className="text-slate-500 text-xs">
-                          Last: {new Date(packiyoCredentials.lastSync).toLocaleString()}
+                          Last: {new Date(shipSidekickCredentials.lastSync).toLocaleString()}
                         </span>
                       )}
                     </div>
                     <button
                       onClick={() => setAppSettings(prev => ({
                         ...prev,
-                        autoSync: { ...prev.autoSync, packiyo: !prev.autoSync?.packiyo }
+                        autoSync: { ...prev.autoSync, shipsidekick: !prev.autoSync?.shipsidekick }
                       }))}
-                      disabled={!packiyoCredentials.connected}
-                      className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected ? 'bg-violet-500' : 'bg-slate-600'} ${!packiyoCredentials.connected ? 'opacity-50' : ''}`}
+                      disabled={!shipSidekickCredentials?.connected}
+                      className={`w-10 h-5 rounded-full transition-colors relative ${appSettings.autoSync?.shipsidekick !== false && shipSidekickCredentials?.connected ? 'bg-blue-500' : 'bg-slate-600'} ${!shipSidekickCredentials?.connected ? 'opacity-50' : ''}`}
                     >
-                      <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.packiyo !== false ? 'left-5' : 'left-0.5'}`} />
+                      <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${appSettings.autoSync?.shipsidekick !== false ? 'left-5' : 'left-0.5'}`} />
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
@@ -3052,13 +3082,15 @@ const SettingsView = ({
                   <Truck className="w-4 h-4 text-violet-400" />
                 </div>
                 <div>
-                  <p className="text-white font-medium">3PL Inventory (Excel3PL)</p>
+                  <p className="text-white font-medium">3PL Inventory</p>
                   <p className="text-slate-400 text-xs">Fulfillment center stock</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {packiyoCredentials.connected ? (
-                  <span className="px-2 py-1 bg-violet-500/20 text-violet-400 text-xs rounded-full">Packiyo Direct</span>
+                {shipSidekickCredentials?.connected ? (
+                  <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs rounded-full">Ship Sidekick</span>
+                ) : packiyoCredentials.connected ? (
+                  <span className="px-2 py-1 bg-violet-500/20 text-violet-400 text-xs rounded-full">Packiyo (Legacy)</span>
                 ) : (
                   <span className="px-2 py-1 bg-slate-600/50 text-slate-400 text-xs rounded-full">Not Connected</span>
                 )}

@@ -85,10 +85,10 @@ const presets = {
     icon: Boxes,
     color: 'blue',
     title: 'No Inventory Snapshots',
-    description: 'Track stock levels, days of inventory, and reorder points by uploading inventory data or connecting Packiyo.',
+    description: 'Track stock levels, days of inventory, and reorder points by uploading inventory data or connecting Ship Sidekick.',
     steps: [
       { text: 'Upload an Amazon FBA Inventory report', action: 'upload' },
-      { text: 'Or connect Packiyo 3PL in Settings for live inventory', action: 'settings' },
+      { text: 'Or connect Ship Sidekick 3PL in Settings for live inventory', action: 'settings' },
       { text: 'Inventory alerts will trigger automatically when stock runs low', action: null },
     ],
   },
@@ -98,7 +98,7 @@ const presets = {
     title: 'No 3PL Cost Data',
     description: 'Track fulfillment costs by uploading invoices from your 3PL provider or entering costs manually.',
     steps: [
-      { text: 'Upload 3PL invoice spreadsheets (Packiyo, ShipBob, etc.)', action: null },
+      { text: 'Upload 3PL invoice spreadsheets (Ship Sidekick, ShipBob, etc.)', action: null },
       { text: 'Costs get matched to weeks for profit calculations', action: null },
     ],
   },

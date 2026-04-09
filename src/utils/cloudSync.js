@@ -4,7 +4,7 @@ import { devWarn, devError } from './logger';
 import { trimIntelData } from './storage';
 
 // Credentials to strip before saving to Supabase (SEC-003)
-const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials'];
+const CREDENTIAL_KEYS = ['shopifyCredentials', 'packiyoCredentials', 'amazonCredentials', 'qboCredentials', 'shipSidekickCredentials'];
 
 function stripCredentials(dataObj) {
   const clean = { ...dataObj };

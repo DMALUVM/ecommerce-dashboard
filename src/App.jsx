@@ -8229,7 +8229,7 @@ const savePeriods = async (d) => {
         const data = await res.json();
         
         if (data.success && data.items) {
-          tplSource = 'packiyo-direct';
+          tplSource = shipSidekickCredentials.connected ? 'shipsidekick-direct' : 'packiyo-direct';
           
           // Track SKUs we've already added (case-insensitive)
           const seenSkusLower = new Set();
@@ -8778,6 +8778,7 @@ const savePeriods = async (d) => {
         home: homeSource,
         amazonConnected: amazonCredentials.connected,
         packiyoConnected: packiyoCredentials.connected,
+        shipsidekickConnected: shipSidekickCredentials.connected,
         shopifyConnected: shopifyCredentials.connected,
       },
       learningStatus: {
@@ -12619,46 +12620,42 @@ const savePeriods = async (d) => {
         devWarn('[AutoSync] Velocity calculation error:', velErr.message);
       }
       
-      // Check Packiyo - use /api/packiyo/sync endpoint
+      // Check Ship Sidekick 3PL - use /api/shipsidekick/sync endpoint for inventory
       // SEC-003 race fix: cloud load may set connected=true before localStorage restores the apiKey
-      let packiyoKey = packiyoCredentials.apiKey;
-      let packiyoCustId = packiyoCredentials.customerId;
-      let packiyoBase = packiyoCredentials.baseUrl;
-      if (packiyoCredentials.connected && !packiyoKey) {
+      let sskKey = shipSidekickCredentials.apiKey;
+      if (shipSidekickCredentials.connected && !sskKey) {
         try {
-          const ls = JSON.parse(lsGet('ecommerce_packiyo_creds_v1') || '{}');
+          const ls = JSON.parse(lsGet('ecommerce_shipsidekick_creds_v1') || '{}');
           if (ls.apiKey) {
-            packiyoKey = ls.apiKey;
-            packiyoCustId = ls.customerId || packiyoCustId;
-            packiyoBase = ls.baseUrl || packiyoBase;
-            setPackiyoCredentials(p => ({ ...p, apiKey: ls.apiKey, customerId: ls.customerId || p.customerId, baseUrl: ls.baseUrl || p.baseUrl }));
+            sskKey = ls.apiKey;
+            setShipSidekickCredentials(p => ({ ...p, apiKey: ls.apiKey }));
           }
         } catch (e) {}
       }
-      if (appSettings.autoSync?.packiyo !== false && packiyoCredentials.connected && packiyoKey && packiyoCustId) {
-        const packiyoStale = isServiceStale(packiyoCredentials.lastSync, threshold);
-        
-        if (packiyoStale || force) {
-          console.log('[AutoSync] Packiyo: starting sync...');
+      if (appSettings.autoSync?.shipsidekick !== false && shipSidekickCredentials.connected && sskKey) {
+        const sskStale = isServiceStale(shipSidekickCredentials.lastSync, threshold);
+
+        if (sskStale || force) {
+          console.log('[AutoSync] Ship Sidekick: starting inventory sync...');
           try {
-            const res = await fetch('/api/packiyo/sync', {
+            const res = await fetch('/api/shipsidekick/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                syncType: 'inventory', // Use inventory for auto-sync
-                apiKey: packiyoKey,
-                customerId: packiyoCustId,
-                baseUrl: packiyoBase,
+                syncType: 'inventory',
+                apiKey: sskKey,
+                clientSlug: shipSidekickCredentials.clientSlug,
+                environment: shipSidekickCredentials.environment || 'production',
               }),
             });
             const data = await res.json();
             if (!data.error && res.ok) {
-              if (data.products) {
-                setPackiyoInventoryData(data);
+              if (data.products || data.inventoryBySku) {
+                setPackiyoInventoryData(data); // Reuse existing inventory data state
               }
-              setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-              results.push({ service: 'Packiyo', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
-              console.log(`[AutoSync] Packiyo: ${data.summary?.skuCount || data.products?.length || 0} SKUs synced`);
+              setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+              results.push({ service: 'Ship Sidekick', success: true, skus: data.summary?.skuCount || data.products?.length || 0 });
+              console.log(`[AutoSync] Ship Sidekick: ${data.summary?.skuCount || data.products?.length || 0} SKUs synced`);
               
               // ========== AUTO-SYNC: INVENTORY UPDATE ==========
               // Velocity lookups are now built at parent scope (before Packiyo)
@@ -12942,9 +12939,9 @@ const savePeriods = async (d) => {
                       },
                       sources: {
                         ...currentSnapshot.sources,
-                        threepl: 'packiyo-auto-sync',
-                        packiyoConnected: true,
-                        lastPackiyoSync: new Date().toISOString(),
+                        threepl: 'shipsidekick-auto-sync',
+                        shipsidekickConnected: true,
+                        lastShipSidekickSync: new Date().toISOString(),
                         ...(freshHomeInvData && { lastHomeSync: new Date().toISOString(), homeSource: 'shopify-auto-sync' }),
                         amazon: freshAmazonFbaData ? 'amazon-fba-auto-sync' : (currentSnapshot.sources?.amazon || 'unknown'),
                         lastAmazonFbaSync: freshAmazonFbaData ? new Date().toISOString() : (currentSnapshot.sources?.lastAmazonFbaSync || null),
@@ -12964,38 +12961,6 @@ const savePeriods = async (d) => {
                 // Non-fatal - the API sync still succeeded
               }
             } else {
-              results.push({ service: 'Packiyo', success: false, error: data.error || `HTTP ${res.status}` });
-              devWarn('Packiyo auto-sync failed:', data.error || res.status);
-            }
-          } catch (err) {
-            results.push({ service: 'Packiyo', success: false, error: err.message });
-            devWarn('Packiyo auto-sync error:', err.message);
-          }
-        }
-      }
-      
-      // ========== AUTO-SYNC: SHIP SIDEKICK CARRIERS ==========
-      if (appSettings.autoSync?.shipsidekick !== false && shipSidekickCredentials.connected && shipSidekickCredentials.apiKey) {
-        const sskStale = isServiceStale(shipSidekickCredentials.lastSync, threshold);
-        if (sskStale || force) {
-          console.log('[AutoSync] Ship Sidekick: starting carrier sync...');
-          try {
-            const res = await fetch('/api/shipsidekick/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                apiKey: shipSidekickCredentials.apiKey,
-                clientSlug: shipSidekickCredentials.clientSlug,
-                environment: shipSidekickCredentials.environment || 'production',
-                syncType: 'carriers',
-              }),
-            });
-            const data = await res.json();
-            if (!data.error && res.ok && data.carriers) {
-              setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString(), carriers: data.carriers }));
-              results.push({ service: 'Ship Sidekick', success: true, carriers: data.carriers?.length || 0 });
-              console.log(`[AutoSync] Ship Sidekick: ${data.carriers?.length || 0} carriers synced`);
-            } else {
               results.push({ service: 'Ship Sidekick', success: false, error: data.error || `HTTP ${res.status}` });
               devWarn('Ship Sidekick auto-sync failed:', data.error || res.status);
             }
@@ -13005,7 +12970,7 @@ const savePeriods = async (d) => {
           }
         }
       }
-
+      
       // ========== STANDALONE INVENTORY MERGE (when Packiyo didn't run) ==========
       // Merges fresh Amazon FBA/AWD data AND/OR fresh home inventory + velocity updates
       // into the snapshot. Only runs if Packiyo didn't already handle the merge.
@@ -13540,7 +13505,7 @@ const savePeriods = async (d) => {
     
     // Delay auto-sync by 3 seconds to let app fully load
     const timer = setTimeout(() => {
-      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
+      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected || shipSidekickCredentials.connected;
       if (anyConnected) {
         runAutoSyncRef.current();
       }
@@ -13558,7 +13523,7 @@ const savePeriods = async (d) => {
     
     
     const interval = setInterval(() => {
-      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected;
+      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected || shipSidekickCredentials.connected;
       if (anyConnected) {
         runAutoSyncRef.current();
       }
@@ -17183,6 +17148,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       isProcessing={isProcessing}
       navDropdown={navDropdown}
       packiyoCredentials={packiyoCredentials}
+      shipSidekickCredentials={shipSidekickCredentials}
       parseBulkAdFile={parseBulkAdFile}
       periodAdSpend={periodAdSpend}
       periodFileNames={periodFileNames}

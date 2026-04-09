@@ -249,7 +249,7 @@ export default async function handler(req, res) {
             nameLower.includes('home') || nameLower.includes('office')) {
           locType = 'home';
         } else if (nameLower.includes('excel') || nameLower.includes('3pl') ||
-                   nameLower.includes('packiyo') || nameLower.includes('warehouse') ||
+                   nameLower.includes('packiyo') || nameLower.includes('sidekick') || nameLower.includes('warehouse') ||
                    nameLower.includes('fulfillment')) {
           locType = '3pl';
         }
@@ -279,7 +279,7 @@ export default async function handler(req, res) {
         const non3plLocations = allLocations.filter(loc => {
           const nameLower = loc.name.toLowerCase();
           return !nameLower.includes('excel') && !nameLower.includes('3pl') &&
-                 !nameLower.includes('packiyo') && !nameLower.includes('warehouse') &&
+                 !nameLower.includes('packiyo') && !nameLower.includes('sidekick') && !nameLower.includes('warehouse') &&
                  !nameLower.includes('fulfillment');
         });
         homeLocations.push(...non3plLocations);
@@ -454,7 +454,7 @@ export default async function handler(req, res) {
           skuCount: Object.keys(inventoryBySku).length,
           skippedNoSku, // Items without SKU cannot be matched across systems
           locationCount: locations.length,
-          note: '3PL inventory excluded - use Packiyo sync for 3PL',
+          note: '3PL inventory excluded - use Ship Sidekick sync for 3PL',
         },
         items: Object.values(inventoryBySku)
           .map(item => ({
