@@ -4289,10 +4289,15 @@ const loadFromLocal = useCallback(() => {
     if (r) setQboCredentials(JSON.parse(r));
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
 
-  // Load Ship Sidekick credentials from localStorage
+  // Load Ship Sidekick credentials from localStorage (merge with defaults for slug/env)
   try {
     const r = lsGet('ecommerce_shipsidekick_creds_v1');
-    if (r) setShipSidekickCredentials(JSON.parse(r));
+    if (r) {
+      const saved = JSON.parse(r);
+      if (!saved.clientSlug) saved.clientSlug = 'tallowbourn';
+      if (!saved.environment) saved.environment = 'production';
+      setShipSidekickCredentials(saved);
+    }
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
 }, []);
 
