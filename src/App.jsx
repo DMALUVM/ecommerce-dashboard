@@ -8208,15 +8208,53 @@ const savePeriods = async (d) => {
       });
     }
 
-    // ===== 3PL INVENTORY - Use Packiyo if connected, otherwise fall back to file upload =====
-    // NOTE: Ship Sidekick integration is available from Settings > Sync Inventory for testing.
-    // It will replace Packiyo here once inventory quantities are verified correct.
+    // ===== 3PL INVENTORY - Use Ship Sidekick (primary) or Packiyo (legacy fallback) =====
     let tplInv = {};
     let tplTotal = 0, tplValue = 0, tplInbound = 0;
     let tplSource = 'file';
 
-    if (packiyoCredentials.connected && packiyoCredentials.apiKey) {
-      // Fetch directly from Packiyo
+    if (shipSidekickCredentials.connected && shipSidekickCredentials.apiKey) {
+      // Fetch from Ship Sidekick (primary 3PL)
+      try {
+        const res = await fetch('/api/shipsidekick/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: shipSidekickCredentials.apiKey,
+            clientSlug: shipSidekickCredentials.clientSlug,
+            environment: shipSidekickCredentials.environment || 'production',
+            syncType: 'inventory',
+          }),
+        });
+        const data = await res.json();
+
+        if (data.success && data.items) {
+          tplSource = 'shipsidekick-direct';
+          const seenSkusLower = new Set();
+          data.items.forEach(item => {
+            const sku = item.sku;
+            if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
+            const skuLower = sku.toLowerCase();
+            if (seenSkusLower.has(skuLower)) return;
+            seenSkusLower.add(skuLower);
+            const qty = item.quantity_on_hand || 0;
+            const inb = item.quantity_inbound || 0;
+            if (qty === 0 && inb === 0) return; // Skip zero-inventory (digital/bundles)
+            const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0;
+            tplTotal += qty;
+            tplValue += qty * cost;
+            tplInbound += inb;
+            tplInv[sku.toUpperCase()] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+          });
+          setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+        }
+      } catch (err) {
+        devError('Ship Sidekick sync failed, falling back:', err);
+      }
+    }
+
+    // Legacy fallback: Packiyo (only if Ship Sidekick didn't provide data)
+    if (Object.keys(tplInv).length === 0 && packiyoCredentials.connected && packiyoCredentials.apiKey) {
       try {
         const res = await fetch('/api/packiyo/sync', {
           method: 'POST',
