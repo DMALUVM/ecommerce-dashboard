@@ -294,35 +294,68 @@ export default async function handler(req, res) {
         cursor = page.hasMore ? page.nextCursor : null;
       } while (cursor && pageCount < maxPages);
 
-      // Try to fetch inventory levels from separate endpoint (single fast attempt)
+      // Try to fetch inventory levels from separate endpoints
       let inventoryByVariantId = {};
-      const invUrl = `https://${host}/api/v1/inventory-levels?limit=500`;
-      try {
-        fetchDebugLog.push(`Trying: ${invUrl}`);
-        const r = await fetch(invUrl, { method: 'GET', headers });
-        fetchDebugLog.push(`  -> ${r.status}`);
-        if (r.ok) {
-          const invData = await r.json();
-          const levels = invData.data || invData.items || (Array.isArray(invData) ? invData : []);
-          fetchDebugLog.push(`  ${levels.length} inventory levels found`);
-          if (levels.length > 0) {
-            fetchDebugLog.push(`  Level keys: ${JSON.stringify(Object.keys(levels[0]))}`);
-            fetchDebugLog.push(`  Level sample: ${JSON.stringify(levels[0]).slice(0, 400)}`);
-            for (const lvl of levels) {
-              const vid = lvl.variantId || lvl.variant_id || lvl.productVariantId || lvl.product_variant_id || '';
-              if (vid) {
-                if (!inventoryByVariantId[vid]) inventoryByVariantId[vid] = [];
-                inventoryByVariantId[vid].push(lvl);
+      const invEndpoints = [
+        '/inventory-levels',
+        '/inventory',
+        '/stock',
+        '/product-variants/inventory',
+      ];
+      let foundInvEndpoint = false;
+
+      for (const path of invEndpoints) {
+        if (foundInvEndpoint) break;
+        const invUrl = `https://${host}/api/v1${path}?limit=500`;
+        try {
+          fetchDebugLog.push(`Trying: ${invUrl}`);
+          const r = await fetch(invUrl, { method: 'GET', headers });
+          fetchDebugLog.push(`  -> ${r.status}`);
+          if (r.ok) {
+            const invData = await r.json();
+            const levels = invData.data || invData.items || invData.inventory || (Array.isArray(invData) ? invData : []);
+            fetchDebugLog.push(`  ${levels.length} records found`);
+            if (levels.length > 0) {
+              fetchDebugLog.push(`  Keys: ${JSON.stringify(Object.keys(levels[0]))}`);
+              fetchDebugLog.push(`  Sample: ${JSON.stringify(levels[0]).slice(0, 500)}`);
+              foundInvEndpoint = true;
+
+              // Paginate through all inventory levels
+              let allLevels = [...levels];
+              let invCursor = invData.nextCursor;
+              let invPage = 1;
+              while (invData.hasMore && invCursor && invPage < 10) {
+                const nextUrl = `https://${host}/api/v1${path}?limit=500&cursor=${encodeURIComponent(invCursor)}`;
+                const r2 = await fetch(nextUrl, { method: 'GET', headers });
+                if (!r2.ok) break;
+                const page2 = await r2.json();
+                const moreLevels = page2.data || page2.items || [];
+                allLevels = allLevels.concat(moreLevels);
+                invCursor = page2.nextCursor;
+                invPage++;
+                if (!page2.hasMore) break;
+              }
+              fetchDebugLog.push(`  Total inventory levels: ${allLevels.length} (${invPage} pages)`);
+
+              for (const lvl of allLevels) {
+                // Try every possible variant ID field
+                const vid = lvl.variantId || lvl.variant_id || lvl.productVariantId
+                  || lvl.product_variant_id || lvl.variantid || '';
+                if (vid) {
+                  if (!inventoryByVariantId[vid]) inventoryByVariantId[vid] = [];
+                  inventoryByVariantId[vid].push(lvl);
+                }
               }
             }
           }
+          if (r.status === 404) continue;
+        } catch (err) {
+          fetchDebugLog.push(`  ${path} error: ${err.message}`);
         }
-      } catch (err) {
-        fetchDebugLog.push(`  inventory-levels error: ${err.message}`);
       }
 
       const hasExternalInventory = Object.keys(inventoryByVariantId).length > 0;
-      fetchDebugLog.push(`External inventory loaded: ${hasExternalInventory} (${Object.keys(inventoryByVariantId).length} variants)`);
+      fetchDebugLog.push(`External inventory: ${hasExternalInventory} (${Object.keys(inventoryByVariantId).length} variants matched)`);
 
       const inventoryBySku = {};
       let totalUnits = 0;
