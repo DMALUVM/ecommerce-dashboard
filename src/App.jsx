@@ -8208,58 +8208,15 @@ const savePeriods = async (d) => {
       });
     }
 
-    // ===== 3PL INVENTORY - Use Ship Sidekick (primary) or Packiyo (legacy fallback), then file upload =====
+    // ===== 3PL INVENTORY - Use Packiyo if connected, otherwise fall back to file upload =====
+    // NOTE: Ship Sidekick integration is available from Settings > Sync Inventory for testing.
+    // It will replace Packiyo here once inventory quantities are verified correct.
     let tplInv = {};
     let tplTotal = 0, tplValue = 0, tplInbound = 0;
     let tplSource = 'file';
 
-    // Helper to process 3PL sync response items into tplInv
-    const process3plItems = (data, sourceName) => {
-      if (!data.success || !data.items) return false;
-      tplSource = sourceName;
-      const seenSkusLower = new Set();
-      data.items.forEach(item => {
-        const sku = item.sku;
-        if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
-        const skuLower = sku.toLowerCase();
-        if (seenSkusLower.has(skuLower)) return;
-        seenSkusLower.add(skuLower);
-        const qty = item.quantity_on_hand || item.quantityOnHand || item.totalQty || 0;
-        const inb = item.quantity_inbound || item.quantityInbound || 0;
-        const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0;
-        tplTotal += qty;
-        tplValue += qty * cost;
-        tplInbound += inb;
-        tplInv[sku.toUpperCase()] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
-      });
-      return Object.keys(tplInv).length > 0;
-    };
-
-    // Primary: Ship Sidekick
-    if (shipSidekickCredentials.connected && shipSidekickCredentials.apiKey) {
-      try {
-        const res = await fetch('/api/shipsidekick/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            apiKey: shipSidekickCredentials.apiKey,
-            clientSlug: shipSidekickCredentials.clientSlug,
-            environment: shipSidekickCredentials.environment || 'production',
-            syncType: 'inventory',
-          }),
-        });
-        const data = await res.json();
-        process3plItems(data, 'shipsidekick-direct');
-        if (Object.keys(tplInv).length > 0) {
-          setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-        }
-      } catch (err) {
-        devError('Ship Sidekick sync failed, trying fallback:', err);
-      }
-    }
-
-    // Fallback: Packiyo (legacy)
-    if (Object.keys(tplInv).length === 0 && packiyoCredentials.connected && packiyoCredentials.apiKey) {
+    if (packiyoCredentials.connected && packiyoCredentials.apiKey) {
+      // Fetch directly from Packiyo
       try {
         const res = await fetch('/api/packiyo/sync', {
           method: 'POST',
@@ -8272,8 +8229,24 @@ const savePeriods = async (d) => {
           }),
         });
         const data = await res.json();
-        process3plItems(data, 'packiyo-direct');
-        if (Object.keys(tplInv).length > 0) {
+
+        if (data.success && data.items) {
+          tplSource = 'packiyo-direct';
+          const seenSkusLower = new Set();
+          data.items.forEach(item => {
+            const sku = item.sku;
+            if (!sku || sku.includes('Bundle') || item.name?.includes('Gift Card') || item.name?.includes('FREE')) return;
+            const skuLower = sku.toLowerCase();
+            if (seenSkusLower.has(skuLower)) return;
+            seenSkusLower.add(skuLower);
+            const qty = item.quantity_on_hand || 0;
+            const inb = item.quantity_inbound || 0;
+            const cost = item.cost || cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0;
+            tplTotal += qty;
+            tplValue += qty * cost;
+            tplInbound += inb;
+            tplInv[sku.toUpperCase()] = { sku, name: item.name || sku, total: qty, inbound: inb, cost };
+          });
           setPackiyoCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
         }
       } catch (err) {
