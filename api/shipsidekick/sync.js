@@ -365,16 +365,20 @@ export default async function handler(req, res) {
       let totalVariants = 0;
 
       // Sum inventory across warehouse locations
+      // Ship Sidekick fields: availableQuantity, incomingQuantity, committedQuantity,
+      //   reservedQuantity, damagedQuantity, safetyStockQuantity, qualityControlQuantity
       function sumInventoryLevels(levels) {
         if (!Array.isArray(levels) || levels.length === 0) return null;
-        let onHand = 0, available = 0, incoming = 0, allocated = 0;
+        let available = 0, incoming = 0, committed = 0, reserved = 0;
         for (const lvl of levels) {
-          onHand += lvl.onHand ?? lvl.on_hand ?? lvl.quantity ?? lvl.stock ?? lvl.quantityOnHand ?? 0;
-          available += lvl.available ?? lvl.availableForSale ?? lvl.quantityAvailable ?? 0;
-          incoming += lvl.incoming ?? lvl.inbound ?? lvl.inTransit ?? lvl.quantityIncoming ?? 0;
-          allocated += lvl.allocated ?? lvl.committed ?? lvl.reserved ?? lvl.quantityAllocated ?? 0;
+          available += lvl.availableQuantity ?? lvl.available ?? lvl.quantityAvailable ?? lvl.onHand ?? lvl.quantity ?? 0;
+          incoming += lvl.incomingQuantity ?? lvl.incoming ?? lvl.quantityIncoming ?? lvl.inbound ?? 0;
+          committed += lvl.committedQuantity ?? lvl.committed ?? lvl.quantityAllocated ?? lvl.allocated ?? 0;
+          reserved += lvl.reservedQuantity ?? lvl.reserved ?? 0;
         }
-        return { onHand, available: available || onHand, incoming, allocated };
+        // On-hand = available + committed + reserved (total stock in warehouse)
+        const onHand = available + committed + reserved;
+        return { onHand, available, incoming, committed, reserved };
       }
 
       for (const product of allItems) {
@@ -399,9 +403,9 @@ export default async function handler(req, res) {
           const summed = sumInventoryLevels(invLevels);
 
           const qtyOnHand = summed?.onHand ?? 0;
-          const qtyAvailable = summed?.available ?? qtyOnHand;
+          const qtyAvailable = summed?.available ?? 0;
           const qtyInbound = summed?.incoming ?? 0;
-          const qtyAllocated = summed?.allocated ?? 0;
+          const qtyAllocated = summed?.committed ?? 0;
           const cost = v.costPrice ?? v.cost ?? v.wholesalePrice ?? 0;
           const variantName = v.title || v.name || '';
           const displayName = variantName && variantName !== productName

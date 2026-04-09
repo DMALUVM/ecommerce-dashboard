@@ -1322,9 +1322,7 @@ const InventoryView = ({
           <MetricCard label="AWD" value={formatNumber(filteredSummary.awdUnits || 0)} sub={formatCurrency(filteredSummary.awdValue || 0)} icon={Boxes} color="amber" />
           {filteredSummary.homeUnits > 0 && <MetricCard label="Home" value={formatNumber(filteredSummary.homeUnits || 0)} sub={formatCurrency(filteredSummary.homeValue || 0)} icon={Store} color="teal" />}
           <MetricCard label="Inbound" value={formatNumber(filteredSummary.inboundUnits || 0)} sub="In transit" icon={Package} color="sky" />
-          {shipSidekickCredentials?.connected && (
-            <MetricCard label="Ship Sidekick" value={formatNumber(filteredSummary.threeplUnits || 0)} sub={shipSidekickCredentials.lastSync ? `Synced ${new Date(shipSidekickCredentials.lastSync).toLocaleDateString()}` : '3PL connected'} icon={Truck} color="blue" />
-          )}
+          {/* Ship Sidekick data is included in the 3PL card above */}
         </div>
 
         {/* Ship Sidekick Carriers Panel */}
