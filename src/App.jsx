@@ -8152,6 +8152,15 @@ const savePeriods = async (d) => {
             
             // Store under UPPERCASE for consistency
             amzInv[skuUpper] = itemData;
+            // Also register under SHOP suffix variant so snapshot SKUs (e.g. DDPE0002SHOP) can match
+            const baseAmzSku = skuUpper.replace(/SHOP$/, '');
+            if (baseAmzSku === skuUpper) {
+              // API SKU has no SHOP suffix — register with SHOP so snapshot items match
+              if (!amzInv[skuUpper + 'SHOP']) amzInv[skuUpper + 'SHOP'] = itemData;
+            } else {
+              // API SKU has SHOP suffix — also register without it
+              if (!amzInv[baseAmzSku]) amzInv[baseAmzSku] = itemData;
+            }
             
             // Track AWD separately
             if ((item.awdQuantity || 0) > 0 || (item.awdInbound || 0) > 0 || (item.awdReplenishment || 0) > 0) {
@@ -8456,7 +8465,8 @@ const savePeriods = async (d) => {
       const skuLower = sku.toLowerCase();
       
       // Case-insensitive lookups for all inventory sources
-      const a = amzInv[sku] || amzInvLower[skuLower] || {};
+      const skuBaseUpper = sku.replace(/shop$/i, '').toUpperCase();
+      const a = amzInv[sku] || amzInvLower[skuLower] || amzInv[skuBaseUpper] || amzInvLower[skuBaseUpper.toLowerCase()] || {};
       const t = tplInv[sku] || tplInvLower[skuLower] || {};
       const h = homeInv[sku] || homeInvLower[skuLower] || {};
       const skuBaseForAwd = sku.replace(/shop$/i, '').toUpperCase();
