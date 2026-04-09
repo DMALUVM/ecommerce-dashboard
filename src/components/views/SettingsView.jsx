@@ -2126,7 +2126,156 @@ const SettingsView = ({
                       }
                       setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
                       setPackiyoInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
-                      setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Ship Sidekick (from ${data.matchedUrl || 'unknown'})`, type: 'success' });
+
+                      // ===== MERGE INTO EXISTING INVENTORY SNAPSHOT =====
+                      if (data.inventoryBySku) {
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const targetDate = invHistory[todayStr] ? todayStr :
+                          (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+                          Object.keys(invHistory).sort().reverse()[0];
+
+                        if (targetDate && invHistory[targetDate]) {
+                          const currentSnapshot = invHistory[targetDate];
+                          const tplLookup = {};
+                          Object.entries(data.inventoryBySku).forEach(([sku, item]) => {
+                            tplLookup[normalizeSkuKey(sku)] = item;
+                          });
+
+                          let newTplTotal = 0, newTplValue = 0;
+                          const today = new Date();
+                          const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+                          const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+                          const liveLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
+                          const liveOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + reorderTriggerDays + liveLeadTimeDays);
+                          const liveLowThreshold = Math.max(30, liveLeadTimeDays + 14);
+                          const liveCriticalThreshold = Math.max(14, liveLeadTimeDays);
+
+                          const updatedItems = currentSnapshot.items.map(item => {
+                            const normalizedSku = normalizeSkuKey(item.sku);
+                            const tplItem = tplLookup[normalizedSku];
+                            const newTplQty = tplItem?.quantity_on_hand || tplItem?.quantityOnHand || tplItem?.totalQty || 0;
+                            const newTplInbound = tplItem?.quantity_inbound || tplItem?.quantityInbound || 0;
+
+                            newTplTotal += newTplQty;
+                            newTplValue += newTplQty * (item.cost || savedCogs[item.sku] || 0);
+
+                            const newTotalQty = (item.amazonQty || 0) + newTplQty + (item.homeQty || 0) + (item.awdQty || 0) + (item.amazonInbound || 0) + (item.awdInbound || 0) + newTplInbound;
+                            const vel = item.correctedVel || item.weeklyVel || 0;
+                            const dos = vel > 0 ? Math.round((newTotalQty / vel) * 7) : 999;
+
+                            let stockoutDate = null, reorderByDate = null, daysUntilMustOrder = null;
+                            const leadTimeDays = item.leadTimeDays || liveLeadTimeDays;
+                            const demandStats = skuDemandStatsRef?.current?.[normalizeSkuKey(item.sku)] || null;
+                            const leadTimeWeeks = leadTimeDays / 7;
+                            const safetyStock = demandStats ? Math.ceil(1.65 * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks)) : (item.safetyStock || 0);
+                            const seasonalFactor = demandStats?.currentSeasonalFactor || item.seasonalFactor || 1.0;
+                            const seasonalVel = vel * seasonalFactor;
+                            const dailyVelForReorder = seasonalVel / 7;
+                            const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
+
+                            if (vel > 0 && dos < 999) {
+                              const stockout = new Date(today);
+                              stockout.setDate(stockout.getDate() + dos);
+                              stockoutDate = stockout.toISOString().split('T')[0];
+                              const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+                              daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
+                              const reorderBy = new Date(today);
+                              reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+                              reorderByDate = reorderBy.toISOString().split('T')[0];
+                            }
+
+                            let health = item.health || 'unknown';
+                            const rawVel = item.rawWeeklyVel || item.weeklyVel || 0;
+                            if (rawVel > 0) {
+                              if (daysUntilMustOrder !== null && daysUntilMustOrder < 0) health = 'critical';
+                              else if (dos < liveCriticalThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 7)) health = 'critical';
+                              else if (dos < liveLowThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 14)) health = 'low';
+                              else if (dos <= liveOverstockThreshold) health = 'healthy';
+                              else health = 'overstock';
+                            }
+
+                            return {
+                              ...item,
+                              threeplQty: newTplQty,
+                              threeplInbound: newTplInbound,
+                              totalQty: newTotalQty,
+                              totalValue: newTotalQty * (item.cost || 0),
+                              daysOfSupply: dos,
+                              stockoutDate,
+                              reorderByDate,
+                              daysUntilMustOrder,
+                              health,
+                              safetyStock,
+                              reorderPoint,
+                              suggestedOrderQty: vel > 0 ? Math.ceil(vel * minOrderWeeks) + safetyStock : 0,
+                            };
+                          });
+
+                          // Add 3PL-only SKUs not already in snapshot
+                          const existingSkus = new Set(updatedItems.map(i => normalizeSkuKey(i.sku)));
+                          Object.entries(data.inventoryBySku).forEach(([sku, item]) => {
+                            const nSku = normalizeSkuKey(sku);
+                            if (existingSkus.has(nSku)) return;
+                            const qty = item.quantity_on_hand || item.quantityOnHand || item.totalQty || 0;
+                            if (qty === 0) return;
+                            const cost = item.cost || savedCogs[nSku] || savedCogs[nSku + 'Shop'] || 0;
+                            const inbound = item.quantity_inbound || item.quantityInbound || 0;
+                            newTplTotal += qty;
+                            newTplValue += qty * cost;
+                            updatedItems.push({
+                              sku: nSku, name: item.name || nSku,
+                              threeplQty: qty, threeplInbound: inbound,
+                              amazonQty: 0, homeQty: 0, awdQty: 0, awdInbound: 0, amazonInbound: 0,
+                              totalQty: qty + inbound, cost, totalValue: (qty + inbound) * cost,
+                              weeklyVel: 0, rawWeeklyVel: 0, correctedVel: 0,
+                              amzWeeklyVel: 0, shopWeeklyVel: 0,
+                              daysOfSupply: 999, health: 'unknown',
+                              stockoutDate: null, reorderByDate: null, daysUntilMustOrder: null,
+                              suggestedOrderQty: 0, safetyStock: 0, reorderPoint: 0,
+                              leadTimeDays: liveLeadTimeDays,
+                            });
+                          });
+
+                          updatedItems.sort((a, b) => b.totalValue - a.totalValue);
+
+                          let critical = 0, low = 0, healthy = 0, overstock = 0;
+                          updatedItems.forEach(i => {
+                            if (i.health === 'critical') critical++;
+                            else if (i.health === 'low') low++;
+                            else if (i.health === 'healthy') healthy++;
+                            else if (i.health === 'overstock') overstock++;
+                          });
+
+                          const updatedSnapshot = {
+                            ...currentSnapshot,
+                            items: updatedItems,
+                            summary: {
+                              ...currentSnapshot.summary,
+                              threeplUnits: newTplTotal,
+                              threeplValue: newTplValue,
+                              totalUnits: updatedItems.reduce((s, i) => s + (i.totalQty || 0), 0),
+                              totalValue: updatedItems.reduce((s, i) => s + (i.totalValue || 0), 0),
+                              skuCount: updatedItems.length,
+                              critical, low, healthy, overstock,
+                            },
+                            sources: {
+                              ...currentSnapshot.sources,
+                              threepl: 'shipsidekick-manual-sync',
+                              lastShipSidekickSync: new Date().toISOString(),
+                            },
+                          };
+
+                          const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                          setInvHistory(updatedHistory);
+                          setSelectedInvDate(targetDate);
+                          saveInv(updatedHistory);
+                          setToast({ message: `Updated inventory: ${newTplTotal.toLocaleString()} 3PL units across ${updatedItems.length} SKUs`, type: 'success' });
+                        } else {
+                          setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Ship Sidekick (no snapshot to update)`, type: 'warning' });
+                        }
+                      } else {
+                        setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Ship Sidekick`, type: 'success' });
+                      }
                     } catch (err) {
                       setPackiyoInventoryStatus({ loading: false, error: err.message, lastSync: null });
                       setToast({ message: 'Inventory sync failed: ' + err.message, type: 'error' });

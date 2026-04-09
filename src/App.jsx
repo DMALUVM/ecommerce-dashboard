@@ -8824,7 +8824,7 @@ const savePeriods = async (d) => {
       message: `Inventory snapshot saved (3PL: ${tplSource}, ${items.length} SKUs)`, 
       type: 'success' 
     });
-  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, allPeriodsData, allDaysData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials, leadTimeSettings]);
+  }, [invFiles, invSnapshotDate, invHistory, savedCogs, allWeeksData, allPeriodsData, allDaysData, forecastCorrections, packiyoCredentials, shopifyCredentials, amazonCredentials, leadTimeSettings, shipSidekickCredentials]);
 
   const deleteWeek = (k) => { 
     const data = allWeeksData[k];
