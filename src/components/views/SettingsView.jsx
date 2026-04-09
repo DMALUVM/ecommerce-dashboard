@@ -2648,13 +2648,169 @@ const SettingsView = ({
                       setAmazonInventoryData(data);
                       setAmazonInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
                       setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
-                      
+
                       const fbaUnits = data.summary?.fbaUnits || data.summary?.totalUnits || 0;
-                      const awdUnits = data.summary?.awdUnits || 0;
-                      setToast({ 
-                        message: `Synced ${fbaUnits.toLocaleString()} FBA units${awdUnits > 0 ? ` + ${awdUnits.toLocaleString()} AWD units` : ''}`, 
-                        type: 'success' 
-                      });
+                      const awdUnitsFromApi = data.summary?.awdUnits || 0;
+
+                      // ===== MERGE AMAZON FBA + AWD INTO EXISTING INVENTORY SNAPSHOT =====
+                      if (data.items && data.items.length > 0) {
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const targetDate = invHistory[todayStr] ? todayStr :
+                          (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
+                          Object.keys(invHistory).sort().reverse()[0];
+
+                        if (targetDate && invHistory[targetDate]) {
+                          const currentSnapshot = invHistory[targetDate];
+
+                          // Build lookup from Amazon data (multiple SKU case variants)
+                          const amzLookup = {};
+                          data.items.forEach(item => {
+                            if (!item.sku) return;
+                            const fulfillable = item.fbaFulfillable || item.fulfillable || item.available || 0;
+                            const reserved = item.fbaReserved || item.reserved || 0;
+                            const inbound = item.fbaInbound || item.totalInbound || 0;
+                            const total = fulfillable + reserved;
+                            const awd = item.awdQuantity || 0;
+                            const awdInb = item.awdInbound || 0;
+                            const entry = { total, inbound, awdQty: awd, awdInbound: awdInb, asin: item.asin || '' };
+                            const skuUpper = item.sku.toUpperCase();
+                            const baseSku = skuUpper.replace(/SHOP$/, '');
+                            [item.sku, item.sku.toLowerCase(), skuUpper, baseSku, baseSku.toLowerCase()].forEach(k => {
+                              if (!amzLookup[k]) amzLookup[k] = entry;
+                            });
+                          });
+
+                          const today = new Date();
+                          const reorderTriggerDays = leadTimeSettings.reorderTriggerDays || 60;
+                          const minOrderWeeks = leadTimeSettings.minOrderWeeks || 22;
+                          const liveLeadTimeDays = leadTimeSettings.defaultLeadTimeDays || 14;
+                          const liveOverstockThreshold = Math.max(90, (minOrderWeeks * 7) + reorderTriggerDays + liveLeadTimeDays);
+                          const liveLowThreshold = Math.max(30, liveLeadTimeDays + 14);
+                          const liveCriticalThreshold = Math.max(14, liveLeadTimeDays);
+
+                          const updatedItems = currentSnapshot.items.map(item => {
+                            const sku = item.sku || '';
+                            const nSku = normalizeSkuKey(sku);
+                            const amz = amzLookup[sku] || amzLookup[sku.toUpperCase()] || amzLookup[sku.toLowerCase()] || amzLookup[nSku] || amzLookup[nSku.toLowerCase()] || null;
+
+                            const newAmazonQty = amz ? amz.total : (item.amazonQty || 0);
+                            const newAmazonInbound = amz ? amz.inbound : (item.amazonInbound || 0);
+                            const newAwdQty = amz ? amz.awdQty : (item.awdQty || 0);
+                            const newAwdInbound = amz ? amz.awdInbound : (item.awdInbound || 0);
+
+                            const newTotalQty = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
+                            const vel = item.correctedVel || item.weeklyVel || 0;
+                            const dos = vel > 0 ? Math.round((newTotalQty / vel) * 7) : 999;
+
+                            let stockoutDate = null, reorderByDate = null, daysUntilMustOrder = null;
+                            const leadTimeDays = item.leadTimeDays || liveLeadTimeDays;
+                            const demandStats = skuDemandStatsRef?.current?.[normalizeSkuKey(sku)] || null;
+                            const leadTimeWeeks = leadTimeDays / 7;
+                            const safetyStock = demandStats ? Math.ceil(1.65 * demandStats.weeklyStdDev * Math.sqrt(leadTimeWeeks)) : (item.safetyStock || 0);
+                            const seasonalFactor = demandStats?.currentSeasonalFactor || item.seasonalFactor || 1.0;
+                            const seasonalVel = vel * seasonalFactor;
+                            const dailyVelForReorder = seasonalVel / 7;
+                            const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + safetyStock);
+
+                            if (vel > 0 && dos < 999) {
+                              const stockout = new Date(today);
+                              stockout.setDate(stockout.getDate() + dos);
+                              stockoutDate = stockout.toISOString().split('T')[0];
+                              const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+                              daysUntilMustOrder = dos - reorderTriggerDays - reorderPointDays;
+                              const reorderBy = new Date(today);
+                              reorderBy.setDate(reorderBy.getDate() + daysUntilMustOrder);
+                              reorderByDate = reorderBy.toISOString().split('T')[0];
+                            }
+
+                            let health = item.health || 'unknown';
+                            const rawVel = item.rawWeeklyVel || item.weeklyVel || 0;
+                            if (rawVel > 0) {
+                              if (daysUntilMustOrder !== null && daysUntilMustOrder < 0) health = 'critical';
+                              else if (dos < liveCriticalThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 7)) health = 'critical';
+                              else if (dos < liveLowThreshold || (daysUntilMustOrder !== null && daysUntilMustOrder < 14)) health = 'low';
+                              else if (dos <= liveOverstockThreshold) health = 'healthy';
+                              else health = 'overstock';
+                            }
+
+                            return {
+                              ...item,
+                              amazonQty: newAmazonQty,
+                              amazonInbound: newAmazonInbound,
+                              awdQty: newAwdQty,
+                              awdInbound: newAwdInbound,
+                              totalQty: newTotalQty,
+                              totalValue: newTotalQty * (item.cost || 0),
+                              daysOfSupply: dos,
+                              stockoutDate,
+                              reorderByDate,
+                              daysUntilMustOrder,
+                              health,
+                              safetyStock,
+                              reorderPoint,
+                              suggestedOrderQty: vel > 0 ? Math.ceil(vel * minOrderWeeks) + safetyStock : 0,
+                            };
+                          });
+
+                          updatedItems.sort((a, b) => b.totalValue - a.totalValue);
+
+                          let critical = 0, low = 0, healthy = 0, overstock = 0;
+                          updatedItems.forEach(i => {
+                            if (i.health === 'critical') critical++;
+                            else if (i.health === 'low') low++;
+                            else if (i.health === 'healthy') healthy++;
+                            else if (i.health === 'overstock') overstock++;
+                          });
+
+                          const newAmzTotal = updatedItems.reduce((s, i) => s + (i.amazonQty || 0), 0);
+                          const newAmzValue = updatedItems.reduce((s, i) => s + ((i.amazonQty || 0) * (i.cost || 0)), 0);
+                          const newAmzInbound = updatedItems.reduce((s, i) => s + (i.amazonInbound || 0), 0);
+                          const newAwdTotal = updatedItems.reduce((s, i) => s + (i.awdQty || 0), 0);
+                          const newAwdValue = updatedItems.reduce((s, i) => s + ((i.awdQty || 0) * (i.cost || 0)), 0);
+
+                          const updatedSnapshot = {
+                            ...currentSnapshot,
+                            items: updatedItems,
+                            summary: {
+                              ...currentSnapshot.summary,
+                              amazonUnits: newAmzTotal,
+                              amazonValue: newAmzValue,
+                              amazonInbound: newAmzInbound,
+                              awdUnits: newAwdTotal,
+                              awdValue: newAwdValue,
+                              totalUnits: updatedItems.reduce((s, i) => s + (i.totalQty || 0), 0),
+                              totalValue: updatedItems.reduce((s, i) => s + (i.totalValue || 0), 0),
+                              skuCount: updatedItems.length,
+                              critical, low, healthy, overstock,
+                            },
+                            sources: {
+                              ...currentSnapshot.sources,
+                              amazon: 'amazon-fba-manual-sync',
+                              lastAmazonSync: new Date().toISOString(),
+                              lastAmazonFbaSync: new Date().toISOString(),
+                            },
+                          };
+
+                          const updatedHistory = { ...invHistory, [targetDate]: updatedSnapshot };
+                          setInvHistory(updatedHistory);
+                          setSelectedInvDate(targetDate);
+                          saveInv(updatedHistory);
+                          setToast({
+                            message: `Updated inventory: ${newAmzTotal.toLocaleString()} FBA + ${newAwdTotal.toLocaleString()} AWD units`,
+                            type: 'success'
+                          });
+                        } else {
+                          setToast({
+                            message: `Synced ${fbaUnits.toLocaleString()} FBA${awdUnitsFromApi > 0 ? ` + ${awdUnitsFromApi.toLocaleString()} AWD` : ''} (no snapshot to update)`,
+                            type: 'warning'
+                          });
+                        }
+                      } else {
+                        setToast({
+                          message: `Synced ${fbaUnits.toLocaleString()} FBA units${awdUnitsFromApi > 0 ? ` + ${awdUnitsFromApi.toLocaleString()} AWD units` : ''}`,
+                          type: 'success'
+                        });
+                      }
                     } catch (err) {
                       setAmazonInventoryStatus({ loading: false, error: err.message, lastSync: null });
                       setToast({ message: 'Amazon sync failed: ' + err.message, type: 'error' });
