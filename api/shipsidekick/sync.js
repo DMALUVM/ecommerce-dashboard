@@ -33,29 +33,25 @@ export default async function handler(req, res) {
   const isProduction = environment === 'production';
   const host = isProduction ? 'www.shipsidekick.com' : 'test.shipsidekick.com';
 
-  // Try multiple auth header combinations — Ship Sidekick docs are not public,
-  // so we try the most common API auth patterns until one succeeds (same approach as Packiyo)
+  // Build auth header variants — Ship Sidekick docs are not public,
+  // so we try common API auth patterns until one succeeds (same approach as Packiyo)
   const buildHeaderVariants = () => {
     const variants = [];
-    const slugHeaders = clientSlug
+    const slugVariants = clientSlug
       ? [
           { 'x-client-slug': clientSlug },
           { 'X-Client-Slug': clientSlug },
-          { 'client-slug': clientSlug },
-          { 'X-Client-Id': clientSlug },
         ]
       : [{}];
 
-    // Auth patterns: x-api-key, Bearer token, ApiKey header
     const authPatterns = [
       { 'x-api-key': apiKey },
       { 'Authorization': `Bearer ${apiKey}` },
       { 'Authorization': `ApiKey ${apiKey}` },
-      { 'Authorization': `Token ${apiKey}` },
     ];
 
     for (const auth of authPatterns) {
-      for (const slug of slugHeaders) {
+      for (const slug of slugVariants) {
         variants.push({
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -67,15 +63,23 @@ export default async function handler(req, res) {
     return variants;
   };
 
-  // Base URL patterns to try
+  // Base URL patterns to try — including bare domain since team said "use www.shipsidekick.com"
   const baseUrls = [
+    `https://${host}`,
+    `https://${host}/api`,
     `https://${host}/api/v1`,
     `https://${host}/api/v2`,
-    `https://${host}/api`,
   ];
 
   // Test endpoints to try
-  const testEndpoints = ['/account', '/carriers', '/me', '/ping', '/validate', '/status'];
+  const testEndpoints = ['/account', '/carriers', '/me', '/ping', '/validate', '/status', '/shipments', '/orders'];
+
+  const debugLog = [];
+  debugLog.push(`Environment: ${environment}`);
+  debugLog.push(`Host: ${host}`);
+  debugLog.push(`Client slug: ${clientSlug || '(none)'}`);
+  debugLog.push(`API key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
+  debugLog.push(`---`);
 
   console.log(`[ShipSidekick] Environment: ${environment}, Host: ${host}`);
   console.log(`[ShipSidekick] Client slug: ${clientSlug || '(none)'}`);
@@ -89,69 +93,99 @@ export default async function handler(req, res) {
 
     for (const baseUrl of baseUrls) {
       for (const endpoint of testEndpoints) {
+        // Only try first header variant for each URL/endpoint to keep it fast,
+        // but try all variants for URLs that return 401 (auth issue, not wrong URL)
+        const url = `${baseUrl}${endpoint}`;
+        let triedAuth = false;
+
         for (const headers of headerVariants) {
-          const url = `${baseUrl}${endpoint}`;
           try {
-            console.log(`[ShipSidekick] Trying: ${url}`);
+            const authType = headers['x-api-key'] ? 'x-api-key' :
+              headers['Authorization']?.split(' ')[0] || 'unknown';
+            const slugType = headers['x-client-slug'] ? 'x-client-slug' :
+              headers['X-Client-Slug'] ? 'X-Client-Slug' : 'no-slug';
+
+            const logEntry = `${url} [auth=${authType}, slug=${slugType}]`;
+            console.log(`[ShipSidekick] Trying: ${logEntry}`);
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+
             const testRes = await fetch(url, {
               method: 'GET',
               headers,
+              signal: controller.signal,
             });
+            clearTimeout(timeout);
 
-            console.log(`[ShipSidekick] ${url} -> ${testRes.status}`);
-            lastStatus = testRes.status;
+            const status = testRes.status;
+            lastStatus = status;
+            debugLog.push(`${logEntry} -> ${status}`);
+            console.log(`[ShipSidekick] ${url} -> ${status}`);
 
             if (testRes.ok) {
               let data = {};
-              try { data = await testRes.json(); } catch (e) { /* response may not be JSON */ }
+              const responseText = await testRes.text().catch(() => '');
+              try { data = JSON.parse(responseText); } catch (e) { /* not JSON */ }
               const accountName = data.account?.name || data.data?.name || data.name ||
                 data.organization?.name || data.company || 'Ship Sidekick Connected';
-              console.log(`[ShipSidekick] SUCCESS with: ${url}, auth: ${Object.keys(headers).find(k => k.toLowerCase().includes('auth') || k.toLowerCase().includes('api-key') || k.toLowerCase().includes('x-api'))}`);
+              debugLog.push(`SUCCESS! Response: ${responseText.slice(0, 300)}`);
               return res.status(200).json({
                 success: true,
                 accountName,
                 environment: isProduction ? 'production' : 'test',
+                debugLog,
               });
             }
 
-            // 401/403 means the endpoint exists but auth failed — keep trying other header variants
-            if (testRes.status === 401 || testRes.status === 403) {
-              const errorBody = await testRes.text().catch(() => '');
-              lastError = `${testRes.status}: ${errorBody.slice(0, 200)}`;
-              console.log(`[ShipSidekick] Auth failed at ${url}: ${lastError}`);
-              continue;
+            // Read response body for debugging
+            const bodyText = await testRes.text().catch(() => '');
+            if (bodyText) {
+              debugLog.push(`  Body: ${bodyText.slice(0, 200)}`);
             }
 
-            // 404 means this endpoint doesn't exist — try next endpoint
-            if (testRes.status === 404) {
-              continue;
+            // 401/403 — endpoint exists but auth failed, try other auth patterns
+            if (status === 401 || status === 403) {
+              lastError = `${status}: ${bodyText.slice(0, 200)}`;
+              triedAuth = true;
+              continue; // try next header variant
             }
 
-            // Other errors
-            const errorText = await testRes.text().catch(() => '');
-            lastError = `${testRes.status}: ${errorText.slice(0, 200)}`;
+            // 404 — this endpoint doesn't exist, skip to next endpoint
+            if (status === 404) {
+              break; // skip remaining header variants for this endpoint
+            }
+
+            // Other status — log and move on
+            lastError = `${status}: ${bodyText.slice(0, 200)}`;
+            break; // skip remaining header variants
           } catch (err) {
-            lastError = err.message;
-            console.log(`[ShipSidekick] Fetch error for ${url}: ${err.message}`);
+            const errMsg = err.name === 'AbortError' ? 'Timeout (8s)' : err.message;
+            debugLog.push(`${url} -> ERROR: ${errMsg}`);
+            lastError = errMsg;
+            console.log(`[ShipSidekick] Fetch error for ${url}: ${errMsg}`);
+            break; // skip remaining header variants on network error
           }
         }
       }
     }
 
-    // None of the combinations worked — return a helpful error
+    // None of the combinations worked
+    debugLog.push(`---`);
+    debugLog.push(`All attempts failed. Last status: ${lastStatus}, Last error: ${lastError}`);
+
     if (lastStatus === 401 || lastStatus === 403) {
       return res.status(200).json({
-        error: `Authentication failed (${lastStatus}). Please check: ` +
-          '(1) API key is valid — regenerate in Ship Sidekick dashboard under Settings > API Keys. ' +
-          '(2) Client slug is correct if your account is a child org. ' +
-          `(3) You are using a ${isProduction ? 'production' : 'test'} key with the ${isProduction ? 'production' : 'test'} environment. ` +
+        error: `Authentication failed (${lastStatus}). Tried multiple auth methods across multiple endpoints. ` +
           `Last response: ${lastError || 'none'}`,
+        debugLog,
       });
     }
 
     return res.status(200).json({
       error: `Could not connect to Ship Sidekick at ${host}. ` +
         `Tried multiple endpoints and auth methods. Last error: ${lastError || 'unknown'}`,
+      debugLog,
     });
   }
 
@@ -164,7 +198,6 @@ export default async function handler(req, res) {
   };
   if (clientSlug) {
     headers['x-client-slug'] = clientSlug;
-    headers['X-Client-Slug'] = clientSlug;
   }
 
   const baseUrl = `https://${host}/api/v1`;

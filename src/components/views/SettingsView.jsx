@@ -2160,9 +2160,10 @@ const SettingsView = ({
                       }
 
                       setToast({ message: 'Connecting to Ship Sidekick...', type: 'info' });
+                      setShipSidekickCredentials(p => ({ ...p, _debugLog: null, _testing: true }));
 
                       const controller = new AbortController();
-                      const timeoutId = setTimeout(() => controller.abort(), 30000);
+                      const timeoutId = setTimeout(() => controller.abort(), 120000);
 
                       try {
                         const res = await fetch('/api/shipsidekick/sync', {
@@ -2180,17 +2181,29 @@ const SettingsView = ({
 
                         if (!res.ok) {
                           const errorText = await res.text();
+                          setShipSidekickCredentials(p => ({ ...p, _debugLog: [`API route error: ${res.status} ${errorText.slice(0, 500)}`], _testing: false }));
                           throw new Error(`API error ${res.status}: ${errorText.slice(0, 100)}`);
                         }
 
                         const data = await res.json();
-                        if (data.error) throw new Error(data.error);
+
+                        // Always store the debug log
+                        if (data.debugLog) {
+                          setShipSidekickCredentials(p => ({ ...p, _debugLog: data.debugLog, _testing: false }));
+                        }
+
+                        if (data.error) {
+                          setShipSidekickCredentials(p => ({ ...p, _debugLog: data.debugLog || [data.error], _testing: false }));
+                          throw new Error(data.error);
+                        }
                         if (data.success) {
                           const updatedCreds = {
                             ...shipSidekickCredentials,
                             connected: true,
                             lastSync: new Date().toISOString(),
                             accountName: data.accountName || 'Ship Sidekick',
+                            _debugLog: data.debugLog || ['Connected successfully!'],
+                            _testing: false,
                           };
                           setShipSidekickCredentials(updatedCreds);
                           if (session?.user?.id && supabase) {
@@ -2203,17 +2216,43 @@ const SettingsView = ({
                         const errorMsg = err.name === 'AbortError'
                           ? 'Request timed out. Make sure api/shipsidekick/sync.js is deployed to Vercel.'
                           : err.message;
+                        setShipSidekickCredentials(p => ({ ...p, _testing: false, _debugLog: p._debugLog || [errorMsg] }));
                         setToast({ message: 'Connection failed: ' + errorMsg, type: 'error' });
                       }
                     }}
-                    disabled={!shipSidekickCredentials?.apiKey}
+                    disabled={!shipSidekickCredentials?.apiKey || shipSidekickCredentials?._testing}
                     className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2"
                   >
-                    <Truck className="w-5 h-5" />
-                    Test & Connect
+                    {shipSidekickCredentials?._testing ? (
+                      <><Loader2 className="w-5 h-5 animate-spin" />Testing connection...</>
+                    ) : (
+                      <><Truck className="w-5 h-5" />Test & Connect</>
+                    )}
                   </button>
                 </div>
               </div>
+
+              {/* Debug Log Panel */}
+              {shipSidekickCredentials?._debugLog && shipSidekickCredentials._debugLog.length > 0 && (
+                <div className="bg-slate-950 border border-slate-700 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-amber-400 font-medium text-sm flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      Connection Debug Log
+                    </h4>
+                    <button
+                      onClick={() => setShipSidekickCredentials(p => ({ ...p, _debugLog: null }))}
+                      className="text-slate-500 hover:text-slate-300 text-xs"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap overflow-x-auto max-h-64 overflow-y-auto bg-slate-900 rounded-lg p-3">
+                    {shipSidekickCredentials._debugLog.join('\n')}
+                  </pre>
+                  <p className="text-slate-500 text-xs mt-2">Share this log with Ship Sidekick support if the issue persists.</p>
+                </div>
+              )}
 
               <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4">
                 <h4 className="text-blue-400 font-medium mb-2 flex items-center gap-2">
