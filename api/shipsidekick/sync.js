@@ -246,37 +246,82 @@ export default async function handler(req, res) {
   // ========== INVENTORY SYNC ==========
   if (syncType === 'inventory') {
     console.log('[ShipSidekick] Starting inventory sync...');
-    const inventoryPaths = ['/inventory', '/products', '/stock', '/items', '/inventory/products', '/warehouse/inventory'];
-    const result = await tryFetch(inventoryPaths);
+    const inventoryUrl = `https://${host}/api/v1/products`;
 
-    if (!result.success) {
-      return res.status(200).json({ error: `Inventory sync failed: ${result.error}`, debugLog: fetchDebugLog });
+    // Fetch all pages using cursor-based pagination
+    let allItems = [];
+    let cursor = null;
+    let pageCount = 0;
+    const maxPages = 50; // safety limit
+
+    try {
+      do {
+        const url = cursor ? `${inventoryUrl}?cursor=${encodeURIComponent(cursor)}&limit=100` : `${inventoryUrl}?limit=100`;
+        fetchDebugLog.push(`Fetching: ${url}`);
+        const r = await fetch(url, { method: 'GET', headers });
+
+        if (!r.ok) {
+          const errorText = await r.text().catch(() => '');
+          fetchDebugLog.push(`${url} -> ${r.status}: ${errorText.slice(0, 200)}`);
+          if (allItems.length === 0) {
+            return res.status(200).json({ error: `Inventory fetch failed (${r.status}): ${errorText.slice(0, 200)}`, debugLog: fetchDebugLog });
+          }
+          break; // use what we have so far
+        }
+
+        const page = await r.json();
+        const pageItems = page.data || page.items || page.products || page.results || (Array.isArray(page) ? page : []);
+        allItems = allItems.concat(pageItems);
+        pageCount++;
+
+        fetchDebugLog.push(`Page ${pageCount}: ${pageItems.length} items (total so far: ${allItems.length}/${page.totalCount || '?'})`);
+
+        // Log first item's keys so we know the field names
+        if (pageCount === 1 && pageItems.length > 0) {
+          fetchDebugLog.push(`Sample item keys: ${JSON.stringify(Object.keys(pageItems[0]))}`);
+          fetchDebugLog.push(`Sample item: ${JSON.stringify(pageItems[0]).slice(0, 500)}`);
+        }
+
+        cursor = page.hasMore ? page.nextCursor : null;
+      } while (cursor && pageCount < maxPages);
+    } catch (err) {
+      fetchDebugLog.push(`Pagination error: ${err.message}`);
+      if (allItems.length === 0) {
+        return res.status(200).json({ error: `Inventory fetch error: ${err.message}`, debugLog: fetchDebugLog });
+      }
     }
 
-    console.log(`[ShipSidekick] Inventory fetched from: ${result.url}`);
-    const raw = result.data;
+    console.log(`[ShipSidekick] Fetched ${allItems.length} items across ${pageCount} pages`);
 
-    // Normalize response — Ship Sidekick may return data in various shapes
-    const items = raw.items || raw.products || raw.inventory || raw.data || raw.results || (Array.isArray(raw) ? raw : []);
     const inventoryBySku = {};
     let totalUnits = 0;
     let skuCount = 0;
+    let skippedNoSku = 0;
 
-    for (const item of items) {
-      const sku = item.sku || item.SKU || item.product_sku || item.item_sku || item.code || '';
-      if (!sku) continue;
+    for (const item of allItems) {
+      // Try every reasonable field name for SKU
+      const sku = item.sku || item.SKU || item.Sku
+        || item.product_sku || item.productSku || item.item_sku || item.itemSku
+        || item.code || item.productCode || item.product_code
+        || item.barcode || item.upc
+        || item.externalId || item.external_id || item.id?.toString()
+        || '';
+      if (!sku) { skippedNoSku++; continue; }
 
-      const qtyOnHand = item.quantity_on_hand ?? item.qty_on_hand ?? item.on_hand ?? item.quantity ?? item.stock ?? item.available ?? 0;
-      const qtyAvailable = item.quantity_available ?? item.qty_available ?? item.available ?? qtyOnHand;
-      const qtyInbound = item.quantity_inbound ?? item.qty_inbound ?? item.inbound ?? item.in_transit ?? 0;
-      const qtyAllocated = item.quantity_allocated ?? item.qty_allocated ?? item.allocated ?? item.reserved ?? 0;
-      const cost = item.cost ?? item.unit_cost ?? item.cogs ?? 0;
-      const name = item.name || item.product_name || item.title || item.description || sku;
+      const qtyOnHand = item.quantity_on_hand ?? item.qty_on_hand ?? item.quantityOnHand
+        ?? item.on_hand ?? item.onHand ?? item.quantity ?? item.qty
+        ?? item.stock ?? item.available ?? item.availableQuantity
+        ?? item.inventory_quantity ?? item.inventoryQuantity ?? 0;
+      const qtyAvailable = item.quantity_available ?? item.qty_available ?? item.quantityAvailable ?? item.available ?? qtyOnHand;
+      const qtyInbound = item.quantity_inbound ?? item.qty_inbound ?? item.quantityInbound ?? item.inbound ?? item.in_transit ?? item.inTransit ?? 0;
+      const qtyAllocated = item.quantity_allocated ?? item.qty_allocated ?? item.quantityAllocated ?? item.allocated ?? item.reserved ?? 0;
+      const cost = item.cost ?? item.unit_cost ?? item.unitCost ?? item.cogs ?? item.price ?? 0;
+      const name = item.name || item.product_name || item.productName || item.title || item.description || item.label || sku;
 
       inventoryBySku[sku] = {
         sku,
         name,
-        barcode: item.barcode || item.upc || item.ean || '',
+        barcode: item.barcode || item.upc || item.ean || item.gtin || '',
         totalQty: qtyOnHand,
         quantityOnHand: qtyOnHand,
         quantityAvailable: qtyAvailable,
@@ -291,25 +336,26 @@ export default async function handler(req, res) {
       skuCount++;
     }
 
-    console.log(`[ShipSidekick] Inventory processed: ${skuCount} SKUs, ${totalUnits} total units`);
+    console.log(`[ShipSidekick] Inventory processed: ${skuCount} SKUs, ${totalUnits} total units, ${skippedNoSku} skipped (no SKU)`);
 
     return res.status(200).json({
       success: true,
       syncType: 'inventory',
       date: new Date().toISOString().split('T')[0],
       source: 'shipsidekick-direct',
-      matchedUrl: result.url,
-      rawResponseKeys: Object.keys(raw),
-      rawItemCount: items.length,
+      matchedUrl: inventoryUrl,
+      rawItemCount: allItems.length,
+      skippedNoSku,
+      pagesLoaded: pageCount,
       summary: {
         totalUnits,
         skuCount,
-        productsFetched: items.length,
+        productsFetched: allItems.length,
         productsWithInventory: skuCount,
       },
       items: Object.values(inventoryBySku),
       inventoryBySku,
-      products: items,
+      products: allItems.slice(0, 10), // send first 10 raw items for debug
       debugLog: fetchDebugLog,
     });
   }
