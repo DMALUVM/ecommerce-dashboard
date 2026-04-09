@@ -363,8 +363,8 @@ export default async function handler(req, res) {
       try {
         do {
           const invUrl = invCursor
-            ? `${invLevelsBase}?limit=200&cursor=${encodeURIComponent(invCursor)}`
-            : `${invLevelsBase}?limit=200`;
+            ? `${invLevelsBase}?limit=100&cursor=${encodeURIComponent(invCursor)}`
+            : `${invLevelsBase}?limit=100`;
           fetchDebugLog.push(`Fetching: ${invUrl}`);
           const r = await fetch(invUrl, { method: 'GET', headers });
           fetchDebugLog.push(`  -> ${r.status}`);
