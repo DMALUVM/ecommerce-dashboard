@@ -249,92 +249,16 @@ export default async function handler(req, res) {
       console.log('[ShipSidekick] Starting inventory sync...');
       const apiBase = `https://${host}/api/v1`;
 
-      // Try products endpoint with include/expand params to get full inventory data
-      // Many APIs only return shallow inventory in the products response unless you
-      // explicitly request the nested inventoryLevels.
-      const includeVariants = [
-        'include=inventoryLevels',
-        'include=productVariants.inventoryLevels',
-        'include=inventory',
-        'expand=inventoryLevels',
-        'expand=productVariants.inventoryLevels',
-      ];
-
-      // First, do a small probe to see which include param returns the best data
-      let bestInclude = '';
-      let bestTotal = 0;
-      fetchDebugLog.push('--- Probing include params for best inventory data ---');
-
-      for (const inc of includeVariants) {
-        const probeUrl = `${apiBase}/products?limit=5&${inc}`;
-        try {
-          const r = await fetch(probeUrl, { method: 'GET', headers });
-          if (r.ok) {
-            const data = await r.json();
-            const items = data.data || [];
-            let probeTotal = 0;
-            for (const p of items) {
-              for (const v of (p.productVariants || p.variants || [])) {
-                for (const lvl of (v.inventoryLevels || [])) {
-                  probeTotal += lvl.availableQuantity ?? lvl.available ?? lvl.quantity ?? 0;
-                }
-                // Also check variant-level fields
-                probeTotal += v.availableQuantity ?? v.quantityAvailable ?? 0;
-              }
-            }
-            fetchDebugLog.push(`  ${inc} -> ${r.status}, probeTotal=${probeTotal}`);
-            if (probeTotal > bestTotal) {
-              bestTotal = probeTotal;
-              bestInclude = inc;
-            }
-          } else {
-            fetchDebugLog.push(`  ${inc} -> ${r.status}`);
-          }
-        } catch (err) {
-          fetchDebugLog.push(`  ${inc} -> ERROR: ${err.message}`);
-        }
-      }
-
-      // Also probe without any include param (the default)
-      const defaultProbeUrl = `${apiBase}/products?limit=5`;
-      try {
-        const r = await fetch(defaultProbeUrl, { method: 'GET', headers });
-        if (r.ok) {
-          const data = await r.json();
-          const items = data.data || [];
-          let probeTotal = 0;
-          for (const p of items) {
-            for (const v of (p.productVariants || p.variants || [])) {
-              for (const lvl of (v.inventoryLevels || [])) {
-                probeTotal += lvl.availableQuantity ?? lvl.available ?? lvl.quantity ?? 0;
-              }
-              probeTotal += v.availableQuantity ?? v.quantityAvailable ?? 0;
-            }
-          }
-          fetchDebugLog.push(`  (no include) -> ${r.status}, probeTotal=${probeTotal}`);
-          if (probeTotal > bestTotal) {
-            bestTotal = probeTotal;
-            bestInclude = '';
-          }
-        }
-      } catch (err) {
-        fetchDebugLog.push(`  (no include) -> ERROR: ${err.message}`);
-      }
-
-      fetchDebugLog.push(`Best include param: "${bestInclude}" (probeTotal=${bestTotal})`);
-      fetchDebugLog.push('--- Fetching all products ---');
-
-      // Fetch all pages of products with the best include param
+      // Fetch all pages of products (the known working endpoint)
       let allItems = [];
       let cursor = null;
       let pageCount = 0;
       const maxPages = 20;
-      const includeParam = bestInclude ? `&${bestInclude}` : '';
 
       do {
         const url = cursor
-          ? `${apiBase}/products?limit=100${includeParam}&cursor=${encodeURIComponent(cursor)}`
-          : `${apiBase}/products?limit=100${includeParam}`;
+          ? `${apiBase}/products?limit=100&cursor=${encodeURIComponent(cursor)}`
+          : `${apiBase}/products?limit=100`;
         fetchDebugLog.push(`Fetching: ${url}`);
         const r = await fetch(url, { method: 'GET', headers });
 
@@ -384,63 +308,15 @@ export default async function handler(req, res) {
         cursor = page.hasMore ? page.nextCursor : null;
       } while (cursor && pageCount < maxPages);
 
-      // Also try fetching from /product-variants endpoint if it exists
-      // (some APIs return richer variant data through a dedicated endpoint)
-      let variantInventoryMap = {};
-      const variantUrl = `${apiBase}/product-variants?limit=200`;
-      try {
-        fetchDebugLog.push(`Trying variant endpoint: ${variantUrl}`);
-        const r = await fetch(variantUrl, { method: 'GET', headers });
-        fetchDebugLog.push(`  -> ${r.status}`);
-        if (r.ok) {
-          const vData = await r.json();
-          const vItems = vData.data || [];
-          fetchDebugLog.push(`  ${vItems.length} variants found`);
-          if (vItems.length > 0) {
-            fetchDebugLog.push(`  Variant keys: ${JSON.stringify(Object.keys(vItems[0]))}`);
-            // Log sample
-            const sample = vItems[0];
-            const qFields = {};
-            for (const [k, val] of Object.entries(sample)) {
-              if (typeof val === 'number') qFields[k] = val;
-            }
-            fetchDebugLog.push(`  Sample numeric fields: ${JSON.stringify(qFields)}`);
-            if (sample.inventoryLevels) {
-              fetchDebugLog.push(`  Sample inventoryLevels: ${JSON.stringify(sample.inventoryLevels).slice(0, 500)}`);
-            }
-
-            // Paginate through all variant pages
-            let allVariants = [...vItems];
-            let vCursor = vData.nextCursor;
-            let vPage = 1;
-            while (vData.hasMore && vCursor && vPage < 10) {
-              const nextUrl = `${apiBase}/product-variants?limit=200&cursor=${encodeURIComponent(vCursor)}`;
-              const r2 = await fetch(nextUrl, { method: 'GET', headers });
-              if (!r2.ok) break;
-              const p2 = await r2.json();
-              allVariants = allVariants.concat(p2.data || []);
-              vCursor = p2.nextCursor;
-              vPage++;
-              if (!p2.hasMore) break;
-            }
-            fetchDebugLog.push(`  Total variants from endpoint: ${allVariants.length}`);
-
-            for (const v of allVariants) {
-              const vSku = (v.sku || '').toLowerCase();
-              if (vSku) variantInventoryMap[vSku] = v;
-            }
-          }
-        }
-      } catch (err) {
-        fetchDebugLog.push(`  variant endpoint error: ${err.message}`);
-      }
-
-      // Also try /inventory-levels endpoint (a single consolidated endpoint)
+      // Try /inventory-levels endpoint in parallel (single request, no pagination probe overhead)
       let inventoryLevelsMap = {};
       const invLevelsUrl = `${apiBase}/inventory-levels?limit=500`;
       try {
-        fetchDebugLog.push(`Trying inventory-levels endpoint: ${invLevelsUrl}`);
-        const r = await fetch(invLevelsUrl, { method: 'GET', headers });
+        fetchDebugLog.push(`Trying: ${invLevelsUrl}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const r = await fetch(invLevelsUrl, { method: 'GET', headers, signal: controller.signal });
+        clearTimeout(timeout);
         fetchDebugLog.push(`  -> ${r.status}`);
         if (r.ok) {
           const invData = await r.json();
@@ -538,19 +414,10 @@ export default async function handler(req, res) {
           const embeddedLevels = v.inventoryLevels || [];
           const embeddedSum = sumInventoryLevels(embeddedLevels);
 
-          // Source 2: Variant-level quantity fields
+          // Source 2: Variant-level quantity fields (some APIs put totals directly on variant)
           const variantQty = getVariantLevelQty(v);
 
-          // Source 3: /product-variants endpoint data
-          const altVariant = variantInventoryMap[skuKey];
-          let altSum = null;
-          if (altVariant) {
-            const altLevels = altVariant.inventoryLevels || [];
-            altSum = sumInventoryLevels(altLevels);
-            if (!altSum) altSum = getVariantLevelQty(altVariant);
-          }
-
-          // Source 4: /inventory-levels endpoint data
+          // Source 3: /inventory-levels endpoint data (keyed by SKU or variant ID)
           const extLevels = inventoryLevelsMap[skuKey] || (v.id ? inventoryLevelsMap[v.id] : null);
           const extSum = sumInventoryLevels(extLevels || []);
 
@@ -558,7 +425,6 @@ export default async function handler(req, res) {
           const candidates = [
             { src: 'embedded', data: embeddedSum },
             { src: 'variant-field', data: variantQty },
-            { src: 'alt-variant', data: altSum },
             { src: 'ext-levels', data: extSum },
           ].filter(c => c.data != null);
 
