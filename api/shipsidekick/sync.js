@@ -202,13 +202,7 @@ export default async function handler(req, res) {
     headers['X-Client-Slug'] = clientSlug;
   }
 
-  // Try multiple base URL patterns for data endpoints
-  const baseUrls = [
-    `https://${host}`,
-    `https://${host}/api`,
-    `https://${host}/api/v1`,
-    `https://${host}/api/v2`,
-  ];
+  // Reuse baseUrls declared above for data endpoints
 
   // Helper: try a fetch against multiple base URLs
   async function tryFetch(pathSuffixes, method = 'GET', body = null) {
