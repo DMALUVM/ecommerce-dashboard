@@ -245,64 +245,20 @@ export default async function handler(req, res) {
 
   // ========== INVENTORY SYNC ==========
   if (syncType === 'inventory') {
-    console.log('[ShipSidekick] Starting inventory sync...');
-    const productsBase = `https://${host}/api/v1/products`;
-
-    // Try fetching products with inventory data included via common expand/include params
-    const expandParams = [
-      'include=inventoryLevels',
-      'include=inventory',
-      'expand=inventoryLevels',
-      'expand=inventory',
-      'includes=inventoryLevels',
-    ];
-
-    // Fetch all pages using cursor-based pagination
-    let allItems = [];
-    let cursor = null;
-    let pageCount = 0;
-    const maxPages = 50;
-    let usedExpandParam = '';
-
-    // First, try each expand param on the first page to see which returns inventory data
-    let bestUrl = `${productsBase}?limit=100`;
-    for (const param of expandParams) {
-      const testUrl = `${productsBase}?limit=1&${param}`;
-      try {
-        fetchDebugLog.push(`Trying expand: ${testUrl}`);
-        const r = await fetch(testUrl, { method: 'GET', headers });
-        if (r.ok) {
-          const page = await r.json();
-          const items = page.data || [];
-          if (items.length > 0) {
-            const variants = items[0].productVariants || items[0].variants || [];
-            if (variants.length > 0) {
-              const invLevels = variants[0].inventoryLevels || variants[0].inventory_levels || [];
-              fetchDebugLog.push(`  ${param} -> ${invLevels.length} inventoryLevels`);
-              if (invLevels.length > 0) {
-                usedExpandParam = param;
-                fetchDebugLog.push(`  Using expand param: ${param}`);
-                break;
-              }
-            }
-          }
-        } else {
-          fetchDebugLog.push(`  ${param} -> ${r.status}`);
-        }
-      } catch (err) {
-        fetchDebugLog.push(`  ${param} -> ERROR: ${err.message}`);
-      }
-    }
-
-    if (usedExpandParam) {
-      bestUrl = `${productsBase}?limit=100&${usedExpandParam}`;
-    }
-
     try {
+      console.log('[ShipSidekick] Starting inventory sync...');
+      const productsBase = `https://${host}/api/v1/products`;
+
+      // Fetch all pages of products
+      let allItems = [];
+      let cursor = null;
+      let pageCount = 0;
+      const maxPages = 20;
+
       do {
         const url = cursor
-          ? `${bestUrl}&cursor=${encodeURIComponent(cursor)}`
-          : bestUrl;
+          ? `${productsBase}?limit=100&cursor=${encodeURIComponent(cursor)}`
+          : `${productsBase}?limit=100`;
         fetchDebugLog.push(`Fetching: ${url}`);
         const r = await fetch(url, { method: 'GET', headers });
 
@@ -316,51 +272,42 @@ export default async function handler(req, res) {
         }
 
         const page = await r.json();
-        const pageItems = page.data || page.items || page.products || page.results || (Array.isArray(page) ? page : []);
+        const pageItems = page.data || [];
         allItems = allItems.concat(pageItems);
         pageCount++;
+        fetchDebugLog.push(`Page ${pageCount}: ${pageItems.length} items (total: ${allItems.length}/${page.totalCount || '?'})`);
 
-        fetchDebugLog.push(`Page ${pageCount}: ${pageItems.length} items (total so far: ${allItems.length}/${page.totalCount || '?'})`);
-
-        // Log first variant's inventoryLevels structure
+        // Log first variant structure for diagnostics
         if (pageCount === 1 && pageItems.length > 0) {
-          const variants = pageItems[0].productVariants || pageItems[0].variants || [];
+          const variants = pageItems[0].productVariants || [];
           if (variants.length > 0) {
-            const invLevels = variants[0].inventoryLevels || variants[0].inventory_levels || [];
-            fetchDebugLog.push(`Variant SKU: ${variants[0].sku}, inventoryLevels count: ${invLevels.length}`);
+            const v0 = variants[0];
+            const invLevels = v0.inventoryLevels || [];
+            fetchDebugLog.push(`Variant SKU: ${v0.sku}, inventoryLevels: ${invLevels.length}`);
             if (invLevels.length > 0) {
-              fetchDebugLog.push(`inventoryLevel keys: ${JSON.stringify(Object.keys(invLevels[0]))}`);
-              fetchDebugLog.push(`inventoryLevel sample: ${JSON.stringify(invLevels[0]).slice(0, 500)}`);
+              fetchDebugLog.push(`invLevel keys: ${JSON.stringify(Object.keys(invLevels[0]))}`);
+              fetchDebugLog.push(`invLevel sample: ${JSON.stringify(invLevels[0]).slice(0, 400)}`);
             }
           }
         }
 
         cursor = page.hasMore ? page.nextCursor : null;
       } while (cursor && pageCount < maxPages);
-    } catch (err) {
-      fetchDebugLog.push(`Pagination error: ${err.message}`);
-      if (allItems.length === 0) {
-        return res.status(200).json({ error: `Inventory fetch error: ${err.message}`, debugLog: fetchDebugLog });
-      }
-    }
 
-    // Also try to fetch inventory levels from a separate endpoint and merge
-    let inventoryByVariantId = {};
-    const invLevelPaths = ['/inventory-levels', '/inventory', '/stock-levels', '/warehouse/inventory'];
-    for (const path of invLevelPaths) {
-      const invUrl = `https://${host}/api/v1${path}?limit=500`;
+      // Try to fetch inventory levels from separate endpoint (single fast attempt)
+      let inventoryByVariantId = {};
+      const invUrl = `https://${host}/api/v1/inventory-levels?limit=500`;
       try {
-        fetchDebugLog.push(`Trying inventory endpoint: ${invUrl}`);
+        fetchDebugLog.push(`Trying: ${invUrl}`);
         const r = await fetch(invUrl, { method: 'GET', headers });
-        fetchDebugLog.push(`  ${invUrl} -> ${r.status}`);
+        fetchDebugLog.push(`  -> ${r.status}`);
         if (r.ok) {
           const invData = await r.json();
-          const levels = invData.data || invData.items || invData.inventory || (Array.isArray(invData) ? invData : []);
-          fetchDebugLog.push(`  Got ${levels.length} inventory levels`);
+          const levels = invData.data || invData.items || (Array.isArray(invData) ? invData : []);
+          fetchDebugLog.push(`  ${levels.length} inventory levels found`);
           if (levels.length > 0) {
             fetchDebugLog.push(`  Level keys: ${JSON.stringify(Object.keys(levels[0]))}`);
-            fetchDebugLog.push(`  Level sample: ${JSON.stringify(levels[0]).slice(0, 500)}`);
-            // Index by variant ID for merging
+            fetchDebugLog.push(`  Level sample: ${JSON.stringify(levels[0]).slice(0, 400)}`);
             for (const lvl of levels) {
               const vid = lvl.variantId || lvl.variant_id || lvl.productVariantId || lvl.product_variant_id || '';
               if (vid) {
@@ -368,127 +315,107 @@ export default async function handler(req, res) {
                 inventoryByVariantId[vid].push(lvl);
               }
             }
-            break; // found working endpoint
           }
         }
       } catch (err) {
-        fetchDebugLog.push(`  ${invUrl} -> ERROR: ${err.message}`);
+        fetchDebugLog.push(`  inventory-levels error: ${err.message}`);
       }
-    }
 
-    const hasExternalInventory = Object.keys(inventoryByVariantId).length > 0;
-    fetchDebugLog.push(`External inventory levels loaded: ${hasExternalInventory} (${Object.keys(inventoryByVariantId).length} variants)`);
+      const hasExternalInventory = Object.keys(inventoryByVariantId).length > 0;
+      fetchDebugLog.push(`External inventory loaded: ${hasExternalInventory} (${Object.keys(inventoryByVariantId).length} variants)`);
 
-    console.log(`[ShipSidekick] Fetched ${allItems.length} products across ${pageCount} pages`);
+      const inventoryBySku = {};
+      let totalUnits = 0;
+      let skuCount = 0;
+      let skippedNoSku = 0;
+      let skippedBundles = 0;
+      let totalVariants = 0;
 
-    const inventoryBySku = {};
-    let totalUnits = 0;
-    let skuCount = 0;
-    let skippedNoSku = 0;
-    let skippedZeroQty = 0;
-    let totalVariants = 0;
-
-    // Helper: sum inventory from inventoryLevels array
-    function sumInventoryLevels(levels) {
-      if (!Array.isArray(levels) || levels.length === 0) return null;
-      let onHand = 0, available = 0, incoming = 0, allocated = 0;
-      for (const lvl of levels) {
-        onHand += lvl.onHand ?? lvl.on_hand ?? lvl.quantity ?? lvl.stock ?? lvl.quantityOnHand ?? 0;
-        available += lvl.available ?? lvl.availableForSale ?? lvl.available_for_sale ?? lvl.quantityAvailable ?? onHand;
-        incoming += lvl.incoming ?? lvl.inbound ?? lvl.inTransit ?? lvl.in_transit ?? lvl.quantityIncoming ?? 0;
-        allocated += lvl.allocated ?? lvl.committed ?? lvl.reserved ?? lvl.quantityAllocated ?? 0;
-      }
-      return { onHand, available, incoming, allocated };
-    }
-
-    for (const product of allItems) {
-      const productName = product.name || product.title || product.slug || '';
-      const isBundle = product.isBundle === true;
-      const variants = product.productVariants || product.variants || [];
-
-      for (const v of variants) {
-        totalVariants++;
-        const sku = v.sku || v.barcode || v.upc || v.asin || '';
-        if (!sku) { skippedNoSku++; continue; }
-
-        // Case-insensitive SKU dedup
-        const skuKey = sku.toLowerCase();
-        if (inventoryBySku[skuKey]) continue;
-
-        // Get inventory levels: from variant's embedded data, or from separate endpoint
-        let invLevels = v.inventoryLevels || v.inventory_levels || [];
-        if (invLevels.length === 0 && hasExternalInventory && v.id) {
-          invLevels = inventoryByVariantId[v.id] || [];
+      // Sum inventory across warehouse locations
+      function sumInventoryLevels(levels) {
+        if (!Array.isArray(levels) || levels.length === 0) return null;
+        let onHand = 0, available = 0, incoming = 0, allocated = 0;
+        for (const lvl of levels) {
+          onHand += lvl.onHand ?? lvl.on_hand ?? lvl.quantity ?? lvl.stock ?? lvl.quantityOnHand ?? 0;
+          available += lvl.available ?? lvl.availableForSale ?? lvl.quantityAvailable ?? 0;
+          incoming += lvl.incoming ?? lvl.inbound ?? lvl.inTransit ?? lvl.quantityIncoming ?? 0;
+          allocated += lvl.allocated ?? lvl.committed ?? lvl.reserved ?? lvl.quantityAllocated ?? 0;
         }
-        const summed = sumInventoryLevels(invLevels);
-
-        const qtyOnHand = summed?.onHand
-          ?? v.quantityOnHand ?? v.quantity_on_hand ?? v.onHand ?? v.quantity ?? v.stock ?? 0;
-        const qtyAvailable = summed?.available ?? v.quantityAvailable ?? v.available ?? qtyOnHand;
-        const qtyInbound = summed?.incoming ?? v.quantityInbound ?? v.inbound ?? v.inTransit ?? 0;
-        const qtyAllocated = summed?.allocated ?? v.quantityAllocated ?? v.allocated ?? v.reserved ?? 0;
-
-        // Skip bundles explicitly flagged
-        if (isBundle) { skippedZeroQty++; continue; }
-
-        // Only skip zero-inventory items if we actually have inventory data
-        // (i.e. inventoryLevels were populated). If no inventory data at all,
-        // include the item so SKUs show up.
-        const hasInventoryData = invLevels.length > 0;
-        if (hasInventoryData && qtyOnHand === 0 && qtyAvailable === 0 && qtyInbound === 0) {
-          skippedZeroQty++;
-          continue;
-        }
-
-        const cost = v.costPrice ?? v.cost ?? v.unitCost ?? v.wholesalePrice ?? 0;
-        const variantName = v.title || v.name || '';
-        const displayName = variantName && variantName !== productName
-          ? `${productName} - ${variantName}` : productName || sku;
-
-        inventoryBySku[skuKey] = {
-          sku, // preserve original case
-          name: displayName,
-          barcode: v.barcode || v.upc || v.ean || '',
-          totalQty: qtyOnHand,
-          quantityOnHand: qtyOnHand,
-          quantityAvailable: qtyAvailable,
-          quantityInbound: qtyInbound,
-          quantityAllocated: qtyAllocated,
-          cost,
-          totalValue: qtyOnHand * cost,
-          source: 'shipsidekick',
-          productId: product.id,
-          hasInventoryData,
-        };
-
-        totalUnits += qtyOnHand;
-        skuCount++;
+        return { onHand, available: available || onHand, incoming, allocated };
       }
+
+      for (const product of allItems) {
+        const productName = product.name || product.title || product.slug || '';
+        if (product.isBundle === true) { skippedBundles++; continue; }
+        const variants = product.productVariants || product.variants || [];
+
+        for (const v of variants) {
+          totalVariants++;
+          const sku = v.sku || v.barcode || v.upc || v.asin || '';
+          if (!sku) { skippedNoSku++; continue; }
+
+          // Case-insensitive dedup
+          const skuKey = sku.toLowerCase();
+          if (inventoryBySku[skuKey]) continue;
+
+          // Merge inventory from embedded levels or separate endpoint
+          let invLevels = v.inventoryLevels || [];
+          if (invLevels.length === 0 && v.id && inventoryByVariantId[v.id]) {
+            invLevels = inventoryByVariantId[v.id];
+          }
+          const summed = sumInventoryLevels(invLevels);
+
+          const qtyOnHand = summed?.onHand ?? 0;
+          const qtyAvailable = summed?.available ?? qtyOnHand;
+          const qtyInbound = summed?.incoming ?? 0;
+          const qtyAllocated = summed?.allocated ?? 0;
+          const cost = v.costPrice ?? v.cost ?? v.wholesalePrice ?? 0;
+          const variantName = v.title || v.name || '';
+          const displayName = variantName && variantName !== productName
+            ? `${productName} - ${variantName}` : productName || sku;
+
+          inventoryBySku[skuKey] = {
+            sku,
+            name: displayName,
+            barcode: v.barcode || v.upc || v.ean || '',
+            totalQty: qtyOnHand,
+            quantityOnHand: qtyOnHand,
+            quantityAvailable: qtyAvailable,
+            quantityInbound: qtyInbound,
+            quantityAllocated: qtyAllocated,
+            cost,
+            totalValue: qtyOnHand * cost,
+            source: 'shipsidekick',
+            productId: product.id,
+          };
+
+          totalUnits += qtyOnHand;
+          skuCount++;
+        }
+      }
+
+      fetchDebugLog.push(`Products: ${allItems.length}, Variants: ${totalVariants}, Unique SKUs: ${skuCount}, Bundles skipped: ${skippedBundles}, No-SKU: ${skippedNoSku}`);
+      console.log(`[ShipSidekick] Inventory: ${skuCount} SKUs, ${totalUnits} units`);
+
+      return res.status(200).json({
+        success: true,
+        syncType: 'inventory',
+        date: new Date().toISOString().split('T')[0],
+        source: 'shipsidekick-direct',
+        summary: {
+          totalUnits,
+          skuCount,
+          productsFetched: allItems.length,
+          productsWithInventory: skuCount,
+        },
+        items: Object.values(inventoryBySku),
+        inventoryBySku,
+        debugLog: fetchDebugLog,
+      });
+    } catch (err) {
+      console.error('[ShipSidekick] Inventory sync error:', err);
+      return res.status(200).json({ error: `Inventory sync error: ${err.message}`, debugLog: fetchDebugLog });
     }
-
-    fetchDebugLog.push(`Products: ${allItems.length}, Variants: ${totalVariants}, Unique SKUs: ${skuCount}, Bundles/zero-qty skipped: ${skippedZeroQty}, No-SKU skipped: ${skippedNoSku}`);
-    console.log(`[ShipSidekick] Inventory: ${skuCount} SKUs, ${totalUnits} units, ${skippedZeroQty} skipped`);
-
-    return res.status(200).json({
-      success: true,
-      syncType: 'inventory',
-      date: new Date().toISOString().split('T')[0],
-      source: 'shipsidekick-direct',
-      matchedUrl: inventoryUrl,
-      rawItemCount: allItems.length,
-      skippedNoSku,
-      pagesLoaded: pageCount,
-      summary: {
-        totalUnits,
-        skuCount,
-        productsFetched: allItems.length,
-        productsWithInventory: skuCount,
-      },
-      items: Object.values(inventoryBySku),
-      inventoryBySku,
-      products: allItems.slice(0, 10), // send first 10 raw items for debug
-      debugLog: fetchDebugLog,
-    });
   }
 
   // ========== SHIPMENTS SYNC ==========
