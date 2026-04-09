@@ -2117,13 +2117,16 @@ const SettingsView = ({
                         }),
                       });
                       const data = await res.json();
+                      if (data.debugLog) {
+                        setShipSidekickCredentials(p => ({ ...p, lastDebugLog: data.debugLog, lastRawKeys: data.rawResponseKeys, lastMatchedUrl: data.matchedUrl }));
+                      }
                       if (data.error) throw new Error(data.error);
                       if (data.inventoryBySku || data.products) {
                         setPackiyoInventoryData(data);
                       }
                       setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
                       setPackiyoInventoryStatus({ loading: false, error: null, lastSync: new Date().toISOString() });
-                      setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Ship Sidekick`, type: 'success' });
+                      setToast({ message: `Synced ${data.summary?.skuCount || 0} SKUs from Ship Sidekick (from ${data.matchedUrl || 'unknown'})`, type: 'success' });
                     } catch (err) {
                       setPackiyoInventoryStatus({ loading: false, error: err.message, lastSync: null });
                       setToast({ message: 'Inventory sync failed: ' + err.message, type: 'error' });
@@ -2139,6 +2142,27 @@ const SettingsView = ({
                   )}
                 </button>
               </SettingRow>
+
+              {/* Inventory Sync Debug Log */}
+              {shipSidekickCredentials.lastDebugLog && shipSidekickCredentials.lastDebugLog.length > 0 && (
+                <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-slate-400">Inventory Sync Debug Log</span>
+                    <button onClick={() => setShipSidekickCredentials(p => ({ ...p, lastDebugLog: null }))} className="text-xs text-slate-500 hover:text-slate-300">Clear</button>
+                  </div>
+                  {shipSidekickCredentials.lastMatchedUrl && (
+                    <div className="text-xs text-green-400 mb-1">Matched URL: {shipSidekickCredentials.lastMatchedUrl}</div>
+                  )}
+                  {shipSidekickCredentials.lastRawKeys && (
+                    <div className="text-xs text-yellow-400 mb-1">Response keys: {JSON.stringify(shipSidekickCredentials.lastRawKeys)}</div>
+                  )}
+                  <div className="max-h-48 overflow-y-auto text-xs font-mono text-slate-400 space-y-0.5">
+                    {shipSidekickCredentials.lastDebugLog.map((line, i) => (
+                      <div key={i} className={line.includes('SUCCESS') || line.includes('200') ? 'text-green-400' : line.includes('ERROR') || line.includes('401') || line.includes('403') ? 'text-red-400' : ''}>{line}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Sync Carriers */}
               <SettingRow label="Sync Carriers" desc="Fetch available carriers from Ship Sidekick">

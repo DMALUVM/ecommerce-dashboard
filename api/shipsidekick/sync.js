@@ -205,6 +205,7 @@ export default async function handler(req, res) {
   // Reuse baseUrls declared above for data endpoints
 
   // Helper: try a fetch against multiple base URLs
+  const fetchDebugLog = [];
   async function tryFetch(pathSuffixes, method = 'GET', body = null) {
     let lastError = null;
     for (const base of baseUrls) {
@@ -214,22 +215,32 @@ export default async function handler(req, res) {
           const opts = { method, headers };
           if (body) opts.body = JSON.stringify(body);
           const r = await fetch(url, opts);
+          fetchDebugLog.push(`${url} -> ${r.status}`);
           if (r.ok) {
-            const data = await r.json();
+            const text = await r.text();
+            let data;
+            try { data = JSON.parse(text); } catch (e) {
+              fetchDebugLog.push(`  Response not JSON: ${text.slice(0, 200)}`);
+              continue; // skip non-JSON responses (e.g. HTML pages)
+            }
+            fetchDebugLog.push(`  Response keys: ${JSON.stringify(Object.keys(data))}`);
+            fetchDebugLog.push(`  Response preview: ${text.slice(0, 500)}`);
             return { success: true, data, url };
           }
           if (r.status === 404) continue; // try next path
           const errorText = await r.text().catch(() => '');
           lastError = `${r.status}: ${errorText.slice(0, 200)}`;
+          fetchDebugLog.push(`  Error: ${lastError}`);
           if (r.status === 401 || r.status === 403) {
-            return { success: false, error: `Auth failed (${r.status}): ${errorText.slice(0, 200)}` };
+            return { success: false, error: `Auth failed (${r.status}): ${errorText.slice(0, 200)}`, debugLog: fetchDebugLog };
           }
         } catch (err) {
           lastError = err.message;
+          fetchDebugLog.push(`${url} -> ERROR: ${err.message}`);
         }
       }
     }
-    return { success: false, error: lastError || 'All endpoints returned 404' };
+    return { success: false, error: lastError || 'All endpoints returned 404', debugLog: fetchDebugLog };
   }
 
   // ========== INVENTORY SYNC ==========
@@ -239,14 +250,14 @@ export default async function handler(req, res) {
     const result = await tryFetch(inventoryPaths);
 
     if (!result.success) {
-      return res.status(200).json({ error: `Inventory sync failed: ${result.error}` });
+      return res.status(200).json({ error: `Inventory sync failed: ${result.error}`, debugLog: fetchDebugLog });
     }
 
     console.log(`[ShipSidekick] Inventory fetched from: ${result.url}`);
     const raw = result.data;
 
     // Normalize response — Ship Sidekick may return data in various shapes
-    const items = raw.items || raw.products || raw.inventory || raw.data || (Array.isArray(raw) ? raw : []);
+    const items = raw.items || raw.products || raw.inventory || raw.data || raw.results || (Array.isArray(raw) ? raw : []);
     const inventoryBySku = {};
     let totalUnits = 0;
     let skuCount = 0;
@@ -287,6 +298,9 @@ export default async function handler(req, res) {
       syncType: 'inventory',
       date: new Date().toISOString().split('T')[0],
       source: 'shipsidekick-direct',
+      matchedUrl: result.url,
+      rawResponseKeys: Object.keys(raw),
+      rawItemCount: items.length,
       summary: {
         totalUnits,
         skuCount,
@@ -296,6 +310,7 @@ export default async function handler(req, res) {
       items: Object.values(inventoryBySku),
       inventoryBySku,
       products: items,
+      debugLog: fetchDebugLog,
     });
   }
 
