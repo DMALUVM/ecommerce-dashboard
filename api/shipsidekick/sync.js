@@ -276,10 +276,16 @@ export default async function handler(req, res) {
 
         fetchDebugLog.push(`Page ${pageCount}: ${pageItems.length} items (total so far: ${allItems.length}/${page.totalCount || '?'})`);
 
-        // Log first item's keys so we know the field names
+        // Log first item's keys and variant structure
         if (pageCount === 1 && pageItems.length > 0) {
-          fetchDebugLog.push(`Sample item keys: ${JSON.stringify(Object.keys(pageItems[0]))}`);
-          fetchDebugLog.push(`Sample item: ${JSON.stringify(pageItems[0]).slice(0, 500)}`);
+          fetchDebugLog.push(`Sample product keys: ${JSON.stringify(Object.keys(pageItems[0]))}`);
+          const variants = pageItems[0].productVariants || pageItems[0].variants || [];
+          if (variants.length > 0) {
+            fetchDebugLog.push(`Sample variant keys: ${JSON.stringify(Object.keys(variants[0]))}`);
+            fetchDebugLog.push(`Sample variant: ${JSON.stringify(variants[0]).slice(0, 500)}`);
+          } else {
+            fetchDebugLog.push(`No productVariants found. Full item: ${JSON.stringify(pageItems[0]).slice(0, 800)}`);
+          }
         }
 
         cursor = page.hasMore ? page.nextCursor : null;
@@ -297,45 +303,76 @@ export default async function handler(req, res) {
     let totalUnits = 0;
     let skuCount = 0;
     let skippedNoSku = 0;
+    let totalVariants = 0;
 
-    for (const item of allItems) {
-      // Try every reasonable field name for SKU
-      const sku = item.sku || item.SKU || item.Sku
-        || item.product_sku || item.productSku || item.item_sku || item.itemSku
-        || item.code || item.productCode || item.product_code
-        || item.barcode || item.upc
-        || item.externalId || item.external_id || item.id?.toString()
-        || '';
-      if (!sku) { skippedNoSku++; continue; }
+    // Ship Sidekick returns products with nested productVariants.
+    // Each variant has its own SKU and inventory quantities.
+    for (const product of allItems) {
+      const productName = product.name || product.title || product.slug || '';
+      const variants = product.productVariants || product.variants || [];
 
-      const qtyOnHand = item.quantity_on_hand ?? item.qty_on_hand ?? item.quantityOnHand
-        ?? item.on_hand ?? item.onHand ?? item.quantity ?? item.qty
-        ?? item.stock ?? item.available ?? item.availableQuantity
-        ?? item.inventory_quantity ?? item.inventoryQuantity ?? 0;
-      const qtyAvailable = item.quantity_available ?? item.qty_available ?? item.quantityAvailable ?? item.available ?? qtyOnHand;
-      const qtyInbound = item.quantity_inbound ?? item.qty_inbound ?? item.quantityInbound ?? item.inbound ?? item.in_transit ?? item.inTransit ?? 0;
-      const qtyAllocated = item.quantity_allocated ?? item.qty_allocated ?? item.quantityAllocated ?? item.allocated ?? item.reserved ?? 0;
-      const cost = item.cost ?? item.unit_cost ?? item.unitCost ?? item.cogs ?? item.price ?? 0;
-      const name = item.name || item.product_name || item.productName || item.title || item.description || item.label || sku;
+      if (variants.length > 0) {
+        // Process each variant as a separate SKU
+        for (const v of variants) {
+          totalVariants++;
+          const sku = v.sku || v.SKU || v.barcode || v.upc || v.externalId || v.id?.toString() || '';
+          if (!sku) { skippedNoSku++; continue; }
 
-      inventoryBySku[sku] = {
-        sku,
-        name,
-        barcode: item.barcode || item.upc || item.ean || item.gtin || '',
-        totalQty: qtyOnHand,
-        quantityOnHand: qtyOnHand,
-        quantityAvailable: qtyAvailable,
-        quantityInbound: qtyInbound,
-        quantityAllocated: qtyAllocated,
-        cost,
-        totalValue: qtyOnHand * cost,
-        source: 'shipsidekick',
-      };
+          const qtyOnHand = v.quantity_on_hand ?? v.qty_on_hand ?? v.quantityOnHand
+            ?? v.onHand ?? v.on_hand ?? v.quantity ?? v.qty ?? v.stock
+            ?? v.available ?? v.availableQuantity ?? v.inventoryQuantity ?? v.inventory_quantity ?? 0;
+          const qtyAvailable = v.quantity_available ?? v.quantityAvailable ?? v.available ?? qtyOnHand;
+          const qtyInbound = v.quantity_inbound ?? v.quantityInbound ?? v.inbound ?? v.inTransit ?? v.in_transit ?? 0;
+          const qtyAllocated = v.quantity_allocated ?? v.quantityAllocated ?? v.allocated ?? v.reserved ?? 0;
+          const cost = v.cost ?? v.unitCost ?? v.unit_cost ?? v.price ?? v.cogs ?? 0;
+          const variantName = v.name || v.title || v.label || '';
+          const displayName = variantName && variantName !== productName
+            ? `${productName} - ${variantName}` : productName || sku;
 
-      totalUnits += qtyOnHand;
-      skuCount++;
+          inventoryBySku[sku] = {
+            sku,
+            name: displayName,
+            barcode: v.barcode || v.upc || v.ean || v.gtin || '',
+            totalQty: qtyOnHand,
+            quantityOnHand: qtyOnHand,
+            quantityAvailable: qtyAvailable,
+            quantityInbound: qtyInbound,
+            quantityAllocated: qtyAllocated,
+            cost,
+            totalValue: qtyOnHand * cost,
+            source: 'shipsidekick',
+            productId: product.id,
+          };
+
+          totalUnits += qtyOnHand;
+          skuCount++;
+        }
+      } else {
+        // Flat item (no variants) — use product-level fields
+        const sku = product.sku || product.SKU || product.slug || product.id?.toString() || '';
+        if (!sku) { skippedNoSku++; continue; }
+
+        const qtyOnHand = product.quantity ?? product.stock ?? product.available ?? 0;
+        inventoryBySku[sku] = {
+          sku,
+          name: productName || sku,
+          barcode: product.barcode || product.upc || '',
+          totalQty: qtyOnHand,
+          quantityOnHand: qtyOnHand,
+          quantityAvailable: qtyOnHand,
+          quantityInbound: 0,
+          quantityAllocated: 0,
+          cost: product.cost ?? product.price ?? 0,
+          totalValue: qtyOnHand * (product.cost ?? product.price ?? 0),
+          source: 'shipsidekick',
+          productId: product.id,
+        };
+        totalUnits += qtyOnHand;
+        skuCount++;
+      }
     }
 
+    fetchDebugLog.push(`Products: ${allItems.length}, Variants: ${totalVariants}, SKUs matched: ${skuCount}, Skipped (no SKU): ${skippedNoSku}`);
     console.log(`[ShipSidekick] Inventory processed: ${skuCount} SKUs, ${totalUnits} total units, ${skippedNoSku} skipped (no SKU)`);
 
     return res.status(200).json({
