@@ -276,13 +276,20 @@ export default async function handler(req, res) {
 
         fetchDebugLog.push(`Page ${pageCount}: ${pageItems.length} items (total so far: ${allItems.length}/${page.totalCount || '?'})`);
 
-        // Log first item's keys and variant structure
+        // Log first item's keys and variant structure (including inventoryLevels)
         if (pageCount === 1 && pageItems.length > 0) {
           fetchDebugLog.push(`Sample product keys: ${JSON.stringify(Object.keys(pageItems[0]))}`);
           const variants = pageItems[0].productVariants || pageItems[0].variants || [];
           if (variants.length > 0) {
             fetchDebugLog.push(`Sample variant keys: ${JSON.stringify(Object.keys(variants[0]))}`);
-            fetchDebugLog.push(`Sample variant: ${JSON.stringify(variants[0]).slice(0, 500)}`);
+            // Log inventoryLevels structure specifically
+            const invLevels = variants[0].inventoryLevels || variants[0].inventory_levels || [];
+            if (invLevels.length > 0) {
+              fetchDebugLog.push(`Sample inventoryLevel keys: ${JSON.stringify(Object.keys(invLevels[0]))}`);
+              fetchDebugLog.push(`Sample inventoryLevel: ${JSON.stringify(invLevels[0]).slice(0, 500)}`);
+            } else {
+              fetchDebugLog.push(`No inventoryLevels on variant. Variant: ${JSON.stringify(variants[0]).slice(0, 800)}`);
+            }
           } else {
             fetchDebugLog.push(`No productVariants found. Full item: ${JSON.stringify(pageItems[0]).slice(0, 800)}`);
           }
@@ -303,77 +310,80 @@ export default async function handler(req, res) {
     let totalUnits = 0;
     let skuCount = 0;
     let skippedNoSku = 0;
+    let skippedZeroQty = 0;
     let totalVariants = 0;
 
-    // Ship Sidekick returns products with nested productVariants.
-    // Each variant has its own SKU and inventory quantities.
+    // Helper: sum inventory from inventoryLevels array on a variant
+    // Each level represents a warehouse location; sum across all locations
+    function sumInventoryLevels(levels) {
+      if (!Array.isArray(levels) || levels.length === 0) return null;
+      let onHand = 0, available = 0, incoming = 0, allocated = 0;
+      for (const lvl of levels) {
+        onHand += lvl.onHand ?? lvl.on_hand ?? lvl.quantity ?? lvl.stock ?? 0;
+        available += lvl.available ?? lvl.availableForSale ?? lvl.available_for_sale ?? lvl.onHand ?? lvl.on_hand ?? 0;
+        incoming += lvl.incoming ?? lvl.inbound ?? lvl.inTransit ?? lvl.in_transit ?? 0;
+        allocated += lvl.allocated ?? lvl.committed ?? lvl.reserved ?? 0;
+      }
+      return { onHand, available, incoming, allocated };
+    }
+
+    // Ship Sidekick products → productVariants → inventoryLevels
     for (const product of allItems) {
       const productName = product.name || product.title || product.slug || '';
       const variants = product.productVariants || product.variants || [];
 
-      if (variants.length > 0) {
-        // Process each variant as a separate SKU
-        for (const v of variants) {
-          totalVariants++;
-          const sku = v.sku || v.SKU || v.barcode || v.upc || v.externalId || v.id?.toString() || '';
-          if (!sku) { skippedNoSku++; continue; }
-
-          const qtyOnHand = v.quantity_on_hand ?? v.qty_on_hand ?? v.quantityOnHand
-            ?? v.onHand ?? v.on_hand ?? v.quantity ?? v.qty ?? v.stock
-            ?? v.available ?? v.availableQuantity ?? v.inventoryQuantity ?? v.inventory_quantity ?? 0;
-          const qtyAvailable = v.quantity_available ?? v.quantityAvailable ?? v.available ?? qtyOnHand;
-          const qtyInbound = v.quantity_inbound ?? v.quantityInbound ?? v.inbound ?? v.inTransit ?? v.in_transit ?? 0;
-          const qtyAllocated = v.quantity_allocated ?? v.quantityAllocated ?? v.allocated ?? v.reserved ?? 0;
-          const cost = v.cost ?? v.unitCost ?? v.unit_cost ?? v.price ?? v.cogs ?? 0;
-          const variantName = v.name || v.title || v.label || '';
-          const displayName = variantName && variantName !== productName
-            ? `${productName} - ${variantName}` : productName || sku;
-
-          inventoryBySku[sku] = {
-            sku,
-            name: displayName,
-            barcode: v.barcode || v.upc || v.ean || v.gtin || '',
-            totalQty: qtyOnHand,
-            quantityOnHand: qtyOnHand,
-            quantityAvailable: qtyAvailable,
-            quantityInbound: qtyInbound,
-            quantityAllocated: qtyAllocated,
-            cost,
-            totalValue: qtyOnHand * cost,
-            source: 'shipsidekick',
-            productId: product.id,
-          };
-
-          totalUnits += qtyOnHand;
-          skuCount++;
-        }
-      } else {
-        // Flat item (no variants) — use product-level fields
-        const sku = product.sku || product.SKU || product.slug || product.id?.toString() || '';
+      for (const v of variants) {
+        totalVariants++;
+        const sku = v.sku || v.barcode || v.upc || v.asin || '';
         if (!sku) { skippedNoSku++; continue; }
 
-        const qtyOnHand = product.quantity ?? product.stock ?? product.available ?? 0;
+        // If this SKU already exists (duplicate variant), skip it
+        if (inventoryBySku[sku]) continue;
+
+        // Sum quantities from inventoryLevels (array of warehouse locations)
+        const invLevels = v.inventoryLevels || v.inventory_levels || [];
+        const summed = sumInventoryLevels(invLevels);
+
+        // Also check flat fields on the variant itself as fallback
+        const qtyOnHand = summed?.onHand
+          ?? v.quantityOnHand ?? v.quantity_on_hand ?? v.onHand ?? v.quantity ?? v.stock ?? 0;
+        const qtyAvailable = summed?.available ?? v.quantityAvailable ?? v.available ?? qtyOnHand;
+        const qtyInbound = summed?.incoming ?? v.quantityInbound ?? v.inbound ?? v.inTransit ?? 0;
+        const qtyAllocated = summed?.allocated ?? v.quantityAllocated ?? v.allocated ?? v.reserved ?? 0;
+
+        // Skip zero-inventory items (digital products, bundles, etc.)
+        if (qtyOnHand === 0 && qtyAvailable === 0 && qtyInbound === 0) {
+          skippedZeroQty++;
+          continue;
+        }
+
+        const cost = v.costPrice ?? v.cost ?? v.unitCost ?? v.wholesalePrice ?? 0;
+        const variantName = v.title || v.name || '';
+        const displayName = variantName && variantName !== productName
+          ? `${productName} - ${variantName}` : productName || sku;
+
         inventoryBySku[sku] = {
           sku,
-          name: productName || sku,
-          barcode: product.barcode || product.upc || '',
+          name: displayName,
+          barcode: v.barcode || v.upc || v.ean || '',
           totalQty: qtyOnHand,
           quantityOnHand: qtyOnHand,
-          quantityAvailable: qtyOnHand,
-          quantityInbound: 0,
-          quantityAllocated: 0,
-          cost: product.cost ?? product.price ?? 0,
-          totalValue: qtyOnHand * (product.cost ?? product.price ?? 0),
+          quantityAvailable: qtyAvailable,
+          quantityInbound: qtyInbound,
+          quantityAllocated: qtyAllocated,
+          cost,
+          totalValue: qtyOnHand * cost,
           source: 'shipsidekick',
           productId: product.id,
         };
+
         totalUnits += qtyOnHand;
         skuCount++;
       }
     }
 
-    fetchDebugLog.push(`Products: ${allItems.length}, Variants: ${totalVariants}, SKUs matched: ${skuCount}, Skipped (no SKU): ${skippedNoSku}`);
-    console.log(`[ShipSidekick] Inventory processed: ${skuCount} SKUs, ${totalUnits} total units, ${skippedNoSku} skipped (no SKU)`);
+    fetchDebugLog.push(`Products: ${allItems.length}, Variants: ${totalVariants}, Unique SKUs with inventory: ${skuCount}, Skipped zero-qty: ${skippedZeroQty}, Skipped no-SKU: ${skippedNoSku}`);
+    console.log(`[ShipSidekick] Inventory: ${skuCount} SKUs, ${totalUnits} units, ${skippedZeroQty} zero-qty skipped, ${skippedNoSku} no-sku skipped`);
 
     return res.status(200).json({
       success: true,
