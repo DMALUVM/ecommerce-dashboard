@@ -12974,6 +12974,38 @@ const savePeriods = async (d) => {
         }
       }
       
+      // ========== AUTO-SYNC: SHIP SIDEKICK CARRIERS ==========
+      if (appSettings.autoSync?.shipsidekick !== false && shipSidekickCredentials.connected && shipSidekickCredentials.apiKey) {
+        const sskStale = isServiceStale(shipSidekickCredentials.lastSync, threshold);
+        if (sskStale || force) {
+          console.log('[AutoSync] Ship Sidekick: starting carrier sync...');
+          try {
+            const res = await fetch('/api/shipsidekick/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                apiKey: shipSidekickCredentials.apiKey,
+                clientSlug: shipSidekickCredentials.clientSlug,
+                environment: shipSidekickCredentials.environment || 'production',
+                syncType: 'carriers',
+              }),
+            });
+            const data = await res.json();
+            if (!data.error && res.ok && data.carriers) {
+              setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString(), carriers: data.carriers }));
+              results.push({ service: 'Ship Sidekick', success: true, carriers: data.carriers?.length || 0 });
+              console.log(`[AutoSync] Ship Sidekick: ${data.carriers?.length || 0} carriers synced`);
+            } else {
+              results.push({ service: 'Ship Sidekick', success: false, error: data.error || `HTTP ${res.status}` });
+              devWarn('Ship Sidekick auto-sync failed:', data.error || res.status);
+            }
+          } catch (err) {
+            results.push({ service: 'Ship Sidekick', success: false, error: err.message });
+            devWarn('Ship Sidekick auto-sync error:', err.message);
+          }
+        }
+      }
+
       // ========== STANDALONE INVENTORY MERGE (when Packiyo didn't run) ==========
       // Merges fresh Amazon FBA/AWD data AND/OR fresh home inventory + velocity updates
       // into the snapshot. Only runs if Packiyo didn't already handle the merge.
@@ -17574,6 +17606,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setSkuSettingsSearch={setSkuSettingsSearch}
       setToast={setToast}
       setUploadTab={setUploadTab}
+      shipSidekickCredentials={shipSidekickCredentials}
       shipmentForm={shipmentForm}
       show={show}
       showAddProduction={showAddProduction}

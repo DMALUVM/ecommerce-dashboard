@@ -2099,6 +2099,46 @@ const SettingsView = ({
                   </button>
                 </div>
               </div>
+
+              {/* Sync Carriers */}
+              <SettingRow label="Sync Carriers" desc="Fetch available carriers from Ship Sidekick">
+                <button
+                  onClick={async () => {
+                    setToast({ message: 'Syncing carriers...', type: 'info' });
+                    try {
+                      const res = await fetch('/api/shipsidekick/sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          apiKey: shipSidekickCredentials.apiKey,
+                          clientSlug: shipSidekickCredentials.clientSlug,
+                          environment: shipSidekickCredentials.environment || 'production',
+                          syncType: 'carriers',
+                        }),
+                      });
+                      const data = await res.json();
+                      if (data.error) throw new Error(data.error);
+                      setShipSidekickCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
+                      setToast({ message: `Synced ${data.carriers?.length || 0} carriers from Ship Sidekick`, type: 'success' });
+                    } catch (err) {
+                      setToast({ message: 'Carrier sync failed: ' + err.message, type: 'error' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />Sync Carriers
+                </button>
+              </SettingRow>
+
+              {/* Fetch Rates */}
+              <SettingRow label="Get Shipping Rates" desc="Look up live shipping rates for an order">
+                <button
+                  onClick={() => { setUploadTab('shopify-sync'); setView('upload'); }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white flex items-center gap-2"
+                >
+                  <Truck className="w-4 h-4" />Rate Lookup
+                </button>
+              </SettingRow>
             </div>
           ) : (
             <div className="space-y-4">

@@ -67,6 +67,7 @@ const InventoryView = ({
   setSkuSettingsSearch,
   setToast,
   setUploadTab,
+  shipSidekickCredentials,
   shipmentForm,
   showAddProduction,
   showAddShipment,
@@ -1320,7 +1321,31 @@ const InventoryView = ({
           <MetricCard label="AWD" value={formatNumber(filteredSummary.awdUnits || 0)} sub={formatCurrency(filteredSummary.awdValue || 0)} icon={Boxes} color="amber" />
           {filteredSummary.homeUnits > 0 && <MetricCard label="Home" value={formatNumber(filteredSummary.homeUnits || 0)} sub={formatCurrency(filteredSummary.homeValue || 0)} icon={Store} color="teal" />}
           <MetricCard label="Inbound" value={formatNumber(filteredSummary.inboundUnits || 0)} sub="In transit" icon={Package} color="sky" />
+          {shipSidekickCredentials?.connected && (
+            <MetricCard label="Ship Sidekick" value={shipSidekickCredentials.carriers?.length || 0} sub={`carrier${(shipSidekickCredentials.carriers?.length || 0) !== 1 ? 's' : ''} linked`} icon={Truck} color="blue" />
+          )}
         </div>
+
+        {/* Ship Sidekick Carriers Panel */}
+        {shipSidekickCredentials?.connected && shipSidekickCredentials.carriers?.length > 0 && (
+          <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-6">
+            <h4 className="text-blue-400 font-medium mb-3 flex items-center gap-2">
+              <Truck className="w-4 h-4" />
+              Ship Sidekick — Available Carriers
+              {shipSidekickCredentials.lastSync && (
+                <span className="text-slate-500 text-xs font-normal ml-auto">Last sync: {new Date(shipSidekickCredentials.lastSync).toLocaleString()}</span>
+              )}
+            </h4>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+              {shipSidekickCredentials.carriers.map((carrier, i) => (
+                <div key={i} className="bg-slate-800/60 rounded-lg px-3 py-2 text-sm text-slate-300 flex items-center gap-2">
+                  <div className="w-2 h-2 bg-emerald-400 rounded-full flex-shrink-0" />
+                  {typeof carrier === 'string' ? carrier : (carrier.name || carrier.carrier_name || carrier.code || `Carrier ${i + 1}`)}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {data.velocitySource && <div className="bg-cyan-900/20 border border-cyan-500/30 rounded-xl p-3 mb-6"><p className="text-cyan-400 text-sm"><span className="font-semibold">Velocity:</span> {data.velocitySource}</p></div>}
         
         {/* Warning when no velocity data */}
