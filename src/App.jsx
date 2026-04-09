@@ -8168,6 +8168,23 @@ const savePeriods = async (d) => {
             }
           });
           
+          // Also populate awdData from separate awdInventory array (handles backend FBA/AWD SKU mismatch)
+          // This registers AWD entries under SHOP suffix variants so snapshot items can find them
+          if (data.awdInventory && data.awdInventory.length > 0) {
+            data.awdInventory.forEach(rawAwd => {
+              const awdSku = rawAwd.sku || rawAwd.msku || '';
+              if (!awdSku) return;
+              const upper = awdSku.toUpperCase();
+              const base = upper.replace(/SHOP$/, '');
+              const entry = { sku: upper, awdQuantity: rawAwd.awdQuantity || 0, awdInbound: rawAwd.awdInbound || 0 };
+              if (entry.awdQuantity <= 0 && entry.awdInbound <= 0) return;
+              [upper, upper.toLowerCase(), base, base.toLowerCase(),
+               base + 'SHOP', base.toLowerCase() + 'shop', base + 'Shop'].forEach(k => {
+                if (!awdData[k]) awdData[k] = entry;
+              });
+            });
+          }
+
           // Update Amazon last sync time
           setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
           console.log('[Inventory] AWD extraction:', { awdSkuCount: Object.keys(awdData).length, awdTotal, awdValue: awdValue.toFixed(2) });
@@ -8442,7 +8459,8 @@ const savePeriods = async (d) => {
       const a = amzInv[sku] || amzInvLower[skuLower] || {};
       const t = tplInv[sku] || tplInvLower[skuLower] || {};
       const h = homeInv[sku] || homeInvLower[skuLower] || {};
-      const awdItem = awdData[sku] || awdData[skuLower] || awdData[sku.toUpperCase()] || {};
+      const skuBaseForAwd = sku.replace(/shop$/i, '').toUpperCase();
+      const awdItem = awdData[sku] || awdData[skuLower] || awdData[sku.toUpperCase()] || awdData[skuBaseForAwd] || awdData[skuBaseForAwd.toLowerCase()] || {};
       
       const aQty = a.total || 0;
       const tQty = t.total || 0;
@@ -12454,6 +12472,7 @@ const savePeriods = async (d) => {
       
       // Fetch fresh Amazon FBA+AWD inventory for snapshot updates
       let freshAmazonFbaData = null;
+      let freshAwdLookup = null;
       let fbaDataMergedIntoSnapshot = false;
       
       // Velocity lookups - built from daily+weekly data, used by both Packiyo and standalone FBA merge
@@ -12510,7 +12529,24 @@ const savePeriods = async (d) => {
               });
             });
             console.log('[AutoSync] Fresh FBA+AWD data built:', { skuCount: fbaData.items.length, hasAwdData: fbaData.items.some(i => (i.awdQuantity || 0) > 0) });
-            
+
+            // Build separate AWD lookup for fallback (handles backend FBA/AWD SKU mismatch)
+            if (fbaData.awdInventory && fbaData.awdInventory.length > 0) {
+              freshAwdLookup = {};
+              fbaData.awdInventory.forEach(awdItem => {
+                const awdSku = awdItem.sku || awdItem.msku || '';
+                if (!awdSku) return;
+                const awdEntry = { awdQty: awdItem.awdQuantity || 0, awdInbound: awdItem.awdInbound || 0 };
+                const upper = awdSku.toUpperCase();
+                const base = upper.replace(/SHOP$/, '');
+                [awdSku, awdSku.toLowerCase(), upper, base, base.toLowerCase(),
+                 base + 'SHOP', base.toLowerCase() + 'shop', base + 'Shop'].forEach(k => {
+                  if (!freshAwdLookup[k]) freshAwdLookup[k] = awdEntry;
+                });
+              });
+              console.log('[AutoSync] Separate AWD lookup built:', { keys: Object.keys(freshAwdLookup).length, items: fbaData.awdInventory.length });
+            }
+
             // Persist FBA+AWD data independently so it survives page reload
             try {
               const fbaSnapshot = {
@@ -12761,8 +12797,11 @@ const savePeriods = async (d) => {
                       const freshAmz = freshAmazonFbaData?.[item.sku] || freshAmazonFbaData?.[normalizedItemSku2] || freshAmazonFbaData?.[(item.sku || '').toLowerCase()] || null;
                       const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
                       const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
-                      const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
-                      const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
+                      // Use separate AWD lookup as fallback (handles backend FBA/AWD SKU mismatch)
+                      const normalizedBase1 = (item.sku || '').replace(/shop$/i, '').toUpperCase();
+                      const awdFb1 = freshAwdLookup?.[item.sku] || freshAwdLookup?.[normalizedItemSku2] || freshAwdLookup?.[(item.sku || '').toLowerCase()] || freshAwdLookup?.[normalizedBase1] || null;
+                      const newAwdQty = (freshAmz && freshAmz.awdQty > 0) ? freshAmz.awdQty : (awdFb1 ? awdFb1.awdQty : (item.awdQty || 0));
+                      const newAwdInbound = (freshAmz && freshAmz.awdInbound > 0) ? freshAmz.awdInbound : (awdFb1 ? awdFb1.awdInbound : (item.awdInbound || 0));
                       // Use fresh home inventory if available
                       const freshHome = freshHomeInvData?.[normalizedItemSku2] || freshHomeInvData?.[(item.sku || '').replace(/shop$/i, '').toUpperCase()] || null;
                       const newHomeQty = freshHome ? freshHome.homeQty : (item.homeQty || 0);
@@ -13046,16 +13085,18 @@ const savePeriods = async (d) => {
               const freshHome2 = freshHomeInvData?.[normalizedSku3] || freshHomeInvData?.[(item.sku || '').toUpperCase()] || null;
               
               // Even without fresh Amazon data, still update home inventory + velocity
-              const hasAnyFreshData = freshAmz || freshHome2;
+              const awdFb2 = freshAwdLookup?.[item.sku] || freshAwdLookup?.[normalizedItemSku2] || freshAwdLookup?.[(item.sku || '').toLowerCase()] || freshAwdLookup?.[normalizedSku3] || null;
+              const hasAnyFreshData = freshAmz || freshHome2 || awdFb2;
               const velocityData = getStandaloneVelocity(item.sku);
               const hasNewVelocity = velocityData.amazon > 0 || velocityData.shopify > 0;
-              
+
               if (!hasAnyFreshData && !hasNewVelocity) return item; // Truly nothing new for this SKU
-              
+
               const newAmazonQty = freshAmz ? freshAmz.total : (item.amazonQty || 0);
               const newAmazonInbound = freshAmz ? freshAmz.inbound : (item.amazonInbound || 0);
-              const newAwdQty = freshAmz ? (freshAmz.awdQty || 0) : (item.awdQty || 0);
-              const newAwdInbound = freshAmz ? (freshAmz.awdInbound || 0) : (item.awdInbound || 0);
+              // Use separate AWD lookup as fallback (handles backend FBA/AWD SKU mismatch)
+              const newAwdQty = (freshAmz && freshAmz.awdQty > 0) ? freshAmz.awdQty : (awdFb2 ? awdFb2.awdQty : (item.awdQty || 0));
+              const newAwdInbound = (freshAmz && freshAmz.awdInbound > 0) ? freshAmz.awdInbound : (awdFb2 ? awdFb2.awdInbound : (item.awdInbound || 0));
               const newHomeQty2 = freshHome2 ? freshHome2.homeQty : (item.homeQty || 0);
               const newTotalQty = newAmazonQty + (item.threeplQty || 0) + newHomeQty2 + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
               
