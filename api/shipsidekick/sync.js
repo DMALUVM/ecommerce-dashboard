@@ -243,6 +243,47 @@ export default async function handler(req, res) {
     return { success: false, error: lastError || 'All endpoints returned 404', debugLog: fetchDebugLog };
   }
 
+  // ========== RAW DIAGNOSTIC - dumps unprocessed API response ==========
+  if (syncType === 'diagnostic') {
+    try {
+      const apiBase = `https://${host}/api/v1`;
+      const url = `${apiBase}/products?limit=3`;
+      const r = await fetch(url, { method: 'GET', headers });
+      const text = await r.text();
+      let data;
+      try { data = JSON.parse(text); } catch (e) { data = null; }
+
+      // Also try a single product's variant to see if there's a detail endpoint
+      let variantDetail = null;
+      if (data?.data?.[0]?.productVariants?.[0]?.id) {
+        const vid = data.data[0].productVariants[0].id;
+        const vUrl = `${apiBase}/product-variants/${vid}`;
+        try {
+          const vr = await fetch(vUrl, { method: 'GET', headers });
+          if (vr.ok) variantDetail = await vr.json();
+        } catch (e) { /* ignore */ }
+      }
+
+      // Try inventory-levels endpoint
+      let invLevelsData = null;
+      try {
+        const ir = await fetch(`${apiBase}/inventory-levels?limit=5`, { method: 'GET', headers });
+        if (ir.ok) invLevelsData = await ir.json();
+      } catch (e) { /* ignore */ }
+
+      return res.status(200).json({
+        success: true,
+        syncType: 'diagnostic',
+        productsEndpoint: { status: r.status, data: data },
+        variantDetail,
+        inventoryLevelsEndpoint: invLevelsData,
+        rawText: text.slice(0, 5000),
+      });
+    } catch (err) {
+      return res.status(200).json({ error: `Diagnostic error: ${err.message}` });
+    }
+  }
+
   // ========== INVENTORY SYNC ==========
   if (syncType === 'inventory') {
     try {

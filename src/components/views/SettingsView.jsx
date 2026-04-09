@@ -2143,6 +2143,62 @@ const SettingsView = ({
                 </button>
               </SettingRow>
 
+              {/* Diagnostic: Raw API dump */}
+              <SettingRow label="API Diagnostic" desc="Dump raw Ship Sidekick API response to debug inventory mismatch">
+                <button
+                  onClick={async () => {
+                    setShipSidekickCredentials(p => ({ ...p, lastDebugLog: ['Running diagnostic...'] }));
+                    try {
+                      const res = await fetch('/api/shipsidekick/sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          apiKey: shipSidekickCredentials.apiKey,
+                          clientSlug: shipSidekickCredentials.clientSlug,
+                          environment: shipSidekickCredentials.environment || 'production',
+                          syncType: 'diagnostic',
+                        }),
+                      });
+                      const data = await res.json();
+                      // Format the raw response as debug lines
+                      const lines = [];
+                      lines.push('=== RAW API DIAGNOSTIC ===');
+                      if (data.productsEndpoint?.data?.data) {
+                        for (const p of data.productsEndpoint.data.data) {
+                          lines.push(`PRODUCT: ${p.name || p.title} (id=${p.id})`);
+                          lines.push(`  keys: ${JSON.stringify(Object.keys(p))}`);
+                          const variants = p.productVariants || p.variants || [];
+                          for (const v of variants) {
+                            lines.push(`  VARIANT: ${v.sku} (id=${v.id})`);
+                            lines.push(`    all keys: ${JSON.stringify(Object.keys(v))}`);
+                            // Show ALL numeric fields
+                            const nums = {};
+                            for (const [k, val] of Object.entries(v)) {
+                              if (typeof val === 'number') nums[k] = val;
+                            }
+                            lines.push(`    numeric fields: ${JSON.stringify(nums)}`);
+                            const levels = v.inventoryLevels || v.inventory_levels || [];
+                            lines.push(`    inventoryLevels (${Array.isArray(levels) ? levels.length : typeof levels}): ${JSON.stringify(levels).slice(0, 800)}`);
+                          }
+                        }
+                      } else {
+                        lines.push(`Products raw: ${JSON.stringify(data.productsEndpoint).slice(0, 2000)}`);
+                      }
+                      lines.push('--- /inventory-levels endpoint ---');
+                      lines.push(JSON.stringify(data.inventoryLevelsEndpoint)?.slice(0, 2000) || 'null');
+                      lines.push('--- variant detail ---');
+                      lines.push(JSON.stringify(data.variantDetail)?.slice(0, 1000) || 'null');
+                      setShipSidekickCredentials(p => ({ ...p, lastDebugLog: lines }));
+                    } catch (err) {
+                      setShipSidekickCredentials(p => ({ ...p, lastDebugLog: ['Diagnostic error: ' + err.message] }));
+                    }
+                  }}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm text-white flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />Run Diagnostic
+                </button>
+              </SettingRow>
+
               {/* Inventory Sync Debug Log */}
               {shipSidekickCredentials.lastDebugLog && shipSidekickCredentials.lastDebugLog.length > 0 && (
                 <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-3">
@@ -2156,9 +2212,9 @@ const SettingsView = ({
                   {shipSidekickCredentials.lastRawKeys && (
                     <div className="text-xs text-yellow-400 mb-1">Response keys: {JSON.stringify(shipSidekickCredentials.lastRawKeys)}</div>
                   )}
-                  <div className="max-h-48 overflow-y-auto text-xs font-mono text-slate-400 space-y-0.5">
+                  <div className="max-h-96 overflow-y-auto text-xs font-mono text-slate-400 space-y-0.5 select-all">
                     {shipSidekickCredentials.lastDebugLog.map((line, i) => (
-                      <div key={i} className={line.includes('SUCCESS') || line.includes('200') ? 'text-green-400' : line.includes('ERROR') || line.includes('401') || line.includes('403') ? 'text-red-400' : ''}>{line}</div>
+                      <div key={i} className={line.includes('SUCCESS') || line.includes('200') ? 'text-green-400' : line.includes('ERROR') || line.includes('401') || line.includes('403') ? 'text-red-400' : line.startsWith('  VARIANT:') ? 'text-cyan-400' : line.startsWith('PRODUCT:') ? 'text-yellow-400' : ''}>{line}</div>
                     ))}
                   </div>
                 </div>
