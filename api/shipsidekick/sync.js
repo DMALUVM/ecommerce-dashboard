@@ -349,111 +349,81 @@ export default async function handler(req, res) {
         cursor = page.hasMore ? page.nextCursor : null;
       } while (cursor && pageCount < maxPages);
 
-      // Fetch ALL inventory levels from /inventory-levels endpoint (paginated)
-      // This is the PRIMARY source of truth — the products endpoint embeds stale
-      // inventoryLevels (showing 0 for large products), but the dedicated endpoint
-      // has the correct live data. Try progressively smaller limits if the API
-      // rejects a given limit.
+      // Fetch ALL inventory levels from the CORRECT endpoint: /inventory/levels
+      // (NOT /inventory-levels — that's wrong and returns 400)
+      // Per Ship Sidekick API docs:
+      //   GET /api/v1/inventory/levels — aggregate inventory across warehouses
+      //   limit: 1-100 (default 10), supports cursor pagination
       let inventoryLevelsBySku = {};
       let inventoryLevelsByVariantId = {};
       let totalLevelsFetched = 0;
-      const invLevelsBase = `${apiBase}/inventory-levels`;
+      const invLevelsBase = `${apiBase}/inventory/levels`;
       let invPageCount = 0;
 
-      // Find the working limit — API returned 400 for limit=200 but worked with limit=5
-      let workingLimit = 0;
-      for (const tryLimit of [100, 50, 25, 10]) {
-        const probeUrl = `${invLevelsBase}?limit=${tryLimit}`;
-        try {
-          const r = await fetch(probeUrl, { method: 'GET', headers });
-          if (r.ok) {
-            workingLimit = tryLimit;
-            fetchDebugLog.push(`inventory-levels: limit=${tryLimit} works`);
+      try {
+        let invCursor = null;
+        do {
+          const invUrl = invCursor
+            ? `${invLevelsBase}?limit=100&cursor=${encodeURIComponent(invCursor)}`
+            : `${invLevelsBase}?limit=100`;
+          fetchDebugLog.push(`Fetching: ${invUrl}`);
+          const r = await fetch(invUrl, { method: 'GET', headers });
+          fetchDebugLog.push(`  -> ${r.status}`);
 
-            // Process this first page right away
-            const invData = await r.json();
-            const levels = invData.data || [];
-            invPageCount = 1;
-            totalLevelsFetched = levels.length;
-            fetchDebugLog.push(`  Page 1: ${levels.length} levels, hasMore=${invData.hasMore}`);
-
-            if (levels.length > 0) {
-              fetchDebugLog.push(`  Level keys: ${JSON.stringify(Object.keys(levels[0]))}`);
-              // Log first level with productVariant to confirm structure
-              const sampleWithPv = levels.find(l => l.productVariant?.sku);
-              if (sampleWithPv) {
-                fetchDebugLog.push(`  Sample: ${sampleWithPv.productVariant.sku} avail=${sampleWithPv.availableQuantity}`);
-              }
-            }
-
-            for (const lvl of levels) {
-              const pv = lvl.productVariant || {};
-              const sku = (pv.sku || lvl.sku || lvl.variantSku || '').toLowerCase();
-              const vid = pv.id || lvl.variantId || lvl.productVariantId || '';
-              if (sku) {
-                if (!inventoryLevelsBySku[sku]) inventoryLevelsBySku[sku] = [];
-                inventoryLevelsBySku[sku].push(lvl);
-              }
-              if (vid) {
-                if (!inventoryLevelsByVariantId[vid]) inventoryLevelsByVariantId[vid] = [];
-                inventoryLevelsByVariantId[vid].push(lvl);
-              }
-            }
-
-            // Paginate through remaining pages
-            let invCursor = invData.hasMore ? invData.nextCursor : null;
-            while (invCursor && invPageCount < 50) {
-              const nextUrl = `${invLevelsBase}?limit=${workingLimit}&cursor=${encodeURIComponent(invCursor)}`;
-              try {
-                const r2 = await fetch(nextUrl, { method: 'GET', headers });
-                if (!r2.ok) {
-                  fetchDebugLog.push(`  Page ${invPageCount + 1}: ${r2.status} — stopping`);
-                  break;
-                }
-                const page = await r2.json();
-                const pageLevels = page.data || [];
-                invPageCount++;
-                totalLevelsFetched += pageLevels.length;
-                fetchDebugLog.push(`  Page ${invPageCount}: ${pageLevels.length} levels (total: ${totalLevelsFetched})`);
-
-                for (const lvl of pageLevels) {
-                  const pv = lvl.productVariant || {};
-                  const sku = (pv.sku || lvl.sku || lvl.variantSku || '').toLowerCase();
-                  const vid = pv.id || lvl.variantId || lvl.productVariantId || '';
-                  if (sku) {
-                    if (!inventoryLevelsBySku[sku]) inventoryLevelsBySku[sku] = [];
-                    inventoryLevelsBySku[sku].push(lvl);
-                  }
-                  if (vid) {
-                    if (!inventoryLevelsByVariantId[vid]) inventoryLevelsByVariantId[vid] = [];
-                    inventoryLevelsByVariantId[vid].push(lvl);
-                  }
-                }
-
-                invCursor = page.hasMore ? page.nextCursor : null;
-              } catch (pageErr) {
-                fetchDebugLog.push(`  Page ${invPageCount + 1} error: ${pageErr.message}`);
-                break;
-              }
-            }
-            break; // Found working limit, done
-          } else {
-            fetchDebugLog.push(`inventory-levels: limit=${tryLimit} -> ${r.status}`);
+          if (!r.ok) {
+            const errText = await r.text().catch(() => '');
+            fetchDebugLog.push(`  Error: ${errText.slice(0, 300)}`);
+            break;
           }
-        } catch (err) {
-          fetchDebugLog.push(`inventory-levels: limit=${tryLimit} -> ERROR: ${err.message}`);
-        }
+
+          const invData = await r.json();
+          const levels = invData.data || [];
+          invPageCount++;
+          totalLevelsFetched += levels.length;
+          fetchDebugLog.push(`  Page ${invPageCount}: ${levels.length} levels (total: ${totalLevelsFetched}, hasMore=${invData.hasMore})`);
+
+          if (invPageCount === 1 && levels.length > 0) {
+            fetchDebugLog.push(`  Level keys: ${JSON.stringify(Object.keys(levels[0]))}`);
+            const sampleWithPv = levels.find(l => l.productVariant?.sku);
+            if (sampleWithPv) {
+              fetchDebugLog.push(`  Sample: ${sampleWithPv.productVariant.sku} avail=${sampleWithPv.availableQuantity}`);
+            }
+            fetchDebugLog.push(`  Level[0]: ${JSON.stringify(levels[0]).slice(0, 600)}`);
+          }
+
+          for (const lvl of levels) {
+            const pv = lvl.productVariant || {};
+            const sku = (pv.sku || lvl.sku || lvl.variantSku || '').toLowerCase();
+            const vid = pv.id || lvl.variantId || lvl.productVariantId || '';
+            if (sku) {
+              if (!inventoryLevelsBySku[sku]) inventoryLevelsBySku[sku] = [];
+              inventoryLevelsBySku[sku].push(lvl);
+            }
+            if (vid) {
+              if (!inventoryLevelsByVariantId[vid]) inventoryLevelsByVariantId[vid] = [];
+              inventoryLevelsByVariantId[vid].push(lvl);
+            }
+          }
+
+          invCursor = invData.hasMore ? invData.nextCursor : null;
+        } while (invCursor && invPageCount < 50);
+      } catch (err) {
+        fetchDebugLog.push(`  inventory/levels error: ${err.message}`);
       }
 
       fetchDebugLog.push(`Inventory levels: ${totalLevelsFetched} total, ${Object.keys(inventoryLevelsBySku).length} unique SKUs, ${invPageCount} pages`);
 
-      // Log which SKUs we found from inventory-levels (compare against embedded 0s)
+      // Log what the inventory/levels endpoint returned per SKU
       if (Object.keys(inventoryLevelsBySku).length > 0) {
-        fetchDebugLog.push('--- inventory-levels SKUs ---');
+        fetchDebugLog.push('--- /inventory/levels data ---');
         for (const [sku, levels] of Object.entries(inventoryLevelsBySku)) {
-          let totalAvail = 0;
-          for (const l of levels) totalAvail += l.availableQuantity ?? 0;
-          fetchDebugLog.push(`  ${sku}: ${levels.length} levels, totalAvail=${totalAvail}`);
+          let totalAvail = 0, totalIncoming = 0, totalCommitted = 0;
+          for (const l of levels) {
+            totalAvail += l.availableQuantity ?? 0;
+            totalIncoming += l.incomingQuantity ?? 0;
+            totalCommitted += l.committedQuantity ?? 0;
+          }
+          fetchDebugLog.push(`  ${sku}: avail=${totalAvail}, incoming=${totalIncoming}, committed=${totalCommitted} (${levels.length} warehouses)`);
         }
       }
 
