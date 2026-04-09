@@ -350,60 +350,111 @@ export default async function handler(req, res) {
       } while (cursor && pageCount < maxPages);
 
       // Fetch ALL inventory levels from /inventory-levels endpoint (paginated)
-      // This is the PRIMARY source of truth — the products endpoint embeds inventoryLevels
-      // but the dedicated endpoint has richer data with nested productVariant info.
-      // Key structure: { availableQuantity, ..., productVariant: { sku, id, ... } }
+      // This is the PRIMARY source of truth — the products endpoint embeds stale
+      // inventoryLevels (showing 0 for large products), but the dedicated endpoint
+      // has the correct live data. Try progressively smaller limits if the API
+      // rejects a given limit.
       let inventoryLevelsBySku = {};
       let inventoryLevelsByVariantId = {};
       let totalLevelsFetched = 0;
       const invLevelsBase = `${apiBase}/inventory-levels`;
-      let invCursor = null;
       let invPageCount = 0;
 
-      try {
-        do {
-          const invUrl = invCursor
-            ? `${invLevelsBase}?limit=100&cursor=${encodeURIComponent(invCursor)}`
-            : `${invLevelsBase}?limit=100`;
-          fetchDebugLog.push(`Fetching: ${invUrl}`);
-          const r = await fetch(invUrl, { method: 'GET', headers });
-          fetchDebugLog.push(`  -> ${r.status}`);
+      // Find the working limit — API returned 400 for limit=200 but worked with limit=5
+      let workingLimit = 0;
+      for (const tryLimit of [100, 50, 25, 10]) {
+        const probeUrl = `${invLevelsBase}?limit=${tryLimit}`;
+        try {
+          const r = await fetch(probeUrl, { method: 'GET', headers });
+          if (r.ok) {
+            workingLimit = tryLimit;
+            fetchDebugLog.push(`inventory-levels: limit=${tryLimit} works`);
 
-          if (!r.ok) break;
+            // Process this first page right away
+            const invData = await r.json();
+            const levels = invData.data || [];
+            invPageCount = 1;
+            totalLevelsFetched = levels.length;
+            fetchDebugLog.push(`  Page 1: ${levels.length} levels, hasMore=${invData.hasMore}`);
 
-          const invData = await r.json();
-          const levels = invData.data || [];
-          invPageCount++;
-          totalLevelsFetched += levels.length;
-          fetchDebugLog.push(`  Page ${invPageCount}: ${levels.length} levels (total: ${totalLevelsFetched})`);
-
-          if (invPageCount === 1 && levels.length > 0) {
-            fetchDebugLog.push(`  Level keys: ${JSON.stringify(Object.keys(levels[0]))}`);
-            fetchDebugLog.push(`  Level sample: ${JSON.stringify(levels[0]).slice(0, 800)}`);
-          }
-
-          for (const lvl of levels) {
-            // SKU is nested under productVariant (confirmed by diagnostic)
-            const pv = lvl.productVariant || {};
-            const sku = (pv.sku || lvl.sku || lvl.variantSku || '').toLowerCase();
-            const vid = pv.id || lvl.variantId || lvl.productVariantId || '';
-
-            if (sku) {
-              if (!inventoryLevelsBySku[sku]) inventoryLevelsBySku[sku] = [];
-              inventoryLevelsBySku[sku].push(lvl);
+            if (levels.length > 0) {
+              fetchDebugLog.push(`  Level keys: ${JSON.stringify(Object.keys(levels[0]))}`);
+              // Log first level with productVariant to confirm structure
+              const sampleWithPv = levels.find(l => l.productVariant?.sku);
+              if (sampleWithPv) {
+                fetchDebugLog.push(`  Sample: ${sampleWithPv.productVariant.sku} avail=${sampleWithPv.availableQuantity}`);
+              }
             }
-            if (vid) {
-              if (!inventoryLevelsByVariantId[vid]) inventoryLevelsByVariantId[vid] = [];
-              inventoryLevelsByVariantId[vid].push(lvl);
+
+            for (const lvl of levels) {
+              const pv = lvl.productVariant || {};
+              const sku = (pv.sku || lvl.sku || lvl.variantSku || '').toLowerCase();
+              const vid = pv.id || lvl.variantId || lvl.productVariantId || '';
+              if (sku) {
+                if (!inventoryLevelsBySku[sku]) inventoryLevelsBySku[sku] = [];
+                inventoryLevelsBySku[sku].push(lvl);
+              }
+              if (vid) {
+                if (!inventoryLevelsByVariantId[vid]) inventoryLevelsByVariantId[vid] = [];
+                inventoryLevelsByVariantId[vid].push(lvl);
+              }
             }
+
+            // Paginate through remaining pages
+            let invCursor = invData.hasMore ? invData.nextCursor : null;
+            while (invCursor && invPageCount < 50) {
+              const nextUrl = `${invLevelsBase}?limit=${workingLimit}&cursor=${encodeURIComponent(invCursor)}`;
+              try {
+                const r2 = await fetch(nextUrl, { method: 'GET', headers });
+                if (!r2.ok) {
+                  fetchDebugLog.push(`  Page ${invPageCount + 1}: ${r2.status} — stopping`);
+                  break;
+                }
+                const page = await r2.json();
+                const pageLevels = page.data || [];
+                invPageCount++;
+                totalLevelsFetched += pageLevels.length;
+                fetchDebugLog.push(`  Page ${invPageCount}: ${pageLevels.length} levels (total: ${totalLevelsFetched})`);
+
+                for (const lvl of pageLevels) {
+                  const pv = lvl.productVariant || {};
+                  const sku = (pv.sku || lvl.sku || lvl.variantSku || '').toLowerCase();
+                  const vid = pv.id || lvl.variantId || lvl.productVariantId || '';
+                  if (sku) {
+                    if (!inventoryLevelsBySku[sku]) inventoryLevelsBySku[sku] = [];
+                    inventoryLevelsBySku[sku].push(lvl);
+                  }
+                  if (vid) {
+                    if (!inventoryLevelsByVariantId[vid]) inventoryLevelsByVariantId[vid] = [];
+                    inventoryLevelsByVariantId[vid].push(lvl);
+                  }
+                }
+
+                invCursor = page.hasMore ? page.nextCursor : null;
+              } catch (pageErr) {
+                fetchDebugLog.push(`  Page ${invPageCount + 1} error: ${pageErr.message}`);
+                break;
+              }
+            }
+            break; // Found working limit, done
+          } else {
+            fetchDebugLog.push(`inventory-levels: limit=${tryLimit} -> ${r.status}`);
           }
+        } catch (err) {
+          fetchDebugLog.push(`inventory-levels: limit=${tryLimit} -> ERROR: ${err.message}`);
+        }
+      }
 
-          invCursor = invData.hasMore ? invData.nextCursor : null;
-        } while (invCursor && invPageCount < 20);
+      fetchDebugLog.push(`Inventory levels: ${totalLevelsFetched} total, ${Object.keys(inventoryLevelsBySku).length} unique SKUs, ${invPageCount} pages`);
 
-        fetchDebugLog.push(`Inventory levels: ${totalLevelsFetched} total, ${Object.keys(inventoryLevelsBySku).length} unique SKUs`);
-      } catch (err) {
-        fetchDebugLog.push(`  inventory-levels error: ${err.message}`);
+      // Log which SKUs we found from inventory-levels (compare against embedded 0s)
+      if (Object.keys(inventoryLevelsBySku).length > 0) {
+        fetchDebugLog.push('--- inventory-levels SKUs ---');
+        for (const [sku, levels] of Object.entries(inventoryLevelsBySku)) {
+          let totalAvail = 0;
+          for (const l of levels) totalAvail += l.availableQuantity ?? 0;
+          fetchDebugLog.push(`  ${sku}: ${levels.length} levels, totalAvail=${totalAvail}`);
+        }
       }
 
       const inventoryBySku = {};
