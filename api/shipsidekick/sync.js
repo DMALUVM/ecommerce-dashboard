@@ -406,6 +406,14 @@ export default async function handler(req, res) {
           const qtyAvailable = summed?.available ?? 0;
           const qtyInbound = summed?.incoming ?? 0;
           const qtyAllocated = summed?.committed ?? 0;
+
+          // Log per-SKU quantities for debugging (first 10)
+          if (skuCount < 10) {
+            fetchDebugLog.push(`  ${sku}: avail=${qtyAvailable}, onHand=${qtyOnHand}, inbound=${qtyInbound}, committed=${qtyAllocated}, levels=${invLevels.length}`);
+            if (invLevels.length > 0) {
+              fetchDebugLog.push(`    raw: ${JSON.stringify(invLevels[0]).slice(0, 300)}`);
+            }
+          }
           const cost = v.costPrice ?? v.cost ?? v.wholesalePrice ?? 0;
           const variantName = v.title || v.name || '';
           const displayName = variantName && variantName !== productName
