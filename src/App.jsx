@@ -5482,18 +5482,15 @@ useEffect(() => {
     
     try {
       if (session?.user?.id && supabase) {
-        // Load localStorage IMMEDIATELY for instant display, then try cloud
-        loadFromLocal();
-        console.log('[Init] localStorage loaded — attempting cloud sync...');
-
-        // Try cloud with a short timeout — if it hangs, localStorage data is already displayed
+        // Try cloud load with timeout — legacy migration query is removed so this should be fast
         const cloudLoadPromise = loadFromCloud();
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000));
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000));
         let result;
         try {
           result = await Promise.race([cloudLoadPromise, timeoutPromise]);
         } catch (timeoutErr) {
-          console.warn('[Init] Cloud load timed out (8s) — using localStorage data');
+          console.warn('[Init] Cloud load timed out (15s) — falling back to localStorage');
+          loadFromLocal();
           result = { ok: true, reason: 'localStorage_fallback', stores: [] };
         }
         console.log('[Init] loadFromCloud result:', result.ok, result.reason, 'stores:', result.stores?.length);
