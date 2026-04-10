@@ -5365,7 +5365,13 @@ useEffect(() => {
     }
 
     try {
-    const { data } = await supabase.auth.getSession();
+    // Timeout guard: if getSession hangs (e.g. Supabase retrying a failed token refresh),
+    // fall through after 8 seconds so the app isn't stuck on "Waiting for auth…"
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Auth session fetch timed out after 8s')), 8000)
+    );
+    const { data } = await Promise.race([sessionPromise, timeoutPromise]);
     const initialSession = data?.session || null;
     
     // Track initial user ID
