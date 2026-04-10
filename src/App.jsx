@@ -11931,9 +11931,10 @@ const savePeriods = async (d) => {
   
   // Auto-sync function
   const runAutoSync = useCallback(async (force = false) => {
-    if (!appSettings.autoSync?.enabled && !force) return;
+    console.log('[AutoSync] runAutoSync called — enabled:', appSettings.autoSync?.enabled, 'force:', force, 'locked:', autoSyncLockRef.current);
+    if (!appSettings.autoSync?.enabled && !force) { console.log('[AutoSync] SKIPPED — not enabled'); return; }
     // Synchronous ref lock prevents double-fire (React state is async/batched)
-    if (autoSyncLockRef.current) return;
+    if (autoSyncLockRef.current) { console.log('[AutoSync] SKIPPED — already running'); return; }
     autoSyncLockRef.current = true;
     
     const threshold = appSettings.autoSync?.staleThresholdHours || 4;
@@ -13633,20 +13634,28 @@ const savePeriods = async (d) => {
   const runAutoSyncRef = useRef(runAutoSync);
   runAutoSyncRef.current = runAutoSync; // Always points to latest
   
+  const autoSyncFiredRef = useRef(false);
   useEffect(() => {
-    if (!appSettings.autoSync?.enabled) return;
+    if (autoSyncFiredRef.current) return; // Only fire once
+    if (!appSettings.autoSync?.enabled) {
+      console.log('[AutoSync] Disabled in settings (enabled:', appSettings.autoSync?.enabled, ')');
+      return;
+    }
     if (!appSettings.autoSync?.onAppLoad) return;
-    
-    // Delay auto-sync by 3 seconds to let app fully load
+
+    // Wait for credentials to load from cloud before triggering
+    const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected || shipSidekickCredentials.connected;
+    if (!anyConnected) return; // Re-runs when credentials update
+
+    // Credentials are loaded — delay briefly then sync
+    autoSyncFiredRef.current = true;
+    console.log('[AutoSync] Triggering on app load — connected services detected');
     const timer = setTimeout(() => {
-      const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected || shipSidekickCredentials.connected;
-      if (anyConnected) {
-        runAutoSyncRef.current();
-      }
-    }, 3000);
-    
+      runAutoSyncRef.current();
+    }, 2000);
+
     return () => clearTimeout(timer);
-  }, []); // Only run once on mount
+  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.onAppLoad, amazonCredentials.connected, shopifyCredentials.connected, packiyoCredentials.connected, shipSidekickCredentials.connected]);
   
   // Set up interval for periodic sync (if enabled)
   useEffect(() => {

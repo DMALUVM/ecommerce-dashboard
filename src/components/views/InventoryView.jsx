@@ -345,8 +345,9 @@ const InventoryView = ({
   
   const recalculatedItems = deduplicatedItems.map(item => {
     const weeklyVel = item.weeklyVel || 0;
-    // Use correctedVel (from forecast learning) if available, matching processInventory's dos calculation
-    const effectiveVel = item.correctedVel || weeklyVel;
+    // Use the displayed weeklyVel for days-of-supply so the math is transparent
+    // (Total / TOT VEL * 7 = DAYS — no hidden adjustments)
+    const effectiveVel = weeklyVel;
     const dailyVel = effectiveVel / 7;
     
     // Only adjust quantities if data is old (daysElapsed > 0)
