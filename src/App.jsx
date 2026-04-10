@@ -8102,19 +8102,27 @@ const savePeriods = async (d) => {
         if (data.success && data.items) {
           amzSource = data.source || 'amazon-sp-api';
           
-          // Log AWD data availability
+          // Check if FBA data actually exists (FBA API may have failed silently)
+          const hasFbaData = (data.fbaInventory || []).length > 0;
           const awdItems = data.items.filter(i => (i.awdQuantity || 0) > 0 || (i.awdInbound || 0) > 0);
-          console.log('[Inventory] Amazon API response:', { 
-            totalItems: data.items.length, 
+          console.log('[Inventory] Amazon API response:', {
+            totalItems: data.items.length,
+            hasFbaData,
+            fbaItemCount: (data.fbaInventory || []).length,
             awdItemCount: awdItems.length,
+            fbaError: data.fbaError || 'none',
             awdError: data.awdError || 'none',
-            awdErrorDetails: data.awdErrorDetails || '',
-            sampleAwdItem: awdItems[0] || 'no AWD items found',
             syncType: data.syncType
           });
-          
-          const seenAmzSkus = new Set(); // Track duplicates
-          data.items.forEach(item => {
+          if (data.fbaError) console.warn('[Inventory] FBA API failed:', data.fbaError);
+
+          // Only build amzInv from merged items if FBA data exists
+          // When FBA fails, merged items have fbaFulfillable=0 which would overwrite good data
+          const seenAmzSkus = new Set();
+          if (!hasFbaData) {
+            console.warn('[Inventory] Skipping amzInv from merged items (no FBA data) — Amazon quantities will come from existing snapshot');
+          }
+          (hasFbaData ? data.items : []).forEach(item => {
             const sku = item.sku;
             if (!sku) return;
             
@@ -12538,15 +12546,25 @@ const savePeriods = async (d) => {
             }),
           });
           const fbaData = await fbaRes.json();
-          console.log('[AutoSync] Amazon FBA+AWD response:', { syncType: fbaData.syncType, itemCount: fbaData.items?.length, awdError: fbaData.awdError, summary: fbaData.summary });
-          
+          const autoHasFbaData = (fbaData.fbaInventory || []).length > 0;
+          console.log('[AutoSync] Amazon FBA+AWD response:', { syncType: fbaData.syncType, itemCount: fbaData.items?.length, hasFbaData: autoHasFbaData, fbaError: fbaData.fbaError, awdError: fbaData.awdError, summary: fbaData.summary });
+
+          if (fbaData.fbaError) {
+            console.warn('[AutoSync] FBA API failed:', fbaData.fbaError, '— Amazon quantities will be preserved');
+          }
           if (fbaData.awdError) {
             console.warn('[AutoSync] AWD API failed:', fbaData.awdError, fbaData.awdErrorDetails || '');
           }
-          
+
           if (fbaData.success && fbaData.items) {
-            freshAmazonFbaData = {};
-            fbaData.items.forEach(item => {
+            // Only build freshAmazonFbaData from merged items if FBA data exists
+            // When FBA fails, merged items have fbaFulfillable=0 which overwrites good data
+            if (autoHasFbaData) {
+              freshAmazonFbaData = {};
+            } else {
+              console.warn('[AutoSync] Skipping FBA data from merged items (FBA API failed)');
+            }
+            (autoHasFbaData ? fbaData.items : []).forEach(item => {
               if (!item.sku) return;
               const skuUpper = item.sku.toUpperCase();
               const baseSku = skuUpper.replace(/SHOP$/, '');

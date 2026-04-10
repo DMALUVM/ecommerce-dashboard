@@ -279,6 +279,8 @@ export default async function handler(req, res) {
       if (syncType !== 'all') {
         return res.status(500).json({ error: `FBA inventory sync failed: ${err.message}` });
       }
+      // Store error so the 'all' response can report it
+      req.fbaError = err.message;
     }
   }
 
@@ -454,6 +456,7 @@ export default async function handler(req, res) {
           success: true,
           syncType: 'all',
           source: 'amazon-fba-awd',
+          ...(req.fbaError && { fbaError: req.fbaError }),
           summary: {
             totalSkus: Object.keys(mergedInventory).length,
             fbaSkus: Object.keys(fbaInventory).length,

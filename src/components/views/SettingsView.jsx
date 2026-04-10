@@ -2651,9 +2651,13 @@ const SettingsView = ({
 
                       const fbaUnits = data.summary?.fbaUnits || data.summary?.totalUnits || 0;
                       const awdUnitsFromApi = data.summary?.awdUnits || 0;
+                      // Detect if FBA data actually exists (FBA API may have failed silently)
+                      const hasFbaData = (data.fbaInventory || []).length > 0;
+                      if (data.fbaError) console.warn('[Amazon Sync] FBA API failed:', data.fbaError);
+                      if (!hasFbaData) console.warn('[Amazon Sync] No FBA inventory data — Amazon quantities will be preserved');
 
                       // ===== MERGE AMAZON FBA + AWD INTO EXISTING INVENTORY SNAPSHOT =====
-                      if (data.items && data.items.length > 0) {
+                      if ((data.items && data.items.length > 0) || hasFbaData) {
                         const todayStr = new Date().toISOString().split('T')[0];
                         const targetDate = invHistory[todayStr] ? todayStr :
                           (selectedInvDate && invHistory[selectedInvDate]) ? selectedInvDate :
@@ -2717,8 +2721,11 @@ const SettingsView = ({
                               awdLookup[nSku + 'SHOP'] || awdLookup[nSku + 'Shop'] || awdLookup[nSku.toLowerCase() + 'shop'] || null;
 
                             if (fba) matchedCount++;
+                            // Only update Amazon qty if FBA data exists; otherwise preserve existing
                             const newAmazonQty = fba ? fba.total : (item.amazonQty || 0);
                             const newAmazonInbound = fba ? fba.inbound : (item.amazonInbound || 0);
+                            // If FBA API failed entirely, never overwrite existing Amazon data with 0
+                            // (fba will be null for ALL items when hasFbaData is false)
                             const newAwdQty = awdMatch ? awdMatch.awdQty : (item.awdQty || 0);
                             const newAwdInbound = awdMatch ? awdMatch.awdInbound : (item.awdInbound || 0);
                             if (newAwdQty > 0) awdNonZero++;
@@ -2822,9 +2829,12 @@ const SettingsView = ({
                           setSelectedInvDate(targetDate);
                           saveInv(updatedHistory);
                           setToast({
-                            message: `Updated inventory: ${newAmzTotal.toLocaleString()} FBA + ${newAwdTotal.toLocaleString()} AWD units`,
-                            type: 'success'
+                            message: hasFbaData
+                              ? `Updated inventory: ${newAmzTotal.toLocaleString()} FBA + ${newAwdTotal.toLocaleString()} AWD units`
+                              : `Updated AWD (${newAwdTotal.toLocaleString()} units) — FBA data unavailable, Amazon quantities preserved`,
+                            type: hasFbaData ? 'success' : 'warning'
                           });
+                          console.log('[Amazon Sync] Snapshot saved:', { hasFbaData, matchedCount, awdNonZero, fbaError: data.fbaError || 'none' });
                         } else {
                           setToast({
                             message: `Synced ${fbaUnits.toLocaleString()} FBA${awdUnitsFromApi > 0 ? ` + ${awdUnitsFromApi.toLocaleString()} AWD` : ''} (no snapshot to update)`,
