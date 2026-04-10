@@ -1544,7 +1544,12 @@ const handleAuth = async (e) => {
       setAuthPassword('');
     }
   } catch (err) {
-    setAuthError(err?.message || 'Login failed');
+    const msg = err?.message || 'Login failed';
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+      setAuthError('Cannot reach authentication server. Check your internet connection and try again. If this persists, try clearing your browser cache or disabling ad-blocker extensions.');
+    } else {
+      setAuthError(msg);
+    }
   }
 };
 
@@ -5364,70 +5369,66 @@ useEffect(() => {
       return;
     }
 
+    // Helper: track user ID changes and clear stale data
+    const trackUser = (userSession) => {
+      const userId = userSession?.user?.id;
+      if (userId) {
+        const lastUserId = localStorage.getItem('ecommerce_last_user_id');
+        if (lastUserId && lastUserId !== userId) {
+          const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
+            'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
+            'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
+            'ecommerce_shipsidekick_creds_v1'];
+          Object.keys(localStorage).filter(k => k.startsWith('ecommerce_')).forEach(k => {
+            if (!keysToKeep.includes(k)) localStorage.removeItem(k);
+          });
+        }
+        localStorage.setItem('ecommerce_last_user_id', userId);
+      } else {
+        localStorage.removeItem('ecommerce_last_user_id');
+      }
+    };
+
     try {
-    // Timeout guard: if getSession hangs (e.g. Supabase retrying a failed token refresh),
-    // fall through after 8 seconds so the app isn't stuck on "Waiting for auth…"
+    // Set up auth listener FIRST (Supabase recommends this order to avoid race conditions).
+    // The INITIAL_SESSION event fires even if the token refresh fails, ensuring isAuthReady is set.
+    let initialEventReceived = false;
+    unsub = supabase.auth.onAuthStateChange((event, nextSession) => {
+      trackUser(nextSession);
+      setSession(nextSession);
+
+      // Mark auth as ready on the first event (INITIAL_SESSION or SIGNED_OUT)
+      if (!initialEventReceived) {
+        initialEventReceived = true;
+        setIsAuthReady(true);
+      }
+    }).data?.subscription;
+
+    // Also call getSession as a fallback — if onAuthStateChange never fires the initial event
+    // (older Supabase versions), this ensures we still proceed.
     const sessionPromise = supabase.auth.getSession();
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Auth session fetch timed out after 8s')), 8000)
     );
     const { data } = await Promise.race([sessionPromise, timeoutPromise]);
     const initialSession = data?.session || null;
-    
-    // Track initial user ID
-    if (initialSession?.user?.id) {
-      const lastUserId = localStorage.getItem('ecommerce_last_user_id');
-      if (lastUserId && lastUserId !== initialSession.user.id) {
-        // Different user - clear localStorage (but keep credentials and theme)
-        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
-          'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
-          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
-          'ecommerce_shipsidekick_creds_v1'];
-        Object.keys(localStorage).filter(k => k.startsWith('ecommerce_')).forEach(k => {
-          if (!keysToKeep.includes(k)) localStorage.removeItem(k);
-        });
-      }
-      localStorage.setItem('ecommerce_last_user_id', initialSession.user.id);
-    }
-    
+
+    trackUser(initialSession);
     setSession(initialSession);
-
-    unsub = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      // Check if user changed - clear localStorage if different user logs in
-      const lastUserId = localStorage.getItem('ecommerce_last_user_id');
-      const newUserId = nextSession?.user?.id;
-      
-      if (newUserId && lastUserId && newUserId !== lastUserId) {
-        // Different user logging in - clear previous user's localStorage (keep credentials)
-        const keysToKeep = ['ecommerce_theme', 'ecommerce_last_user_id',
-          'ecommerce_shopify_creds_v1', 'ecommerce_packiyo_creds_v1',
-          'ecommerce_amazon_creds_v1', 'ecommerce_qbo_creds_v1',
-          'ecommerce_shipsidekick_creds_v1'];
-        const allKeys = Object.keys(localStorage).filter(k => k.startsWith('ecommerce_'));
-        allKeys.forEach(k => {
-          if (!keysToKeep.includes(k)) {
-            localStorage.removeItem(k);
-          }
-        });
-      }
-      
-      // Track current user
-      if (newUserId) {
-        localStorage.setItem('ecommerce_last_user_id', newUserId);
-      } else {
-        localStorage.removeItem('ecommerce_last_user_id');
-      }
-      
-      setSession(nextSession);
-    }).data?.subscription;
-
     setIsAuthReady(true);
     } catch (bootErr) {
-      // CORS or network failure - fall back to localStorage so app isn't stuck
-      console.warn('[Boot] Supabase auth failed (CORS/network), falling back to localStorage:', bootErr.message || bootErr);
+      // Network/CORS failure — Supabase auth endpoint unreachable.
+      // Clear the stale Supabase session from localStorage so the broken token refresh
+      // loop stops firing. The user will see a clean login screen.
+      console.warn('[Boot] Supabase auth unreachable, clearing stale session:', bootErr.message || bootErr);
+      try {
+        const sbKeys = Object.keys(localStorage).filter(k =>
+          k.startsWith('sb-') && k.endsWith('-auth-token')
+        );
+        sbKeys.forEach(k => localStorage.removeItem(k));
+      } catch (e) { /* ignore storage errors */ }
       setSession(null);
       setIsAuthReady(true);
-      loadFromLocal();
     }
   };
 
