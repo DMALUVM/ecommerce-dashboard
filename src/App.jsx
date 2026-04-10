@@ -4722,15 +4722,17 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   }
   console.log('[LoadCloud] START — user:', session.user.id, 'storeId:', storeId);
   setCloudStatus('Loading…');
-  
+
   try {
     // ---- LEGACY MIGRATION: one-time split of nested blob into per-store rows ----
+    console.log('[LoadCloud] Checking legacy migration...');
     const { data: legacyRow } = await supabase
       .from('app_data')
       .select('data')
       .eq('user_id', session.user.id)
       .eq('store_id', '_legacy')
       .maybeSingle();
+    console.log('[LoadCloud] Legacy check done:', !!legacyRow);
     
     if (legacyRow?.data?.storeData) {
       console.log('[Migration] Splitting legacy nested blob into per-store rows…');
@@ -4768,15 +4770,17 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // ---- END MIGRATION ----
     
     // Load meta row (stores list + activeStoreId)
+    console.log('[LoadCloud] Loading meta row...');
     const { data: metaRow, error: metaError } = await supabase
       .from('app_data')
       .select('data')
       .eq('user_id', session.user.id)
       .eq('store_id', '_meta')
       .maybeSingle();
-    
+    console.log('[LoadCloud] Meta loaded:', !!metaRow, 'error:', !!metaError);
+
     if (metaError) {
-      devError('Cloud meta load error:', metaError);
+      console.error('Cloud meta load error:', metaError);
       setCloudStatus('');
       return { ok: false, reason: 'error', stores: [] };
     }
@@ -4792,15 +4796,17 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     setActiveStoreId(targetStoreId);
     
     // Load the specific store's row
+    console.log('[LoadCloud] Loading store:', targetStoreId);
     const { data: storeRow, error: storeError } = await supabase
       .from('app_data')
       .select('data, updated_at')
       .eq('user_id', session.user.id)
       .eq('store_id', targetStoreId)
       .maybeSingle();
-    
+    console.log('[LoadCloud] Store loaded:', !!storeRow, 'error:', !!storeError, 'hasData:', !!storeRow?.data, 'keys:', storeRow?.data ? Object.keys(storeRow.data).length : 0);
+
     if (storeError) {
-      devError('Cloud store load error:', storeError);
+      console.error('Cloud store load error:', storeError);
       setCloudStatus('');
       return { ok: false, reason: 'error', stores: loadedStores };
     }
@@ -5519,7 +5525,17 @@ useEffect(() => {
     
     try {
       if (session?.user?.id && supabase) {
-        const result = await loadFromCloud();
+        // Timeout protection: if cloud load hangs, fall back to localStorage
+        const cloudLoadPromise = loadFromCloud();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Cloud load timeout (20s)')), 20000));
+        let result;
+        try {
+          result = await Promise.race([cloudLoadPromise, timeoutPromise]);
+        } catch (timeoutErr) {
+          console.error('[Init] Cloud load timed out — falling back to localStorage');
+          loadFromLocal();
+          result = { ok: true, reason: 'localStorage_fallback', stores: [] };
+        }
         console.log('[Init] loadFromCloud result:', result.ok, result.reason, 'stores:', result.stores?.length);
         if (!result.ok) {
           // Check the reason - only initialize empty state for truly new users
