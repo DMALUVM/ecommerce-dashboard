@@ -2662,28 +2662,20 @@ const SettingsView = ({
                         if (targetDate && invHistory[targetDate]) {
                           const currentSnapshot = invHistory[targetDate];
 
-                          // Build lookup from Amazon data (multiple SKU case variants including Shop suffix)
-                          const amzLookup = {};
-                          let apiAwdTotal = 0;
-                          data.items.forEach(item => {
-                            if (!item.sku) return;
-                            const fulfillable = item.fbaFulfillable || item.fulfillable || item.available || 0;
-                            const reserved = item.fbaReserved || item.reserved || 0;
-                            const inbound = item.fbaInbound || item.totalInbound || 0;
-                            const total = fulfillable + reserved;
-                            const awd = item.awdQuantity || 0;
-                            const awdInb = item.awdInbound || 0;
-                            apiAwdTotal += awd;
-                            const entry = { total, inbound, awdQty: awd, awdInbound: awdInb, asin: item.asin || '' };
-                            const skuUpper = item.sku.toUpperCase();
-                            const baseSku = skuUpper.replace(/SHOP$/, '');
-                            // Match auto-sync pattern: include SHOP suffix variants for matching
-                            [item.sku, item.sku.toLowerCase(), skuUpper, baseSku, baseSku.toLowerCase(),
-                             baseSku + 'SHOP', baseSku.toLowerCase() + 'shop', baseSku + 'Shop'].forEach(k => {
-                              if (!amzLookup[k]) amzLookup[k] = entry;
+                          // Build SEPARATE FBA lookup from raw FBA data (bypasses backend FBA/AWD merge issues)
+                          const fbaLookup = {};
+                          (data.fbaInventory || []).forEach(fbaItem => {
+                            const fSku = fbaItem.sku || '';
+                            if (!fSku) return;
+                            const entry = { total: fbaItem.total || ((fbaItem.available || fbaItem.fulfillable || 0) + (fbaItem.reserved || 0)), inbound: fbaItem.totalInbound || 0, asin: fbaItem.asin || '' };
+                            const upper = fSku.toUpperCase();
+                            const base = upper.replace(/SHOP$/, '');
+                            [fSku, fSku.toLowerCase(), upper, base, base.toLowerCase(),
+                             base + 'SHOP', base.toLowerCase() + 'shop', base + 'Shop'].forEach(k => {
+                              if (!fbaLookup[k]) fbaLookup[k] = entry;
                             });
                           });
-                          // Build SEPARATE AWD lookup from raw AWD data (handles SKU mismatch between FBA & AWD in backend merge)
+                          // Build SEPARATE AWD lookup from raw AWD data (bypasses backend FBA/AWD merge issues)
                           const awdLookup = {};
                           (data.awdInventory || []).forEach(awdItem => {
                             const awdSku = awdItem.sku || awdItem.msku || '';
@@ -2697,8 +2689,9 @@ const SettingsView = ({
                             });
                           });
                           console.log('[Amazon Sync] Built lookups:', {
-                            amzKeys: Object.keys(amzLookup).length, awdKeys: Object.keys(awdLookup).length,
-                            apiAwdTotal, items: data.items.length, rawAwdItems: (data.awdInventory || []).length
+                            fbaKeys: Object.keys(fbaLookup).length, awdKeys: Object.keys(awdLookup).length,
+                            rawFbaItems: (data.fbaInventory || []).length, rawAwdItems: (data.awdInventory || []).length,
+                            mergedItems: data.items?.length || 0
                           });
 
                           const today = new Date();
@@ -2714,19 +2707,20 @@ const SettingsView = ({
                             const sku = item.sku || '';
                             const nSku = normalizeSkuKey(sku);
                             // Try direct SKU, then normalized (without Shop suffix), then with Shop suffix
-                            const amz = amzLookup[sku] || amzLookup[sku.toUpperCase()] || amzLookup[sku.toLowerCase()] ||
-                              amzLookup[nSku] || amzLookup[nSku.toLowerCase()] ||
-                              amzLookup[nSku + 'SHOP'] || amzLookup[nSku + 'Shop'] || amzLookup[nSku.toLowerCase() + 'shop'] || null;
-
-                            if (amz) matchedCount++;
-                            const newAmazonQty = amz ? amz.total : (item.amazonQty || 0);
-                            const newAmazonInbound = amz ? amz.inbound : (item.amazonInbound || 0);
-                            // Use separate AWD lookup as fallback (handles backend SKU mismatch between FBA & AWD)
-                            const awdFallback = awdLookup[sku] || awdLookup[sku.toUpperCase()] || awdLookup[sku.toLowerCase()] ||
+                            // Look up FBA data from separate fbaInventory (bypasses backend merge)
+                            const fba = fbaLookup[sku] || fbaLookup[sku.toUpperCase()] || fbaLookup[sku.toLowerCase()] ||
+                              fbaLookup[nSku] || fbaLookup[nSku.toLowerCase()] ||
+                              fbaLookup[nSku + 'SHOP'] || fbaLookup[nSku + 'Shop'] || fbaLookup[nSku.toLowerCase() + 'shop'] || null;
+                            // Look up AWD data from separate awdInventory (bypasses backend merge)
+                            const awdMatch = awdLookup[sku] || awdLookup[sku.toUpperCase()] || awdLookup[sku.toLowerCase()] ||
                               awdLookup[nSku] || awdLookup[nSku.toLowerCase()] ||
                               awdLookup[nSku + 'SHOP'] || awdLookup[nSku + 'Shop'] || awdLookup[nSku.toLowerCase() + 'shop'] || null;
-                            const newAwdQty = (amz && amz.awdQty > 0) ? amz.awdQty : (awdFallback ? awdFallback.awdQty : (item.awdQty || 0));
-                            const newAwdInbound = (amz && amz.awdInbound > 0) ? amz.awdInbound : (awdFallback ? awdFallback.awdInbound : (item.awdInbound || 0));
+
+                            if (fba) matchedCount++;
+                            const newAmazonQty = fba ? fba.total : (item.amazonQty || 0);
+                            const newAmazonInbound = fba ? fba.inbound : (item.amazonInbound || 0);
+                            const newAwdQty = awdMatch ? awdMatch.awdQty : (item.awdQty || 0);
+                            const newAwdInbound = awdMatch ? awdMatch.awdInbound : (item.awdInbound || 0);
                             if (newAwdQty > 0) awdNonZero++;
 
                             const newTotalQty = newAmazonQty + (item.threeplQty || 0) + (item.homeQty || 0) + newAwdQty + newAmazonInbound + newAwdInbound + (item.threeplInbound || 0);
