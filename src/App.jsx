@@ -12097,23 +12097,19 @@ const savePeriods = async (d) => {
           // Fire and forget — don't await
           (async () => {
             try {
-              console.log('[AutoSync] Amazon Ads: starting background sync (essential reports only)...');
+              console.log('[AutoSync] Amazon Ads: starting background sync (non-blocking)...');
               const adsSyncBody = {
                 syncType: 'daily',
-                daysBack: 14,
-                essentialOnly: true,
+                daysBack: 30,
                 adsClientId: amazonCredentials.adsClientId,
                 adsClientSecret: amazonCredentials.adsClientSecret,
                 adsRefreshToken: amazonCredentials.adsRefreshToken,
                 adsProfileId: amazonCredentials.adsProfileId,
               };
-              
+
               let adsData = null;
               let adsRetries = 0;
-              // Auto-sync is background/non-blocking — limit retries to avoid hammering backend.
-              // Each server call polls Amazon for ~95s. 3 retries = ~5 min total. If still pending,
-              // reports will be picked up on the next page load or manual sync.
-              const maxAdsRetries = 3;
+              const maxAdsRetries = 6;
 
               while (adsRetries < maxAdsRetries) {
                 const adsRes = await fetch('/api/amazon/ads-sync', {
@@ -12124,11 +12120,10 @@ const savePeriods = async (d) => {
                 adsData = await adsRes.json();
 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  const completed = adsData.completedCount || 0;
-                  const total = adsData.totalCount || '?';
-                  console.log(`[AutoSync] Amazon Ads: ${completed}/${total} ready, retry ${adsRetries + 1}/${maxAdsRetries}`, adsData.pollDiag || '');
+                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 20s...`);
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
+                  await new Promise(r => setTimeout(r, 20000));
                   continue;
                 }
                 break;

@@ -411,31 +411,23 @@ export default async function handler(req, res) {
     const pending = reports.filter(r => r.reportId && r.status !== 'COMPLETED' && r.status !== 'ERROR');
     const completed = reports.filter(r => r.status === 'COMPLETED');
     const errors = reports.filter(r => r.status === 'ERROR');
-    const pollDiag = []; // Diagnostic log returned to client
 
-    // Poll with time-based guard
-    const pollStart = Date.now();
-    const maxPollMs = 50000; // 50s
+    // Poll for up to ~80 seconds at 2-second intervals (matches original working version)
     let polls = 0;
-    while (pending.length > 0 && (Date.now() - pollStart) < maxPollMs) {
+    while (pending.length > 0 && polls < 40) {
       polls++;
-      await new Promise(r => setTimeout(r, 4000));
+      await new Promise(r => setTimeout(r, 2000));
 
       for (let i = pending.length - 1; i >= 0; i--) {
         const rpt = pending[i];
         try {
           const statusRes = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
-          // Always update local status to reflect Amazon's current value
-          const prevStatus = rpt.status;
           rpt.status = statusRes.status || rpt.status;
-          if (prevStatus !== rpt.status) {
-            pollDiag.push(`${rpt.label}: ${prevStatus} → ${rpt.status} (poll ${polls})`);
-          }
           if (statusRes.status === 'COMPLETED') {
             rpt.downloadUrl = statusRes.url;
             completed.push(rpt);
             pending.splice(i, 1);
-            console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls}, ${Math.round((Date.now() - pollStart)/1000)}s)`);
+            console.log(`[AdsSync] ${rpt.label} COMPLETED (poll ${polls})`);
           } else if (statusRes.status === 'FAILURE') {
             rpt.error = statusRes.statusDetails || 'Report failed';
             errors.push(rpt);
@@ -443,32 +435,23 @@ export default async function handler(req, res) {
             console.log(`[AdsSync] ${rpt.label} FAILED: ${rpt.error}`);
           }
         } catch (err) {
-          const errMsg = `${rpt.label}: ${err.message}`;
-          console.error(`[AdsSync] Poll error`, errMsg);
-          pollDiag.push(`ERROR ${errMsg} (poll ${polls})`);
+          console.error(`[AdsSync] Poll error ${rpt.label}:`, err.message);
         }
       }
     }
 
-    const pollSecs = Math.round((Date.now() - pollStart) / 1000);
-
-    // If still pending and NO reports completed yet, return pending for client to retry
-    if (pending.length > 0 && completed.length === 0) {
+    // If ANY reports are still pending, return pending status so client retries
+    if (pending.length > 0) {
       return res.status(200).json({
         success: true, status: 'pending',
-        message: `${completed.length} ready, ${pending.length} generating (polled ${pollSecs}s, ${polls} rounds)`,
+        message: `${completed.length} ready, ${pending.length} generating`,
         completedCount: completed.length,
         totalCount: completed.length + pending.length + errors.length,
-        pollDiag: pollDiag.length > 0 ? pollDiag : [`No status changes in ${polls} polls over ${pollSecs}s`],
         pendingReports: [...pending, ...completed].map(r => ({
           reportId: r.reportId, reportKey: r.reportKey, label: r.label,
           status: r.status, downloadUrl: r.downloadUrl,
         })),
       });
-    }
-    // If some reports completed, process what we have (don't wait for stragglers)
-    if (pending.length > 0) {
-      console.log(`[AdsSync] Processing ${completed.length} completed reports (${pending.length} still pending — will skip)`);
     }
 
     // ---- Download all completed reports ----
