@@ -2968,20 +2968,24 @@ const handleLogout = async () => {
     checkForecastAge('60day', 60, '60-day');
     
     // Check Amazon Campaign data freshness (weekly upload reminder)
-    if (amazonCampaigns.lastUpdated) {
-      const lastUpdate = new Date(amazonCampaigns.lastUpdated);
-      const daysSince = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
-      if (daysSince >= 7) {
-        alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Campaign data is ${daysSince} days old (upload weekly)`, action: 'refresh' });
-      } else if (daysSince >= 5) {
-        alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Campaign refresh due in ${7 - daysSince} day(s)`, action: 'upcoming' });
+    // Skip if Amazon Ads API sync is connected — API data replaces manual uploads
+    const adsApiActive = amazonCredentials.adsConnected && amazonCredentials.adsLastSync;
+    if (!adsApiActive) {
+      if (amazonCampaigns.lastUpdated) {
+        const lastUpdate = new Date(amazonCampaigns.lastUpdated);
+        const daysSince = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
+        if (daysSince >= 7) {
+          alerts.push({ type: 'amazonCampaigns', severity: 'warning', message: `Amazon Campaign data is ${daysSince} days old (upload weekly)`, action: 'refresh' });
+        } else if (daysSince >= 5) {
+          alerts.push({ type: 'amazonCampaigns', severity: 'info', message: `Amazon Campaign refresh due in ${7 - daysSince} day(s)`, action: 'upcoming' });
+        }
+      } else {
+        alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'Upload Amazon Campaign data for PPC analysis', action: 'upload' });
       }
-    } else {
-      alerts.push({ type: 'amazonCampaigns', severity: 'info', message: 'Upload Amazon Campaign data for PPC analysis', action: 'upload' });
     }
-    
+
     return alerts;
-  }, [forecastMeta, amazonCampaigns.lastUpdated]);
+  }, [forecastMeta, amazonCampaigns.lastUpdated, amazonCredentials.adsConnected, amazonCredentials.adsLastSync]);
   
   // ============ COMPREHENSIVE DATA STATUS DASHBOARD ============
   // Shows all uploaded data, what's feeding into predictions, and what's needed
@@ -3383,8 +3387,12 @@ allWeekKeys.forEach((weekKey) => {
   // ============ END SKU RETURN RATE CALCULATION ============
   
   // Save Amazon forecasts to localStorage and cloud
+  // Guard: never overwrite localStorage with empty {} — the cloud load flow resets state to {}
+  // before applying cloud data, which would wipe the localStorage backup if unguarded
   useEffect(() => {
-    safeLocalStorageSet(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
+    if (Object.keys(amazonForecasts).length > 0) {
+      safeLocalStorageSet(AMAZON_FORECAST_KEY, JSON.stringify(amazonForecasts));
+    }
   }, [amazonForecasts]);
   
   // Save invoices to localStorage and cloud
@@ -4964,7 +4972,16 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     
     // Load new features from cloud
     if (cloud.invoices) setInvoices(cloud.invoices);
-    if (cloud.amazonForecasts) setAmazonForecasts(cloud.amazonForecasts);
+    // Restore forecasts from cloud, falling back to localStorage if cloud is empty
+    if (cloud.amazonForecasts && Object.keys(cloud.amazonForecasts).length > 0) {
+      setAmazonForecasts(cloud.amazonForecasts);
+    } else {
+      // Cloud doesn't have forecasts — preserve localStorage version (loaded at init)
+      try {
+        const lsForecasts = safeLocalStorageGet(AMAZON_FORECAST_KEY, {});
+        if (Object.keys(lsForecasts).length > 0) setAmazonForecasts(lsForecasts);
+      } catch (e) {}
+    }
     if (cloud.forecastMeta) setForecastMeta(cloud.forecastMeta);
     if (cloud.weekNotes) setWeekNotes(cloud.weekNotes);
     if (cloud.goals) setGoals(cloud.goals);
