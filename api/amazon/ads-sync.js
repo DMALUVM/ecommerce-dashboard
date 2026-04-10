@@ -404,7 +404,7 @@ export default async function handler(req, res) {
 
     // Poll with time-based guard: stop 15s before maxDuration to leave room for download/response
     const pollStart = Date.now();
-    const maxPollMs = 95000; // 95s — leaves ~25s for downloads within 120s maxDuration
+    const maxPollMs = 50000; // 50s — leaves plenty of room for downloads within 120s maxDuration
     let polls = 0;
     while (pending.length > 0 && (Date.now() - pollStart) < maxPollMs) {
       polls++;
