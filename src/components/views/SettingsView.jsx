@@ -2638,7 +2638,7 @@ const SettingsView = ({
                           clientSecret: amazonCredentials.clientSecret,
                           refreshToken: amazonCredentials.refreshToken,
                           sellerId: amazonCredentials.sellerId,
-                          marketplaceId: amazonCredentials.marketplaceId,
+                          marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
                           syncType: 'all',
                         }),
                       });
@@ -2924,7 +2924,7 @@ const SettingsView = ({
                             clientSecret: amazonCredentials.clientSecret,
                             refreshToken: amazonCredentials.refreshToken,
                             sellerId: amazonCredentials.sellerId,
-                            marketplaceId: amazonCredentials.marketplaceId,
+                            marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
                             test: true,
                           }),
                         });

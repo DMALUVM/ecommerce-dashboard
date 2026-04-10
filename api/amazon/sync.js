@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     clientSecret, 
     refreshToken,
     sellerId,
-    marketplaceId = 'ATVPDKIKX0DER', // Default to US marketplace
+    marketplaceId: rawMarketplaceId, // Will be defaulted below
     
     // Ads API Credentials (optional, separate from SP-API)
     adsClientId,
@@ -55,6 +55,9 @@ export default async function handler(req, res) {
     endDate,
     test
   } = req.body;
+
+  // Ensure marketplace ID has a valid default (destructuring default only applies for undefined, not null/"")
+  const marketplaceId = rawMarketplaceId || 'ATVPDKIKX0DER';
 
   // Validate required fields for SP-API
   if (!clientId || !clientSecret || !refreshToken) {

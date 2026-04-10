@@ -8093,7 +8093,7 @@ const savePeriods = async (d) => {
             clientSecret: amazonCredentials.clientSecret,
             refreshToken: amazonCredentials.refreshToken,
             sellerId: amazonCredentials.sellerId,
-            marketplaceId: amazonCredentials.marketplaceId,
+            marketplaceId: amazonCredentials.marketplaceId || 'ATVPDKIKX0DER',
             syncType: 'all', // Get both FBA and AWD
           }),
         });
