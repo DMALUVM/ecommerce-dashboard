@@ -5977,9 +5977,11 @@ const savePeriods = async (d) => {
       const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
       const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+      const csvCogs = parseFloat(r['Cost of goods sold per unit'] || 0);
       const name = r['Product title'] || r['product-name'] || sku;
-      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
-        amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
+      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) {
+        const skuCogs = csvCogs > 0 ? csvCogs * sold : (cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0) * sold;
+        amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += skuCogs;
         if (sku) {
           if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
           amazonSkuData[sku].unitsSold += sold;
@@ -5987,7 +5989,7 @@ const savePeriods = async (d) => {
           amazonSkuData[sku].netSales += sales;
           amazonSkuData[sku].netProceeds += proceeds;
           amazonSkuData[sku].adSpend += ads;
-          // COGS already in Net proceeds - per-SKU cogs derived below
+          amazonSkuData[sku].cogs += skuCogs;
         }
       }
     });
@@ -6051,15 +6053,9 @@ const savePeriods = async (d) => {
     // shopRev is Gross sales, so subtract discounts to get net profit
     const shopProfit = shopRev - shopDisc - shopCogs - shopThreeplCost - shopAds;
     
-    // Adjust Amazon profit for storage share (if proportional)
+    // Amazon profit = net proceeds (already has all fees & COGS deducted)
     const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
-    
     const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
-    // Derive Amazon COGS from SKU Economics report (already embedded in Net proceeds)
-    // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
-    amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
-    // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
 
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
@@ -6384,9 +6380,11 @@ const savePeriods = async (d) => {
       const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
       const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+      const csvCogs = parseFloat(r['Cost of goods sold per unit'] || 0);
       const name = r['Product title'] || r['product-name'] || sku;
-      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
-        amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
+      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) {
+        const skuCogs = csvCogs > 0 ? csvCogs * sold : (cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0) * sold;
+        amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += skuCogs;
         if (sku) {
           if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
           amazonSkuData[sku].unitsSold += sold;
@@ -6394,7 +6392,7 @@ const savePeriods = async (d) => {
           amazonSkuData[sku].netSales += sales;
           amazonSkuData[sku].netProceeds += proceeds;
           amazonSkuData[sku].adSpend += ads;
-          // COGS already in Net proceeds - per-SKU cogs derived below
+          amazonSkuData[sku].cogs += skuCogs;
         }
       }
     });
@@ -6450,13 +6448,9 @@ const savePeriods = async (d) => {
     const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
     // shopRev is Gross sales, so subtract discounts to get net profit
     const shopProfit = shopRev - shopDisc - shopCogs - shopThreeplCost - shopAds;
+    // Amazon profit = net proceeds (already has all fees & COGS deducted)
     const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
     const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
-    // Derive Amazon COGS from SKU Economics report (already embedded in Net proceeds)
-    // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
-    amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
-    // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
 
     // Convert SKU data to sorted arrays
@@ -6508,9 +6502,11 @@ const savePeriods = async (d) => {
           const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
           const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
           const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+          const csvCogs = parseFloat(r['Cost of goods sold per unit'] || 0);
           const name = r['Product title'] || r['product-name'] || sku;
-          if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
-            amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
+          if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) {
+            const skuCogs = csvCogs > 0 ? csvCogs * sold : (cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0) * sold;
+            amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += skuCogs;
             if (sku) {
               if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
               amazonSkuData[sku].unitsSold += sold;
@@ -6518,7 +6514,7 @@ const savePeriods = async (d) => {
               amazonSkuData[sku].netSales += sales;
               amazonSkuData[sku].netProceeds += proceeds;
               amazonSkuData[sku].adSpend += ads;
-              // COGS already in Net proceeds - per-SKU cogs derived below
+              amazonSkuData[sku].cogs += skuCogs;
             }
           }
         });
@@ -6563,13 +6559,9 @@ const savePeriods = async (d) => {
       // shopRev is now Gross sales, so subtract discounts to get net profit
       const shopProfit = shopRev - shopDisc - shopCogs - shopAds;
       const totalRev = amzRev + shopRev;
+      // Amazon profit = net proceeds (already has all fees & COGS deducted)
       const totalProfit = amzProfit + shopProfit;
-      // Derive Amazon COGS from SKU Economics report (already embedded in Net proceeds)
-    // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
-    amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
-    // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
-    const totalCogs = amzCogs + shopCogs;
+      const totalCogs = amzCogs + shopCogs;
       
       const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
       const shopifySkus = Object.values(shopifySkuData).sort((a, b) => b.netSales - a.netSales);
@@ -7248,9 +7240,11 @@ const savePeriods = async (d) => {
         const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
         const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
         const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+        const csvCogs = parseFloat(r['Cost of goods sold per unit'] || 0);
         const name = r['Product title'] || r['product-name'] || sku;
-        if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
-          amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
+        if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) {
+          const skuCogs = csvCogs > 0 ? csvCogs * sold : (cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0) * sold;
+          amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += skuCogs;
           if (sku) {
             if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
             amazonSkuData[sku].unitsSold += sold;
@@ -7258,7 +7252,7 @@ const savePeriods = async (d) => {
             amazonSkuData[sku].netSales += sales;
             amazonSkuData[sku].netProceeds += proceeds;
             amazonSkuData[sku].adSpend += ads;
-            // COGS already in Net proceeds - per-SKU cogs derived below
+            amazonSkuData[sku].cogs += skuCogs;
           }
         }
       });
@@ -7381,9 +7375,11 @@ const savePeriods = async (d) => {
       const sales = parseFloat(r['Net sales'] || 0), proceeds = parseFloat(r['Net proceeds total'] || 0), sku = r['MSKU'] || '';
       const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0) + parseFloat(r['AWD Storage Fee total'] || 0);
       const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+      const csvCogs = parseFloat(r['Cost of goods sold per unit'] || 0);
       const name = r['Product title'] || r['product-name'] || sku;
-      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) { 
-        amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; // COGS already in Net proceeds - do NOT add from lookup
+      if (net !== 0 || sold > 0 || ret > 0 || sales !== 0 || proceeds !== 0) {
+        const skuCogs = csvCogs > 0 ? csvCogs * sold : (cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0) * sold;
+        amzRev += sales; amzUnits += sold; amzRet += ret; amzProfit += proceeds; amzFees += fees; amzAds += ads; amzCogs += skuCogs;
         if (sku) {
           if (!amazonSkuData[sku]) amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
           amazonSkuData[sku].unitsSold += sold;
@@ -7391,7 +7387,7 @@ const savePeriods = async (d) => {
           amazonSkuData[sku].netSales += sales;
           amazonSkuData[sku].netProceeds += proceeds;
           amazonSkuData[sku].adSpend += ads;
-          // COGS already in Net proceeds - per-SKU cogs derived below
+          amazonSkuData[sku].cogs += skuCogs;
         }
       }
     });
@@ -7446,13 +7442,9 @@ const savePeriods = async (d) => {
     const shopThreeplCost = fulfillmentCost + (storageAlloc !== 'total' ? shopStorageCost : 0);
     // shopRev is Gross sales, so subtract discounts to get net profit
     const shopProfit = shopRev - shopDisc - shopCogs - shopThreeplCost - shopAds;
+    // Amazon profit = net proceeds (already has all fees & COGS deducted)
     const adjustedAmzProfit = storageAlloc === 'proportional' ? amzProfit - amzStorageCost : amzProfit;
     const totalProfit = adjustedAmzProfit + shopProfit - (storageAlloc === 'total' ? storageCost : 0);
-    // Derive Amazon COGS from SKU Economics report (already embedded in Net proceeds)
-    // amzProfit = Net proceeds total = Net sales - fees - ads - COGS
-    amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
-    // Derive per-SKU COGS from report data
-    Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
     const totalCogs = amzCogs + shopCogs;
 
     const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
@@ -9821,17 +9813,19 @@ const savePeriods = async (d) => {
           const sku = r['MSKU'] || r['msku'] || r['Msku'] || r['SKU'] || r['sku'] || r['Seller SKU'] || r['seller-sku'] || '';
           const fees = parseFloat(r['FBA fulfillment fees total'] || 0) + parseFloat(r['Referral fee total'] || 0);
           const ads = parseFloat(r['Sponsored Products charge total'] || 0);
+          const csvCogs = parseFloat(r['Cost of goods sold per unit'] || 0);
           const name = r['Product title'] || r['product-name'] || sku;
-          
+
           if (net !== 0 || sold > 0 || ret > 0 || sales !== 0) {
+            const skuCogs = csvCogs > 0 ? csvCogs * sold : (cogsLookup[sku] || cogsLookup[sku.replace(/Shop$/i, '')] || 0) * sold;
             amzRev += sales;
             amzUnits += sold;
             amzRet += ret;
             amzProfit += proceeds;
             amzFees += fees;
             amzAds += ads;
-            amzCogs += 0; // COGS already in Net proceeds - derived after loop
-            
+            amzCogs += skuCogs;
+
             if (sku) {
               if (!amazonSkuData[sku]) {
                 amazonSkuData[sku] = { sku, name, unitsSold: 0, returns: 0, netSales: 0, netProceeds: 0, adSpend: 0, cogs: 0 };
@@ -9841,15 +9835,11 @@ const savePeriods = async (d) => {
               amazonSkuData[sku].netSales += sales;
               amazonSkuData[sku].netProceeds += proceeds;
               amazonSkuData[sku].adSpend += ads;
-              // COGS already in Net proceeds - per-SKU cogs derived below
+              amazonSkuData[sku].cogs += skuCogs;
             }
           }
         });
-        
-        // Derive Amazon COGS from SKU Economics report (already embedded in Net proceeds)
-        amzCogs = Math.max(0, amzRev - amzFees - amzAds - amzProfit);
-        Object.values(amazonSkuData).forEach(s => { s.cogs = Math.max(0, (s.netSales || 0) - (s.netProceeds || 0) - (s.adSpend || 0)); });
-        
+
         const amazonSkus = Object.values(amazonSkuData).sort((a, b) => b.netSales - a.netSales);
         
         // DEBUG: Log what was parsed
@@ -12159,12 +12149,17 @@ const savePeriods = async (d) => {
                       });
                     }
                     
-                    // Recalculate netProfit if we have revenue data
-                    const rev = updated[date].amazon.revenue || updated[date].amazon.sales || 0;
-                    if (rev > 0) {
-                      const cogs = updated[date].amazon.cogs || 0;
-                      const fees = updated[date].amazon.fees || (rev * 0.30);
-                      updated[date].amazon.netProfit = rev - cogs - fees - (adDay.spend || 0);
+                    // Only recalculate netProfit for days without SKU Economics data
+                    // SKU Economics days already have netProfit from net proceeds (the gold standard)
+                    const hasSkuEcon = updated[date].amazon.source === 'sku-economics' ||
+                      (updated[date].amazon.skuData?.length > 0 && updated[date].amazon.source !== 'amazon-orders-api');
+                    if (!hasSkuEcon) {
+                      const rev = updated[date].amazon.revenue || updated[date].amazon.sales || 0;
+                      if (rev > 0) {
+                        const cogs = updated[date].amazon.cogs || 0;
+                        const fees = updated[date].amazon.fees || (rev * 0.30);
+                        updated[date].amazon.netProfit = rev - cogs - fees - (adDay.spend || 0);
+                      }
                     }
                     
                     adsDaysUpdated++;
