@@ -13654,25 +13654,24 @@ const savePeriods = async (d) => {
   const autoSyncFiredRef = useRef(false);
   useEffect(() => {
     if (autoSyncFiredRef.current) return; // Only fire once
-    if (!appSettings.autoSync?.enabled) {
-      console.log('[AutoSync] Disabled in settings (enabled:', appSettings.autoSync?.enabled, ')');
-      return;
-    }
+    // CRITICAL: Wait for cloud load to finish before auto-syncing.
+    // Credentials load mid-cloud-load, but app data (allDaysData, invHistory, etc.)
+    // loads later. Running auto-sync too early would work with empty state.
+    if (dataLoading) return;
+    if (!appSettings.autoSync?.enabled) return;
     if (!appSettings.autoSync?.onAppLoad) return;
 
-    // Wait for credentials to load from cloud before triggering
     const anyConnected = amazonCredentials.connected || shopifyCredentials.connected || packiyoCredentials.connected || shipSidekickCredentials.connected;
-    if (!anyConnected) return; // Re-runs when credentials update
+    if (!anyConnected) return;
 
-    // Credentials are loaded — delay briefly then sync
     autoSyncFiredRef.current = true;
-    console.log('[AutoSync] Triggering on app load — connected services detected');
+    console.log('[AutoSync] Triggering on app load — cloud loaded, connected services detected');
     const timer = setTimeout(() => {
       runAutoSyncRef.current();
     }, 2000);
 
     return () => clearTimeout(timer);
-  }, [appSettings.autoSync?.enabled, appSettings.autoSync?.onAppLoad, amazonCredentials.connected, shopifyCredentials.connected, packiyoCredentials.connected, shipSidekickCredentials.connected]);
+  }, [dataLoading, appSettings.autoSync?.enabled, appSettings.autoSync?.onAppLoad, amazonCredentials.connected, shopifyCredentials.connected, packiyoCredentials.connected, shipSidekickCredentials.connected]);
   
   // Set up interval for periodic sync (if enabled)
   useEffect(() => {
