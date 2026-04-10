@@ -90,21 +90,16 @@ export default async function handler(req, res) {
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
     if (!response.ok) {
       const errText = await response.text();
-      // 429 = throttled — retry with exponential backoff
+      // 429 = throttled — one quick retry then let caller handle
       if (response.status === 429) {
-        const retryAfter = parseInt(response.headers.get('Retry-After')) || 0;
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          const wait = retryAfter ? retryAfter * 1000 : 3000 * attempt;
-          console.log(`[AdsSync] 429 throttled on ${endpoint}, retry ${attempt}/2 in ${Math.round(wait/1000)}s...`);
-          await new Promise(r => setTimeout(r, wait));
-          const retryRes = await fetch(`${ADS_BASE}${endpoint}`, opts);
-          if (retryRes.ok) return retryRes.json();
-          if (retryRes.status !== 429) {
-            const retryErr = await retryRes.text();
-            throw new Error(`Ads API ${retryRes.status}: ${retryErr.slice(0, 2000)}`);
-          }
-        }
-        throw new Error(`Ads API 429: Throttled after 2 retries on ${endpoint}`);
+        const wait = parseInt(response.headers.get('Retry-After')) * 1000 || 1500;
+        console.log(`[AdsSync] 429 throttled on ${endpoint}, retry in ${Math.round(wait/1000)}s...`);
+        await new Promise(r => setTimeout(r, wait));
+        const retryRes = await fetch(`${ADS_BASE}${endpoint}`, opts);
+        if (retryRes.ok) return retryRes.json();
+        // Don't retry again — just throw so polling loop can move on
+        const retryErr = await retryRes.text();
+        throw new Error(`Ads API ${retryRes.status} after 429 retry: ${retryErr.slice(0, 2000)}`);
       }
       // 425 = duplicate report already exists — extract reportId and treat as success
       if (response.status === 425) {
@@ -377,7 +372,7 @@ export default async function handler(req, res) {
             status: created.status || 'PROCESSING',
           });
           console.log(`[AdsSync] ${spec.label} report created: ${created.reportId}`);
-          await new Promise(r => setTimeout(r, 1000)); // Throttle to stay under Amazon rate limits
+          await new Promise(r => setTimeout(r, 300));
         } catch (err) {
           const msg = err.message || '';
           // Non-fatal: account may not have SB, SD, etc.

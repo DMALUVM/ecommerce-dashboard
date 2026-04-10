@@ -12080,9 +12080,11 @@ const savePeriods = async (d) => {
       // Check Amazon Ads API — pull daily SP/SB/SD campaign performance
       // IMPORTANT: Run non-blocking (fire-and-forget) because the polling/retry loop
       // can take 2-4 minutes, which would block Shopify/Packiyo/QBO from syncing
+      console.log(`[AutoSync] Amazon Ads eligibility: autoSync=${appSettings.autoSync?.amazonAds}, connected=${amazonCredentials.adsConnected}, hasRefresh=${!!amazonCredentials.adsRefreshToken}, profileId=${amazonCredentials.adsProfileId || 'MISSING'}`);
       if (appSettings.autoSync?.amazonAds !== false && amazonCredentials.adsConnected && amazonCredentials.adsRefreshToken) {
         const adsStale = isServiceStale(amazonCredentials.adsLastSync, threshold);
-        
+        console.log(`[AutoSync] Amazon Ads: stale=${adsStale}, force=${force}, lastSync=${amazonCredentials.adsLastSync || 'never'}`);
+
         if (adsStale || force) {
           // Fire and forget — don't await
           (async () => {
@@ -12107,7 +12109,14 @@ const savePeriods = async (d) => {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(adsSyncBody),
                 });
+
+                if (!adsRes.ok) {
+                  console.error(`[AutoSync] Amazon Ads: HTTP ${adsRes.status} from server`);
+                  try { const errBody = await adsRes.text(); console.error('[AutoSync] Ads error body:', errBody.slice(0, 500)); } catch(e) {}
+                  break;
+                }
                 adsData = await adsRes.json();
+                console.log(`[AutoSync] Amazon Ads response:`, adsData.status || 'complete', adsData.error || '');
 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
                   console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 20s...`);
@@ -12230,8 +12239,10 @@ const savePeriods = async (d) => {
             }
           })(); // Fire and forget — don't await this IIFE
         }
+      } else {
+        console.log(`[AutoSync] Amazon Ads SKIPPED: conditions not met`);
       }
-      
+
       // Check Shopify Sales - use /api/shopify/sync endpoint
       // SEC-003 race fix: cloud load may set connected=true before localStorage restores the secret
       let shopifyToken = shopifyCredentials.clientSecret || shopifyCredentials.accessToken;
