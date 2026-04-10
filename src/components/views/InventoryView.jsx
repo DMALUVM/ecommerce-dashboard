@@ -366,7 +366,15 @@ const InventoryView = ({
       stockout.setDate(stockout.getDate() + newDaysOfSupply);
       newStockoutDate = stockout.toISOString().split('T')[0];
       
-      newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - leadTimeDays;
+      // Safety-stock-aware reorder point (matches snapshot formula)
+      // reorderPointDays = lead time demand + safety stock buffer, expressed in days
+      const seasonalFactor = item.seasonalFactor || 1.0;
+      const seasonalVel = effectiveVel * seasonalFactor;
+      const dailyVelForReorder = seasonalVel / 7;
+      const reorderPoint = Math.ceil((dailyVelForReorder * leadTimeDays) + (item.safetyStock || 0));
+      const reorderPointDays = seasonalVel > 0 ? Math.round((reorderPoint / seasonalVel) * 7) : leadTimeDays;
+
+      newDaysUntilMustOrder = newDaysOfSupply - reorderTriggerDays - reorderPointDays;
       const reorderBy = new Date(today);
       reorderBy.setDate(reorderBy.getDate() + newDaysUntilMustOrder);
       newReorderByDate = reorderBy.toISOString().split('T')[0];
