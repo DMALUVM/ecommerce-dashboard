@@ -3027,14 +3027,14 @@ const SettingsView = ({
                         adsProfileId: amazonCredentials.adsProfileId,
                       };
 
-                      while (retries < 5) {
+                      while (retries < 9) {
                         const elapsed = Math.round((Date.now() - startTime) / 1000);
                         if (retries === 0) {
-                          setToast({ message: `📊 Waiting for Amazon to generate reports... (${elapsed}s)`, type: 'info', duration: 60000 });
+                          setToast({ message: `📊 Waiting for Amazon to generate reports... (${elapsed}s)`, type: 'info', duration: 120000 });
                         } else {
                           const completed = data?.completedCount || 0;
                           const total = data?.totalCount || 8;
-                          setToast({ message: `⏳ Reports generating... ${completed}/${total} ready (retry ${retries}/5, ${elapsed}s)`, type: 'info', duration: 60000 });
+                          setToast({ message: `⏳ Reports generating... ${completed}/${total} ready (retry ${retries}/9, ${elapsed}s)`, type: 'info', duration: 120000 });
                         }
                         const r = await fetch('/api/amazon/ads-sync', {
                           method: 'POST',
@@ -3046,7 +3046,8 @@ const SettingsView = ({
                         if (data.status === 'pending' && data.pendingReports) {
                           syncBody.pendingReports = data.pendingReports;
                           retries++;
-                          await new Promise(r => setTimeout(r, 8000));
+                          // Server polls ~95s internally; short wait between retries
+                          await new Promise(r => setTimeout(r, 5000));
                           continue;
                         }
                         break;
