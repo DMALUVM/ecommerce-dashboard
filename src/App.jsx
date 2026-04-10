@@ -4437,42 +4437,30 @@ const pushToCloudNow = useCallback(async (dataObj, forceOverwrite = false) => {
   setCloudStatus('Saving…');
   
   try {
-  // CRITICAL SAFETY CHECK: Never overwrite populated data with empty data
-  // This prevents accidental data loss from race conditions
+  // SAFETY CHECK: Never overwrite populated cloud data with empty local data.
+  // Uses a lightweight updated_at check instead of reading the full data blob.
   const localSalesCount = Object.keys(dataObj.sales || {}).length;
   const localDailyCount = Object.keys(dataObj.dailySales || {}).length;
   const localPeriodsCount = Object.keys(dataObj.periods || {}).length;
   const localDataSize = localSalesCount + localDailyCount + localPeriodsCount;
-  
-  // Check existing cloud data (per-store row)
-  const storeCheckId = activeStoreId || 'default';
-  const { data: existingCheck } = await supabase
-    .from('app_data')
-    .select('data')
-    .eq('user_id', session.user.id)
-    .eq('store_id', storeCheckId)
-    .maybeSingle();
-  
-  if (existingCheck?.data) {
-    const cloudStore = existingCheck.data;
-    const cloudSalesCount = Object.keys(cloudStore.sales || {}).length;
-    const cloudDailyCount = Object.keys(cloudStore.dailySales || {}).length;
-    const cloudPeriodsCount = Object.keys(cloudStore.periods || {}).length;
-    const cloudDataSize = cloudSalesCount + cloudDailyCount + cloudPeriodsCount;
-    
-    // If cloud has significant data but local is empty/minimal, BLOCK the save
-    if (cloudDataSize > 5 && localDataSize === 0 && !forceOverwrite) {
-      devError('BLOCKED: Attempted to overwrite', cloudDataSize, 'records with empty data. Use forceOverwrite=true to override.');
+
+  if (localDataSize === 0 && !forceOverwrite) {
+    // Local data is empty — only block if cloud has data (check with lightweight query)
+    const storeCheckId = activeStoreId || 'default';
+    const { data: existingCheck } = await supabase
+      .from('app_data')
+      .select('updated_at')
+      .eq('user_id', session.user.id)
+      .eq('store_id', storeCheckId)
+      .maybeSingle();
+
+    if (existingCheck?.updated_at) {
+      devError('BLOCKED: Attempted to overwrite cloud data with empty local data. Use forceOverwrite=true to override.');
       setCloudStatus('Save blocked - would delete data');
       setTimeout(() => setCloudStatus(''), 3000);
       saveInProgressRef.current = false;
       pendingSaveDataRef.current = null;
       return;
-    }
-    
-    // Warn if losing significant data (but still allow if not empty)
-    if (cloudDataSize > localDataSize + 10 && !forceOverwrite) {
-      devWarn('WARNING: Saving will reduce data count from', cloudDataSize, 'to', localDataSize);
     }
   }
   
@@ -4595,9 +4583,11 @@ const queueCloudSave = useCallback((nextDataObj) => {
   if (isLoadingDataRef.current) return;
 
   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+  // 5s debounce — during auto-sync multiple state changes fire in quick succession;
+  // batching them into one save prevents hammering Supabase with repeated full-blob writes
   saveTimerRef.current = setTimeout(() => {
     pushToCloudNow(nextDataObj);
-  }, 800);
+  }, 5000);
 }, [session, pushToCloudNow]);
 
 const save3PLLedger = useCallback((newLedger) => {
@@ -12080,8 +12070,8 @@ const savePeriods = async (d) => {
                 return updated;
               });
               
-              queueCloudSave({ ...combinedData });
-              
+              // Cloud save handled by useEffect watching allDaysData — no explicit call needed
+
               setAmazonCredentials(p => ({ ...p, lastSync: new Date().toISOString() }));
               results.push({ service: 'Amazon Sales', success: true, days: Object.keys(data.dailySales).length, orders: data.summary?.totalOrders || 0 });
             } else if (data.status === 'pending') {
@@ -12235,7 +12225,7 @@ const savePeriods = async (d) => {
                   });
                 }
                 
-                queueCloudSave({ ...combinedData });
+                // Cloud save handled by useEffect watching allDaysData — no explicit call needed
                 setAmazonCredentials(p => ({ ...p, adsLastSync: new Date().toISOString() }));
                 console.log(`[AutoSync] Amazon Ads COMPLETE: ${adsData.summary?.daysWithData} days, $${adsData.summary?.totalSpend?.toFixed(0)} spend, ${adsData.summary?.campaignCount} campaigns, ${adsData.summary?.skuCount} SKUs`);
               } else if (adsData?.status === 'pending') {
@@ -12469,7 +12459,7 @@ const savePeriods = async (d) => {
                 });
               }
               
-              queueCloudSave({ ...combinedData });
+              // Cloud save handled by useEffect watching allDaysData — no explicit call needed
               results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0, days: Object.keys(data.dailyData || {}).length });
             } else {
               results.push({ service: 'Shopify', success: false, error: data.error || `HTTP ${res.status}` });
