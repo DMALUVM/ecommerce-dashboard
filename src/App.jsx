@@ -12125,7 +12125,7 @@ const savePeriods = async (d) => {
                 if (adsData.status === 'pending' && adsData.pendingReports) {
                   const completed = adsData.completedCount || 0;
                   const total = adsData.totalCount || '?';
-                  console.log(`[AutoSync] Amazon Ads: ${completed}/${total} ready, retry ${adsRetries + 1}/${maxAdsRetries}...`);
+                  console.log(`[AutoSync] Amazon Ads: ${completed}/${total} ready, retry ${adsRetries + 1}/${maxAdsRetries}`, adsData.pollDiag || '');
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
                   continue;
