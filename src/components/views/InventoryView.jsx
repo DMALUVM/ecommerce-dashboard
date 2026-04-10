@@ -250,12 +250,24 @@ const InventoryView = ({
     if (!hasLiveData) return item;
     
     const totalVel = newAmzVel + newShopVel;
+    // Recalculate correctedVel using live velocity + forecast correction factor
+    // (must stay in sync — otherwise days-of-supply uses stale snapshot velocity)
+    let newCorrectedVel = totalVel;
+    if (forecastCorrections.confidence >= 30 && forecastCorrections.samplesUsed >= 2) {
+      const baseSku = sku.replace(/shop$/i, '').toUpperCase();
+      const skuCorr = forecastCorrections.bySku?.[sku] || forecastCorrections.bySku?.[baseSku];
+      if (skuCorr?.samples >= 2) {
+        newCorrectedVel = totalVel * skuCorr.units;
+      } else if (forecastCorrections.overall?.units) {
+        newCorrectedVel = totalVel * forecastCorrections.overall.units;
+      }
+    }
     return {
       ...item,
       amzWeeklyVel: Math.round(newAmzVel * 10) / 10,
       shopWeeklyVel: Math.round(newShopVel * 10) / 10,
       weeklyVel: Math.round(totalVel * 10) / 10,
-      // daysOfSupply recalculated downstream in recalculatedItems
+      correctedVel: newCorrectedVel,
     };
   });
   
