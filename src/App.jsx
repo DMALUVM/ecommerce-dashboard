@@ -4724,50 +4724,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
   setCloudStatus('Loading…');
 
   try {
-    // ---- LEGACY MIGRATION: one-time split of nested blob into per-store rows ----
-    console.log('[LoadCloud] Checking legacy migration...');
-    const { data: legacyRow } = await supabase
-      .from('app_data')
-      .select('data')
-      .eq('user_id', session.user.id)
-      .eq('store_id', '_legacy')
-      .maybeSingle();
-    console.log('[LoadCloud] Legacy check done:', !!legacyRow);
-    
-    if (legacyRow?.data?.storeData) {
-      console.log('[Migration] Splitting legacy nested blob into per-store rows…');
-      setCloudStatus('Migrating data…');
-      const legacy = legacyRow.data;
-      const legacyStores = legacy.stores || [];
-      const legacyStoreData = legacy.storeData || {};
-      
-      // Create meta row
-      await supabase.from('app_data').upsert({
-        user_id: session.user.id,
-        store_id: '_meta',
-        data: { stores: legacyStores, activeStoreId: legacy.activeStoreId || 'default' },
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id,store_id' });
-      
-      // Create per-store rows
-      for (const [sid, sdata] of Object.entries(legacyStoreData)) {
-        await supabase.from('app_data').upsert({
-          user_id: session.user.id,
-          store_id: sid,
-          data: sdata,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'user_id,store_id' });
-      }
-      
-      // Delete legacy row
-      await supabase.from('app_data')
-        .delete()
-        .eq('user_id', session.user.id)
-        .eq('store_id', '_legacy');
-      
-      console.log('[Migration] Complete — split', Object.keys(legacyStoreData).length, 'stores');
-    }
-    // ---- END MIGRATION ----
+    // Legacy migration already completed — skip the query to avoid slow Supabase calls
     
     // Load meta row (stores list + activeStoreId)
     console.log('[LoadCloud] Loading meta row...');
@@ -5525,15 +5482,18 @@ useEffect(() => {
     
     try {
       if (session?.user?.id && supabase) {
-        // Timeout protection: if cloud load hangs, fall back to localStorage
+        // Load localStorage IMMEDIATELY for instant display, then try cloud
+        loadFromLocal();
+        console.log('[Init] localStorage loaded — attempting cloud sync...');
+
+        // Try cloud with a short timeout — if it hangs, localStorage data is already displayed
         const cloudLoadPromise = loadFromCloud();
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Cloud load timeout (20s)')), 20000));
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000));
         let result;
         try {
           result = await Promise.race([cloudLoadPromise, timeoutPromise]);
         } catch (timeoutErr) {
-          console.error('[Init] Cloud load timed out — falling back to localStorage');
-          loadFromLocal();
+          console.warn('[Init] Cloud load timed out (8s) — using localStorage data');
           result = { ok: true, reason: 'localStorage_fallback', stores: [] };
         }
         console.log('[Init] loadFromCloud result:', result.ok, result.reason, 'stores:', result.stores?.length);
