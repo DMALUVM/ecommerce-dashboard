@@ -2944,29 +2944,13 @@ const handleLogout = async () => {
   const forecastAlerts = useMemo(() => {
     const alerts = [];
     const now = new Date();
-    
-    const checkForecastAge = (type, days, label) => {
-      const lastUpload = forecastMeta.lastUploads?.[type];
-      if (!lastUpload) {
-        alerts.push({ type, severity: 'warning', message: `No ${label} Amazon forecast uploaded yet`, action: 'upload' });
-      } else {
-        const uploadDate = new Date(lastUpload);
-        const daysSince = Math.floor((now - uploadDate) / (1000 * 60 * 60 * 24));
-        if (daysSince >= days) {
-          alerts.push({ type, severity: 'warning', message: `${label} forecast is ${daysSince} days old (refresh every ${days} days)`, action: 'refresh' });
-        } else {
-          const daysUntil = days - daysSince;
-          if (daysUntil <= 2) {
-            alerts.push({ type, severity: 'info', message: `${label} forecast due for refresh in ${daysUntil} day(s)`, action: 'upcoming' });
-          }
-        }
-      }
-    };
-    
-    checkForecastAge('7day', 7, '7-day');
-    checkForecastAge('30day', 30, '30-day');
-    checkForecastAge('60day', 60, '60-day');
-    
+
+    // Forecast age alerts have been disabled per user request — they were firing
+    // repeatedly even right after fresh uploads due to unrelated persistence bugs,
+    // and creating noise. Amazon forecast freshness can be checked in the
+    // Forecasts view directly.
+    // (Previous behavior: warned when 7/30/60-day forecasts were older than N days.)
+
     // Check Amazon Campaign data freshness (weekly upload reminder)
     // Skip if Amazon Ads API sync is connected — API data replaces manual uploads
     const adsApiActive = amazonCredentials.adsConnected && amazonCredentials.adsLastSync;
@@ -4139,6 +4123,12 @@ const combinedData = useMemo(() => ({
   confirmedRecurring,
   // Note: API credentials now stored in separate store_credentials table, not in app_data
 }), [allWeeksData, allDaysData, invHistory, savedCogs, cogsLastUpdated, allPeriodsData, storeName, storeLogo, salesTaxConfig, appSettings, invoices, amazonForecasts, forecastMeta, weekNotes, goals, savedProductNames, theme, widgetConfig, productionPipeline, threeplLedger, amazonCampaigns, adsIntelData, forecastAccuracyHistory, forecastCorrections, returnRates, aiForecasts, leadTimeSettings, aiForecastModule, aiLearningHistory, unifiedAIModel, weeklyReports, aiMessages, bankingData, confirmedRecurring]);
+
+// Live ref to combinedData — avoids stale closures in async callbacks like auto-sync's
+// final cloud push. Without this, a push that captured combinedData at the start of sync
+// could overwrite forecasts/inventory the user uploaded DURING the sync.
+const combinedDataRef = useRef(combinedData);
+combinedDataRef.current = combinedData;
 
 const loadFromLocal = useCallback(() => {
   try {
@@ -13603,17 +13593,30 @@ const savePeriods = async (d) => {
       setTimeout(() => {
         if (session?.user?.id && supabase && !isLoadingDataRef.current) {
           console.log('[AutoSync] Final cloud push to persist all synced data');
-          // Read fresh from localStorage as source of truth (not stale combinedData closure)
+          // CRITICAL: Use combinedDataRef.current (NOT the closure's combinedData) so we
+          // pick up any state the user changed DURING the sync — especially Amazon forecast
+          // uploads, which were being silently overwritten by this push.
+          // Also read fresh inventory from localStorage as extra belt-and-suspenders.
           try {
+            const liveCombined = combinedDataRef.current || combinedData;
             const freshInvRaw = lsGet(INVENTORY_KEY);
             const freshInv = freshInvRaw ? JSON.parse(freshInvRaw) : null;
-            if (freshInv) {
-              pushToCloudNow({ ...combinedData, inventory: freshInv });
-            } else {
-              pushToCloudNow(combinedData);
-            }
+            // Also pull latest forecasts straight from localStorage as a final guard
+            let freshForecasts = liveCombined.amazonForecasts;
+            try {
+              const lsForecasts = safeLocalStorageGet(AMAZON_FORECAST_KEY, null);
+              if (lsForecasts && Object.keys(lsForecasts).length > 0) {
+                freshForecasts = lsForecasts;
+              }
+            } catch (_) {}
+            const payload = {
+              ...liveCombined,
+              amazonForecasts: freshForecasts || liveCombined.amazonForecasts,
+            };
+            if (freshInv) payload.inventory = freshInv;
+            pushToCloudNow(payload);
           } catch (e) {
-            pushToCloudNow(combinedData);
+            pushToCloudNow(combinedDataRef.current || combinedData);
           }
         }
       }, 2000);
