@@ -12073,6 +12073,11 @@ const savePeriods = async (d) => {
               console.log('[AutoSync] Amazon Ads: starting background sync (non-blocking)...');
               const adsSyncBody = {
                 syncType: 'daily',
+                // Auto-sync only pulls the 2 reports needed for daily spend + SKU attribution
+                // (spCampaigns + spAdvertised). Amazon's report queue handles 2 reports MUCH
+                // faster than 8, so this is the difference between "ready in 2 min" vs
+                // "still generating after 10 min". Full 8-report sync runs on manual trigger.
+                essentialOnly: true,
                 daysBack: 30,
                 adsClientId: amazonCredentials.adsClientId,
                 adsClientSecret: amazonCredentials.adsClientSecret,
@@ -12082,7 +12087,10 @@ const savePeriods = async (d) => {
 
               let adsData = null;
               let adsRetries = 0;
-              const maxAdsRetries = 6;
+              // 10 retries × 30s = 5 min of client waits, plus server polls ~80s per call.
+              // Total worst case: ~15 min. Amazon Ads essential reports usually finish in
+              // 2-5 min, but cold-start queues can take longer.
+              const maxAdsRetries = 10;
 
               while (adsRetries < maxAdsRetries) {
                 const adsRes = await fetch('/api/amazon/ads-sync', {
@@ -12100,10 +12108,10 @@ const savePeriods = async (d) => {
                 console.log(`[AutoSync] Amazon Ads response:`, adsData.status || 'complete', adsData.error || '');
 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 20s...`);
+                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 30s...`);
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
-                  await new Promise(r => setTimeout(r, 20000));
+                  await new Promise(r => setTimeout(r, 30000));
                   continue;
                 }
                 break;
