@@ -11899,6 +11899,11 @@ const savePeriods = async (d) => {
   // Automatically sync Amazon, Shopify, and Packiyo data when stale
   const [autoSyncStatus, setAutoSyncStatus] = useState({ running: false, lastCheck: null, results: [] });
   const autoSyncLockRef = useRef(false); // Synchronous lock to prevent double-fire
+  // Independent lock for the Amazon Ads fire-and-forget IIFE. The main autoSyncLockRef
+  // gets released when runAutoSync's try/finally completes, but the Ads IIFE keeps
+  // running for minutes afterward (polling Amazon's report queue). If runAutoSync fires
+  // again while Ads is still polling, this prevents a second parallel Ads sync.
+  const adsSyncLockRef = useRef(false);
   
   // Check if a service is stale (needs sync)
   const isServiceStale = useCallback((lastSync, thresholdHours = 4) => {
@@ -12067,6 +12072,11 @@ const savePeriods = async (d) => {
         console.log(`[AutoSync] Amazon Ads: stale=${adsStale}, force=${force}, lastSync=${amazonCredentials.adsLastSync || 'never'}`);
 
         if (adsStale || force) {
+          // Skip if a previous Ads IIFE is already polling (it outlives runAutoSync).
+          if (adsSyncLockRef.current) {
+            console.log('[AutoSync] Amazon Ads SKIPPED — previous background sync still polling');
+          } else {
+          adsSyncLockRef.current = true;
           // Fire and forget — don't await
           (async () => {
             try {
@@ -12225,8 +12235,11 @@ const savePeriods = async (d) => {
               }
             } catch (err) {
               devWarn('Amazon Ads auto-sync error:', err.message);
+            } finally {
+              adsSyncLockRef.current = false; // Release so next auto-sync can run Ads again
             }
           })(); // Fire and forget — don't await this IIFE
+          } // end if (!adsSyncLockRef.current)
         }
       } else {
         console.log(`[AutoSync] Amazon Ads SKIPPED: conditions not met`);
