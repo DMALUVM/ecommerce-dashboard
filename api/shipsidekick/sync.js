@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     baseUrl.includes('test.') ? 'https://www.shipsidekick.com/api/v1' : 'https://test.shipsidekick.com/api/v1',
   ];
 
-  // Test connection - try both production and test environments
+  // Test connection - try both URLs and multiple auth schemes
   // Returns full debug log so errors can be diagnosed from the UI
   if (test) {
     const debugLog = [];
@@ -75,63 +75,74 @@ export default async function handler(req, res) {
     log(`Incoming baseUrl: ${req.body.baseUrl || '(not provided)'}`);
     log(`Resolved baseUrl: ${baseUrl}`);
     log(`URLs to try: ${SSK_URLS.join(', ')}`);
-    log(`Headers: ${JSON.stringify({ ...buildHeaders(), Authorization: 'Bearer ***' })}`);
+
+    // Try multiple auth schemes — different APIs use different conventions
+    const authSchemes = [
+      { name: 'Bearer', headers: { 'Authorization': `Bearer ${apiKey}` } },
+      { name: 'X-API-Key', headers: { 'X-API-Key': apiKey } },
+      { name: 'Token', headers: { 'Authorization': `Token ${apiKey}` } },
+      { name: 'ApiKey', headers: { 'Authorization': `ApiKey ${apiKey}` } },
+      { name: 'Raw', headers: { 'Authorization': apiKey } },
+      { name: 'X-Auth-Token', headers: { 'X-Auth-Token': apiKey } },
+    ];
 
     let lastError = null;
 
     for (const tryUrl of SSK_URLS) {
-      const testEndpoint = `${tryUrl}/inventory/levels?limit=1`;
-      log(`--- Trying: ${testEndpoint} ---`);
+      for (const scheme of authSchemes) {
+        const testEndpoint = `${tryUrl}/inventory/levels?limit=1`;
+        const headers = {
+          ...scheme.headers,
+          'Accept': 'application/json',
+          ...(clientSlug ? { 'X-SSK-Client': clientSlug } : {}),
+        };
+        log(`--- Trying: ${tryUrl} with ${scheme.name} auth ---`);
 
-      try {
-        const startTime = Date.now();
-        const testRes = await fetch(testEndpoint, {
-          method: 'GET',
-          headers: buildHeaders('GET'),
-        });
-        const elapsed = Date.now() - startTime;
-
-        log(`Response: HTTP ${testRes.status} ${testRes.statusText} (${elapsed}ms)`);
-        log(`Response headers: ${JSON.stringify(Object.fromEntries(testRes.headers.entries()))}`);
-
-        let responseBody = '';
-        try { responseBody = await testRes.text(); } catch (e) { log(`Could not read body: ${e.message}`); }
-        log(`Response body (first 1000 chars): ${responseBody.slice(0, 1000)}`);
-
-        if (testRes.ok) {
-          log(`SUCCESS on ${tryUrl}`);
-          // Try to parse the JSON body for additional info
-          let parsedData = null;
-          try { parsedData = JSON.parse(responseBody); } catch (e) {}
-
-          return res.status(200).json({
-            success: true,
-            customerName: clientSlug || 'Ship Sidekick',
-            baseUrl: tryUrl,
-            debugLog,
+        try {
+          const startTime = Date.now();
+          const testRes = await fetch(testEndpoint, {
+            method: 'GET',
+            headers,
           });
-        } else {
-          lastError = { status: testRes.status, body: responseBody, url: tryUrl };
-          log(`FAILED on ${tryUrl} - trying next...`);
+          const elapsed = Date.now() - startTime;
+
+          log(`Response: HTTP ${testRes.status} ${testRes.statusText} (${elapsed}ms)`);
+
+          let responseBody = '';
+          try { responseBody = await testRes.text(); } catch (e) { log(`Could not read body: ${e.message}`); }
+          log(`Response body (first 300 chars): ${responseBody.slice(0, 300)}`);
+
+          if (testRes.ok) {
+            log(`SUCCESS on ${tryUrl} with ${scheme.name} auth`);
+            return res.status(200).json({
+              success: true,
+              customerName: clientSlug || 'Ship Sidekick',
+              baseUrl: tryUrl,
+              authScheme: scheme.name,
+              debugLog,
+            });
+          } else {
+            lastError = { status: testRes.status, body: responseBody, url: tryUrl, scheme: scheme.name };
+          }
+        } catch (err) {
+          log(`NETWORK ERROR on ${tryUrl} (${scheme.name}): ${err.message}`);
+          lastError = { status: 0, body: err.message, url: tryUrl, scheme: scheme.name };
         }
-      } catch (err) {
-        log(`NETWORK ERROR on ${tryUrl}: ${err.message}`);
-        lastError = { status: 0, body: err.message, url: tryUrl };
       }
     }
 
-    // All URLs failed - return full debug log with actionable guidance
-    log(`=== All URLs failed ===`);
+    // All URLs and auth schemes failed
+    log(`=== All URLs and auth schemes failed ===`);
     let errorMsg;
     if (lastError?.status === 401) {
-      errorMsg = 'Invalid API key. Please verify your Ship Sidekick API key is correct and has not expired. '
+      errorMsg = 'Invalid API key. Tried Bearer, X-API-Key, Token, ApiKey, Raw, and X-Auth-Token auth schemes — all rejected. '
+        + 'Verify your Ship Sidekick API key is correct and has not expired. '
         + 'You can find or regenerate your key in the Ship Sidekick dashboard under Settings > API Keys.';
       if (!clientSlug) {
         errorMsg += ' If your account is a child organization under a parent, you may also need to provide a Client Slug.';
       }
     } else if (lastError?.status === 403) {
-      errorMsg = 'Access forbidden. Your API key may not have permission to access inventory data. '
-        + 'Check your API key permissions in the Ship Sidekick dashboard.';
+      errorMsg = 'Access forbidden. Your API key may not have permission to access inventory data.';
     } else if (lastError) {
       errorMsg = `Ship Sidekick connection failed (HTTP ${lastError.status} from ${lastError.url}). Response: ${(lastError.body || '').slice(0, 300)}`;
     } else {
