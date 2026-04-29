@@ -15,6 +15,61 @@ const TIME_RANGES = [
 const PROCESSING_FEE_PCT = 0.029;
 const PROCESSING_FEE_FIXED = 0.30;
 
+const Section = ({ title, subtitle, children }) => (
+  <div className="mb-8">
+    <div className="mb-3">
+      <h2 className="text-lg font-semibold">{title}</h2>
+      {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
+    </div>
+    {children}
+  </div>
+);
+
+const MetricCard = ({ icon: Icon, label, value, sub, tone = 'neutral', tooltip }) => {
+  const toneClass = {
+    good: 'border-emerald-500/30 bg-emerald-900/10',
+    warn: 'border-amber-500/30 bg-amber-900/10',
+    bad: 'border-rose-500/30 bg-rose-900/10',
+    neutral: 'border-slate-700 bg-slate-800/50',
+  }[tone];
+
+  const valueClass = {
+    good: 'text-emerald-400',
+    warn: 'text-amber-400',
+    bad: 'text-rose-400',
+    neutral: 'text-white',
+  }[tone];
+
+  return (
+    <div className={`p-4 rounded-2xl border ${toneClass}`} title={tooltip}>
+      <div className="flex items-center gap-2 text-slate-400 text-xs uppercase tracking-wide mb-2">
+        {Icon && <Icon className="w-4 h-4" />}
+        <span>{label}</span>
+      </div>
+      <div className={`text-2xl font-bold ${valueClass}`}>{value}</div>
+      {sub && <div className="text-xs text-slate-500 mt-1">{sub}</div>}
+    </div>
+  );
+};
+
+const CostBar = ({ label, value, total, color, showAmount }) => {
+  const pct = total > 0 ? Math.min(100, (value / total) * 100) : 0;
+  return (
+    <div className="mb-2">
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-slate-300">{label}</span>
+        <span className="text-slate-400">
+          {showAmount && formatCurrency(value)}
+          <span className="ml-2 text-slate-500">{pct.toFixed(1)}%</span>
+        </span>
+      </div>
+      <div className="h-2 bg-slate-900 rounded-full overflow-hidden">
+        <div className={`h-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+};
+
 const UnitEconomicsView = ({
   allDaysData = {},
   allWeeksData = {},
@@ -507,61 +562,6 @@ const UnitEconomicsView = ({
         <div className="text-xs text-slate-500 mt-6 px-2">
           Methodology: Revenue = item sales + shipping (excludes tax). Contribution margin = (Revenue − COGS − 3PL − discounts − payment processing) / Revenue. Payment processing assumed at 2.9% + $0.30/order. Break-even ROAS = 1 / contribution margin. CAC requires synced Shopify customer IDs.
         </div>
-      </div>
-    </div>
-  );
-};
-
-const Section = ({ title, subtitle, children }) => (
-  <div className="mb-8">
-    <div className="mb-3">
-      <h2 className="text-lg font-semibold">{title}</h2>
-      {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
-    </div>
-    {children}
-  </div>
-);
-
-const MetricCard = ({ icon: Icon, label, value, sub, tone = 'neutral', tooltip }) => {
-  const toneClass = {
-    good: 'border-emerald-500/30 bg-emerald-900/10',
-    warn: 'border-amber-500/30 bg-amber-900/10',
-    bad: 'border-rose-500/30 bg-rose-900/10',
-    neutral: 'border-slate-700 bg-slate-800/50',
-  }[tone];
-
-  const valueClass = {
-    good: 'text-emerald-400',
-    warn: 'text-amber-400',
-    bad: 'text-rose-400',
-    neutral: 'text-white',
-  }[tone];
-
-  return (
-    <div className={`p-4 rounded-2xl border ${toneClass}`} title={tooltip}>
-      <div className="flex items-center gap-2 text-slate-400 text-xs uppercase tracking-wide mb-2">
-        {Icon && <Icon className="w-4 h-4" />}
-        <span>{label}</span>
-      </div>
-      <div className={`text-2xl font-bold ${valueClass}`}>{value}</div>
-      {sub && <div className="text-xs text-slate-500 mt-1">{sub}</div>}
-    </div>
-  );
-};
-
-const CostBar = ({ label, value, total, color, showAmount }) => {
-  const pct = total > 0 ? Math.min(100, (value / total) * 100) : 0;
-  return (
-    <div className="mb-2">
-      <div className="flex items-center justify-between text-xs mb-1">
-        <span className="text-slate-300">{label}</span>
-        <span className="text-slate-400">
-          {showAmount && formatCurrency(value)}
-          <span className="ml-2 text-slate-500">{pct.toFixed(1)}%</span>
-        </span>
-      </div>
-      <div className="h-2 bg-slate-900 rounded-full overflow-hidden">
-        <div className={`h-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
