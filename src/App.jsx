@@ -18388,6 +18388,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       hasDailySalesData={hasDailySalesData}
       invHistory={invHistory}
       navDropdown={navDropdown}
+      savedCogs={savedCogs}
       setNavDropdown={setNavDropdown}
       setSelectedDay={setSelectedDay}
       setSelectedInvDate={setSelectedInvDate}

@@ -27,6 +27,7 @@ const UnitEconomicsView = ({
   hasDailySalesData,
   invHistory,
   navDropdown,
+  savedCogs = {},
   setNavDropdown,
   setSelectedDay,
   setSelectedInvDate,
@@ -40,6 +41,47 @@ const UnitEconomicsView = ({
   const [marketingMix, setMarketingMix] = useState('paid');
 
   const range = TIME_RANGES.find(r => r.key === rangeKey) || TIME_RANGES[1];
+
+  const lookupCogs = (rawSku) => {
+    const sku = (rawSku || '').toString().trim();
+    if (!sku) return 0;
+    const pick = (k) => {
+      const v = savedCogs[k];
+      if (typeof v === 'number') return v;
+      if (v && typeof v.cost === 'number') return v.cost;
+      return 0;
+    };
+    let c = pick(sku);
+    if (c) return c;
+    const compact = sku.replace(/\s+/g, '');
+    c = pick(compact);
+    if (c) return c;
+    const base = compact.replace(/shop$/i, '');
+    for (const k of [base, base + 'Shop', base.toUpperCase(), (base + 'Shop').toUpperCase(), base.toLowerCase(), (base + 'Shop').toLowerCase()]) {
+      c = pick(k);
+      if (c) return c;
+    }
+    return 0;
+  };
+
+  const computeDayCogs = (day) => {
+    const s = day.shopify || {};
+    const a = day.amazon || {};
+    let storedCogs = (s.cogs || 0) + (a.cogs || 0);
+    if (storedCogs > 0) return storedCogs;
+    let computed = 0;
+    (s.skuData || []).forEach(item => {
+      const unitCost = lookupCogs(item.sku);
+      const units = item.unitsSold || item.units || 0;
+      computed += unitCost * units;
+    });
+    (a.skuData || []).forEach(item => {
+      const unitCost = lookupCogs(item.sku);
+      const units = item.unitsSold || item.units || 0;
+      computed += unitCost * units;
+    });
+    return computed;
+  };
 
   const metrics = useMemo(() => {
     const cutoff = new Date();
@@ -71,7 +113,7 @@ const UnitEconomicsView = ({
       const a = day.amazon || {};
       revenue += (s.revenue || 0) + (a.revenue || 0);
       netSales += s.netSales || 0;
-      cogs += (s.cogs || 0) + (a.cogs || 0);
+      cogs += computeDayCogs(day);
       discounts += s.discounts || 0;
       shipping += s.shippingCollected || s.shipping || 0;
       threeplCosts += s.threeplCosts || 0;
@@ -153,10 +195,10 @@ const UnitEconomicsView = ({
       ltvCacRatio,
       paybackOrders,
       hasCustomerData: trackedOrders > 0,
-      hasCogs: cogs > 0,
+      hasCogs: cogs > 0 || Object.keys(savedCogs || {}).length > 0,
       hasAdSpend: totalAdSpend > 0,
     };
-  }, [allDaysData, range.days, marketingMix]);
+  }, [allDaysData, range.days, marketingMix, savedCogs]);
 
   const cohortRows = useMemo(() => {
     if (!customerCohorts || customerCohorts.length === 0) return [];
