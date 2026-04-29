@@ -32,6 +32,13 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Ship Sidekick API key is required' });
   }
 
+  // Detect masked/bullet characters that snuck in from a password-masked input
+  if (/[•·●○]/.test(apiKey) || /[^\x20-\x7E]/.test(apiKey)) {
+    return res.status(400).json({
+      error: 'Your API key contains invisible/masked characters (likely copied from a hidden password field). Please re-enter the key directly from your Ship Sidekick dashboard — clear the field first, then paste the actual key.',
+    });
+  }
+
   // Force Ship Sidekick base URL (ignore any old Packiyo URLs from stored credentials)
   let baseUrl = req.body.baseUrl || 'https://www.shipsidekick.com/api/v1';
   if (baseUrl.includes('packiyo')) {
