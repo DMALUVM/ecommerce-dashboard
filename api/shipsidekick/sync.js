@@ -77,31 +77,20 @@ export default async function handler(req, res) {
     log(`URLs to try: ${SSK_URLS.join(', ')}`);
 
     // Try multiple auth schemes — different APIs use different conventions
-    const basicAuth = typeof Buffer !== 'undefined'
-      ? Buffer.from(`${apiKey}:`).toString('base64')
-      : btoa(`${apiKey}:`);
     const authSchemes = [
       { name: 'Bearer', headers: { 'Authorization': `Bearer ${apiKey}` } },
-      { name: 'Basic (key as user)', headers: { 'Authorization': `Basic ${basicAuth}` } },
       { name: 'X-API-Key', headers: { 'X-API-Key': apiKey } },
-      { name: 'X-Api-Token', headers: { 'X-Api-Token': apiKey } },
-      { name: 'api-key', headers: { 'api-key': apiKey } },
-      { name: 'apikey', headers: { 'apikey': apiKey } },
       { name: 'Token', headers: { 'Authorization': `Token ${apiKey}` } },
       { name: 'ApiKey', headers: { 'Authorization': `ApiKey ${apiKey}` } },
       { name: 'Raw', headers: { 'Authorization': apiKey } },
       { name: 'X-Auth-Token', headers: { 'X-Auth-Token': apiKey } },
-      { name: 'Query param api_key', headers: {}, query: `api_key=${encodeURIComponent(apiKey)}` },
-      { name: 'Query param apiKey', headers: {}, query: `apiKey=${encodeURIComponent(apiKey)}` },
-      { name: 'Query param token', headers: {}, query: `token=${encodeURIComponent(apiKey)}` },
     ];
 
     let lastError = null;
 
     for (const tryUrl of SSK_URLS) {
       for (const scheme of authSchemes) {
-        const queryStr = scheme.query ? `&${scheme.query}` : '';
-        const testEndpoint = `${tryUrl}/inventory/levels?limit=1${queryStr}`;
+        const testEndpoint = `${tryUrl}/inventory/levels?limit=1`;
         const headers = {
           ...scheme.headers,
           'Accept': 'application/json',
