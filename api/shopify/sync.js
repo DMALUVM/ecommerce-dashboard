@@ -559,11 +559,6 @@ export default async function handler(req, res) {
     let totalShopPayTaxExcluded = 0;
     let shopPayOrderCount = 0;
    
-    // Customer tracking for CAC/LTV metrics
-    const customerMap = {};
-    let totalNewCustomerOrders = 0;
-    let totalReturningCustomerOrders = 0;
-
     // Track all payment gateways seen (for debugging Shop Pay detection)
     const allPaymentGateways = new Set();
     const shopPayGatewaysFound = new Set();
@@ -644,8 +639,6 @@ export default async function handler(req, res) {
             units: 0,
             discounts: 0,
             orders: 0,
-            newCustomerOrders: 0,
-            returningCustomerOrders: 0,
             skuData: [],
             taxTotal: 0,
             taxTotalAll: 0,
@@ -668,8 +661,6 @@ export default async function handler(req, res) {
             units: 0,
             discounts: 0,
             orders: 0,
-            newCustomerOrders: 0,
-            returningCustomerOrders: 0,
             skuData: [],
             taxTotal: 0,
             taxTotalAll: 0,
@@ -714,32 +705,6 @@ export default async function handler(req, res) {
      
       totalRevenue += orderRevenue;
       totalDiscounts += orderDiscount;
-
-      // Track customer for new vs returning split (CAC/LTV metrics)
-      const customerId = order.customer?.id;
-      if (customerId) {
-        const isNewCustomer = !customerMap[customerId];
-        if (isNewCustomer) {
-          customerMap[customerId] = {
-            firstOrderDate: orderDate,
-            orderCount: 0,
-            totalSpent: 0,
-          };
-        }
-        customerMap[customerId].orderCount += 1;
-        customerMap[customerId].totalSpent += orderRevenue;
-
-        if (isNewCustomer) {
-          dailyData[orderDate].shopify.newCustomerOrders += 1;
-          weeklyData[weekEnding].shopify.newCustomerOrders += 1;
-          totalNewCustomerOrders += 1;
-        } else {
-          dailyData[orderDate].shopify.returningCustomerOrders += 1;
-          weeklyData[weekEnding].shopify.returningCustomerOrders += 1;
-          totalReturningCustomerOrders += 1;
-        }
-      }
-
       // Process tax - EXCLUDE Shop Pay orders from tax totals
       // (Shopify remits tax automatically for Shop Pay orders)
       // BUT still track ALL orders in taxByState for visibility
@@ -1010,39 +975,10 @@ export default async function handler(req, res) {
       },
       taxByJurisdiction, // Keep for backward compatibility
       dateRange: { start: startDate, end: endDate },
-      customers: {
-        uniqueCount: Object.keys(customerMap).length,
-        newOrders: totalNewCustomerOrders,
-        returningOrders: totalReturningCustomerOrders,
-        cohorts: buildCustomerCohorts(customerMap),
-      },
       ...(preview ? {} : { dailyData, weeklyData }),
     });
   } catch (err) {
     console.error('Sync error:', err);
     return res.status(500).json({ error: `Sync failed: ${err.message}` });
   }
-}
-
-function buildCustomerCohorts(customerMap) {
-  const cohorts = {};
-  for (const customer of Object.values(customerMap)) {
-    const month = customer.firstOrderDate.slice(0, 7);
-    if (!cohorts[month]) {
-      cohorts[month] = {
-        month,
-        newCustomers: 0,
-        totalOrders: 0,
-        totalRevenue: 0,
-        repeatCustomers: 0,
-      };
-    }
-    cohorts[month].newCustomers += 1;
-    cohorts[month].totalOrders += customer.orderCount;
-    cohorts[month].totalRevenue += customer.totalSpent;
-    if (customer.orderCount > 1) {
-      cohorts[month].repeatCustomers += 1;
-    }
-  }
-  return Object.values(cohorts).sort((a, b) => a.month.localeCompare(b.month));
 }

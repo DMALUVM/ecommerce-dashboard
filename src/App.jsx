@@ -66,7 +66,6 @@ import UploadView from './components/views/UploadView';
 import TrendsView from './components/views/TrendsView';
 import ForecastView from './components/views/ForecastView';
 import ProfitabilityView from './components/views/ProfitabilityView';
-import UnitEconomicsView from './components/views/UnitEconomicsView';
 import SkuRankingsView from './components/views/SkuRankingsView';
 import ThreePLView from './components/views/ThreePLView';
 import WeeklyView from './components/views/WeeklyView';
@@ -1356,13 +1355,6 @@ export default function Dashboard() {
     }
   }, [dtcIntelData]);
 
-  // Persist customer cohorts (for Unit Economics view)
-  useEffect(() => {
-    if (Array.isArray(customerCohorts) && customerCohorts.length > 0) {
-      try { lsSet('ecommerce_customer_cohorts_v1', JSON.stringify(customerCohorts)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
-    }
-  }, [customerCohorts]);
-
   // Report History & Action Tracker (Features 2 & 6)
   const [reportHistory, setReportHistory] = useState(() => {
     try { return safeLocalStorageGet('ecommerce_report_history_v1', []); } catch (e) { devWarn("[init]", e?.message); return []; }
@@ -1433,12 +1425,6 @@ export default function Dashboard() {
   const [shopifyInventoryStatus, setShopifyInventoryStatus] = useState({ loading: false, error: null, lastSync: null });
   const [shopifyInventoryPreview, setShopifyInventoryPreview] = useState(null);
   const [shopifySmartSync, setShopifySmartSync] = useState({ enabled: true, missingDays: [], existingDays: [] });
-  const [customerCohorts, setCustomerCohorts] = useState(() => {
-    try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('ecommerce_customer_cohorts_v1') : null;
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) { return []; }
-  });
   
   // Ship Sidekick 3PL Direct Integration
   const [packiyoCredentials, setPackiyoCredentials] = useState({
@@ -12633,10 +12619,6 @@ const savePeriods = async (d) => {
                 });
               }
               
-              if (Array.isArray(data.customers?.cohorts) && data.customers.cohorts.length > 0) {
-                setCustomerCohorts(data.customers.cohorts);
-              }
-
               queueCloudSave({ ...combinedData });
               results.push({ service: 'Shopify', success: true, orders: data.orderCount || 0, days: Object.keys(data.dailyData || {}).length });
             } else {
@@ -17702,7 +17684,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       setAllDaysData={setAllDaysData}
       setAllWeeksData={setAllWeeksData}
       setAmazonBulkFiles={setAmazonBulkFiles}
-      setCustomerCohorts={setCustomerCohorts}
       setAmazonForecasts={setAmazonForecasts}
       setBulkAdFiles={setBulkAdFiles}
       setBulkAdParsed={setBulkAdParsed}
@@ -18373,31 +18354,6 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     />;
   }
 
-
-  // ==================== UNIT ECONOMICS VIEW (CAC / LTV / MER / break-even ROAS) ====================
-  if (view === 'unit-economics') {
-    return <UnitEconomicsView
-      allDaysData={allDaysData}
-      allPeriodsData={allPeriodsData}
-      allWeeksData={allWeeksData}
-      appSettings={appSettings}
-      bankingData={bankingData}
-      customerCohorts={customerCohorts}
-      dataBar={dataBar}
-      globalModals={globalModals}
-      hasDailySalesData={hasDailySalesData}
-      invHistory={invHistory}
-      navDropdown={navDropdown}
-      setNavDropdown={setNavDropdown}
-      setSelectedDay={setSelectedDay}
-      setSelectedInvDate={setSelectedInvDate}
-      setSelectedPeriod={setSelectedPeriod}
-      setSelectedWeek={setSelectedWeek}
-      setUploadTab={setUploadTab}
-      setView={setView}
-      view={view}
-    />;
-  }
 
   // ==================== FORECAST VIEW (Unified Forecasting System) ====================
   if (view === 'forecast') {
