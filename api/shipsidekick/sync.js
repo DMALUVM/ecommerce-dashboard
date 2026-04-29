@@ -29,8 +29,8 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Ship Sidekick API key is required' });
   }
 
-  // Determine base URL from environment setting
-  const isProduction = environment === 'production';
+  // Determine base URL from environment setting — default to production
+  const isProduction = environment !== 'test';
   const host = isProduction ? 'www.shipsidekick.com' : 'test.shipsidekick.com';
 
   // Build auth header variants — Ship Sidekick docs are not public,
