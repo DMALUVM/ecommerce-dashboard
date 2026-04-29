@@ -63,11 +63,8 @@ export default async function handler(req, res) {
     return headers;
   };
 
-  // Ship Sidekick has production and test environments
-  const SSK_URLS = [
-    baseUrl,
-    baseUrl.includes('test.') ? 'https://www.shipsidekick.com/api/v1' : 'https://test.shipsidekick.com/api/v1',
-  ];
+  // Use only the production URL — test.shipsidekick.com requires separate test keys
+  const SSK_URLS = [baseUrl];
 
   // Test connection - try both URLs and multiple auth schemes
   // Returns full debug log so errors can be diagnosed from the UI
