@@ -80,69 +80,66 @@ export default async function handler(req, res) {
     log(`Resolved baseUrl: ${baseUrl}`);
     log(`URLs to try: ${SSK_URLS.join(', ')}`);
 
-    // Try multiple auth schemes — different APIs use different conventions
-    const basicAuth = typeof Buffer !== 'undefined'
-      ? Buffer.from(`${apiKey}:`).toString('base64')
-      : btoa(`${apiKey}:`);
-    const authSchemes = [
-      { name: 'Bearer', headers: { 'Authorization': `Bearer ${apiKey}` } },
-      { name: 'Basic (key as user)', headers: { 'Authorization': `Basic ${basicAuth}` } },
-      { name: 'X-API-Key', headers: { 'X-API-Key': apiKey } },
-      { name: 'X-Api-Token', headers: { 'X-Api-Token': apiKey } },
-      { name: 'api-key', headers: { 'api-key': apiKey } },
-      { name: 'apikey', headers: { 'apikey': apiKey } },
-      { name: 'Token', headers: { 'Authorization': `Token ${apiKey}` } },
-      { name: 'ApiKey', headers: { 'Authorization': `ApiKey ${apiKey}` } },
-      { name: 'Raw', headers: { 'Authorization': apiKey } },
-      { name: 'X-Auth-Token', headers: { 'X-Auth-Token': apiKey } },
-      { name: 'Query param api_key', headers: {}, query: `api_key=${encodeURIComponent(apiKey)}` },
-      { name: 'Query param apiKey', headers: {}, query: `apiKey=${encodeURIComponent(apiKey)}` },
-      { name: 'Query param token', headers: {}, query: `token=${encodeURIComponent(apiKey)}` },
+    // Multi-tenant APIs put the slug in different places — try structural variants
+    // Format: { name, urlBuilder(baseUrl, slug), headers }
+    const variants = [
+      // Slug in URL path
+      { name: 'slug-in-path', url: () => `${baseUrl}/${clientSlug}/inventory/levels?limit=1` },
+      { name: 'org-in-path', url: () => `${baseUrl}/orgs/${clientSlug}/inventory/levels?limit=1` },
+      { name: 'client-in-path', url: () => `${baseUrl}/clients/${clientSlug}/inventory/levels?limit=1` },
+      { name: 'tenant-in-path', url: () => `${baseUrl}/tenants/${clientSlug}/inventory/levels?limit=1` },
+      // Slug as subdomain
+      { name: 'slug-as-subdomain', url: () => `https://${clientSlug}.shipsidekick.com/api/v1/inventory/levels?limit=1` },
+      // No slug — header only
+      { name: 'header-X-SSK-Client', url: () => `${baseUrl}/inventory/levels?limit=1`, slugHeader: 'X-SSK-Client' },
+      { name: 'header-X-Client-Slug', url: () => `${baseUrl}/inventory/levels?limit=1`, slugHeader: 'X-Client-Slug' },
+      { name: 'header-X-Tenant', url: () => `${baseUrl}/inventory/levels?limit=1`, slugHeader: 'X-Tenant' },
+      { name: 'header-X-Organization', url: () => `${baseUrl}/inventory/levels?limit=1`, slugHeader: 'X-Organization' },
+      { name: 'header-X-Client', url: () => `${baseUrl}/inventory/levels?limit=1`, slugHeader: 'X-Client' },
+      // No slug at all
+      { name: 'no-slug', url: () => `${baseUrl}/inventory/levels?limit=1` },
     ];
 
     let lastError = null;
 
-    for (const tryUrl of SSK_URLS) {
-      for (const scheme of authSchemes) {
-        const queryStr = scheme.query ? `&${scheme.query}` : '';
-        const testEndpoint = `${tryUrl}/inventory/levels?limit=1${queryStr}`;
-        const headers = {
-          ...scheme.headers,
-          'Accept': 'application/json',
-          ...(clientSlug ? { 'X-SSK-Client': clientSlug } : {}),
-        };
-        log(`--- Trying: ${tryUrl} with ${scheme.name} auth ---`);
+    for (const variant of variants) {
+      const testEndpoint = variant.url();
+      const headers = {
+        'Authorization': `Bearer ${apiKey}`,
+        'Accept': 'application/json',
+        ...(variant.slugHeader && clientSlug ? { [variant.slugHeader]: clientSlug } : {}),
+      };
+      log(`--- Trying ${variant.name}: ${testEndpoint} ---`);
 
-        try {
-          const startTime = Date.now();
-          const testRes = await fetch(testEndpoint, {
-            method: 'GET',
-            headers,
+      try {
+        const startTime = Date.now();
+        const testRes = await fetch(testEndpoint, {
+          method: 'GET',
+          headers,
+        });
+        const elapsed = Date.now() - startTime;
+
+        log(`Response: HTTP ${testRes.status} ${testRes.statusText} (${elapsed}ms)`);
+
+        let responseBody = '';
+        try { responseBody = await testRes.text(); } catch (e) { log(`Could not read body: ${e.message}`); }
+        log(`Response body (first 300 chars): ${responseBody.slice(0, 300)}`);
+
+        if (testRes.ok) {
+          log(`SUCCESS with variant ${variant.name}`);
+          return res.status(200).json({
+            success: true,
+            customerName: clientSlug || 'Ship Sidekick',
+            baseUrl: testEndpoint.replace(/\/inventory\/levels.*$/, ''),
+            variant: variant.name,
+            debugLog,
           });
-          const elapsed = Date.now() - startTime;
-
-          log(`Response: HTTP ${testRes.status} ${testRes.statusText} (${elapsed}ms)`);
-
-          let responseBody = '';
-          try { responseBody = await testRes.text(); } catch (e) { log(`Could not read body: ${e.message}`); }
-          log(`Response body (first 300 chars): ${responseBody.slice(0, 300)}`);
-
-          if (testRes.ok) {
-            log(`SUCCESS on ${tryUrl} with ${scheme.name} auth`);
-            return res.status(200).json({
-              success: true,
-              customerName: clientSlug || 'Ship Sidekick',
-              baseUrl: tryUrl,
-              authScheme: scheme.name,
-              debugLog,
-            });
-          } else {
-            lastError = { status: testRes.status, body: responseBody, url: tryUrl, scheme: scheme.name };
-          }
-        } catch (err) {
-          log(`NETWORK ERROR on ${tryUrl} (${scheme.name}): ${err.message}`);
-          lastError = { status: 0, body: err.message, url: tryUrl, scheme: scheme.name };
+        } else {
+          lastError = { status: testRes.status, body: responseBody, variant: variant.name, url: testEndpoint };
         }
+      } catch (err) {
+        log(`NETWORK ERROR on ${variant.name}: ${err.message}`);
+        lastError = { status: 0, body: err.message, variant: variant.name, url: testEndpoint };
       }
     }
 
