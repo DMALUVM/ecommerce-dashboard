@@ -15,17 +15,19 @@ const TIME_RANGES = [
 const PROCESSING_FEE_PCT = 0.029;
 const PROCESSING_FEE_FIXED = 0.30;
 
-const Section = ({ title, subtitle, children }) => (
-  <div className="mb-8">
-    <div className="mb-3">
-      <h2 className="text-lg font-semibold">{title}</h2>
-      {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
+function Section({ title, subtitle, children }) {
+  return (
+    <div className="mb-8">
+      <div className="mb-3">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
+      </div>
+      {children}
     </div>
-    {children}
-  </div>
-);
+  );
+}
 
-const MetricCard = ({ icon: Icon, label, value, sub, tone = 'neutral', tooltip }) => {
+function MetricCard({ icon: Icon, label, value, sub, tone = 'neutral', tooltip }) {
   const toneClass = {
     good: 'border-emerald-500/30 bg-emerald-900/10',
     warn: 'border-amber-500/30 bg-amber-900/10',
@@ -50,9 +52,9 @@ const MetricCard = ({ icon: Icon, label, value, sub, tone = 'neutral', tooltip }
       {sub && <div className="text-xs text-slate-500 mt-1">{sub}</div>}
     </div>
   );
-};
+}
 
-const CostBar = ({ label, value, total, color, showAmount }) => {
+function CostBar({ label, value, total, color, showAmount }) {
   const pct = total > 0 ? Math.min(100, (value / total) * 100) : 0;
   return (
     <div className="mb-2">
@@ -68,7 +70,7 @@ const CostBar = ({ label, value, total, color, showAmount }) => {
       </div>
     </div>
   );
-};
+}
 
 const UnitEconomicsView = ({
   allDaysData = {},
