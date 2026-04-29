@@ -68,6 +68,7 @@ const UploadView = ({
   setAllDaysData,
   setAllWeeksData,
   setAmazonBulkFiles,
+  setCustomerCohorts,
   setAmazonForecasts,
   setBulkAdFiles,
   setBulkAdParsed,
@@ -2197,6 +2198,12 @@ const UploadView = ({
                             setAllDaysData(updatedDays);
                             // Save daily data to localStorage
                             try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+
+                            // Capture customer cohort data for unit economics view
+                            if (Array.isArray(data.customers?.cohorts) && data.customers.cohorts.length > 0 && setCustomerCohorts) {
+                              setCustomerCohorts(data.customers.cohorts);
+                              try { lsSet('ecommerce_customer_cohorts_v1', JSON.stringify(data.customers.cohorts)); } catch(e) {}
+                            }
                             
                             // Merge weekly data - PRESERVE existing ad data
                             const updatedWeeks = { ...allWeeksData };

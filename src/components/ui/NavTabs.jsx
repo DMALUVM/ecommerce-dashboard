@@ -1,8 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { 
-  ChevronDown, BarChart3, Upload, Database, TrendingUp, Boxes, 
-  Settings, Sun, Calendar, CalendarRange, GitCompare, Trophy, 
-  PieChart, Zap, Brain, Truck, Landmark, DollarSign, CheckSquare
+import {
+  ChevronDown, BarChart3, Upload, Database, TrendingUp, Boxes,
+  Settings, Sun, Calendar, CalendarRange, GitCompare, Trophy,
+  PieChart, Zap, Brain, Truck, Landmark, DollarSign, CheckSquare, Target
 } from 'lucide-react';
 
 const NavTabs = ({
@@ -43,7 +43,7 @@ const NavTabs = ({
   }, [navDropdown, setNavDropdown]);
   
   const dataViews = ['daily', 'weekly', 'period-view'];
-  const analyticsViews = ['trends', 'yoy', 'skus', 'profitability', 'ads'];
+  const analyticsViews = ['trends', 'yoy', 'skus', 'profitability', 'ads', 'unit-economics'];
   const operationsViews = ['inventory', '3pl', 'banking', 'sales-tax', 'forecast'];
   
   const isDataActive = dataViews.includes(view);
@@ -128,6 +128,11 @@ const NavTabs = ({
       onClick: () => setView('profitability'),
       divider: true,
     }] : []),
+    {
+      view: 'unit-economics', label: 'Unit Economics (CAC/LTV)', icon: Target,
+      disabled: Object.keys(allDaysData).length < 1 && Object.keys(allWeeksData).length < 1,
+      onClick: () => setView('unit-economics'),
+    },
     ...(appSettings.modulesEnabled?.skus !== false ? [{
       view: 'skus', label: 'SKU Performance', icon: Trophy,
       disabled: Object.keys(allWeeksData).length < 1 && Object.keys(allPeriodsData).length < 1,
