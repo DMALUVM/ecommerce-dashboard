@@ -143,22 +143,62 @@ const AdsBulkUploadModal = ({
             return;
           }
           
-          // Map headers to indices
-          const getColIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
-          const getExactColIdx = (patterns, excludePatterns = []) => headers.findIndex(h => 
+          // Map headers to indices (once, outside the row loop)
+          const getColIdx = (patterns, excludePatterns = []) => headers.findIndex(h =>
             patterns.some(p => h.includes(p)) && !excludePatterns.some(ex => h.includes(ex))
           );
-          
+
+          let spendIdx = -1, purchaseValueIdx = -1, purchasesIdx = -1;
+          let impressionsIdx = -1, clicksIdx = -1;
+          let costIdx = -1, cpcIdx = -1, costPerConvIdx = -1;
+          let convIdx = -1, clicksGoogleIdx = -1;
+
+          if (isMetaAds) {
+            spendIdx = getColIdx(['amount spent', 'spend']);
+            purchaseValueIdx = getColIdx(['purchases value', 'purchase value', 'website purchase value', 'purchase roas']);
+            purchasesIdx = getColIdx(['purchases (all)', 'purchases', 'website purchases'], ['value', 'roas']);
+            impressionsIdx = getColIdx(['impressions']);
+            clicksIdx = getColIdx(['link clicks', 'clicks (all)', 'clicks'], ['link']);
+            // Prefer "link clicks" over generic "clicks"
+            const linkClicksIdx = headers.findIndex(h => h.includes('link clicks'));
+            if (linkClicksIdx !== -1) clicksIdx = linkClicksIdx;
+          } else if (isGoogleAds) {
+            impressionsIdx = getColIdx(['impressions']);
+            cpcIdx = getColIdx(['avg. cpc', 'avg cpc']);
+            // "cost" but NOT "cost / conv" or "cost/conv"
+            costIdx = getColIdx(['cost'], ['conv', 'click']);
+            if (costIdx === -1) costIdx = headers.findIndex(h => h === 'cost');
+            costPerConvIdx = getColIdx(['cost / conv', 'cost/conv', 'cost per conv']);
+            convIdx = getColIdx(['conversions', 'conv.'], ['cost', 'rate', 'value']);
+            clicksGoogleIdx = getColIdx(['clicks'], ['cost', 'rate']);
+          }
+
+          console.log(`[AdsUpload] ${file.name}: detected=${isMetaAds ? 'Meta' : 'Google'}`);
+          console.log(`[AdsUpload] Headers: ${headers.join(' | ')}`);
+          if (isMetaAds) {
+            console.log(`[AdsUpload] Column indices — spend:${spendIdx} impressions:${impressionsIdx} clicks:${clicksIdx} purchases:${purchasesIdx} purchaseValue:${purchaseValueIdx}`);
+          } else {
+            console.log(`[AdsUpload] Column indices — cost:${costIdx} impressions:${impressionsIdx} cpc:${cpcIdx} costPerConv:${costPerConvIdx} conv:${convIdx} clicks:${clicksGoogleIdx}`);
+          }
+
           const dailyData = {};
-          
+          let rowsParsed = 0, rowsSkipped = 0, runningSpend = 0;
+
           // Parse data rows
           for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             const dateStr = cols[dateColIdx];
             const parsedDate = parseAdsDate(dateStr);
-            
-            if (!parsedDate) continue;
-            
+
+            if (!parsedDate) {
+              if (dateStr && dateStr.trim() && !dateStr.toLowerCase().includes('total')) {
+                rowsSkipped++;
+                if (rowsSkipped <= 3) console.warn(`[AdsUpload] Row ${i}: could not parse date "${dateStr}"`);
+              }
+              continue;
+            }
+            rowsParsed++;
+
             if (!dailyData[parsedDate]) {
               dailyData[parsedDate] = {
                 metaSpend: 0, googleSpend: 0,
@@ -171,42 +211,43 @@ const AdsBulkUploadModal = ({
                 metaCTR: 0, googleCTR: 0,
               };
             }
-            
+
             if (isMetaAds) {
-              const spendIdx = getColIdx(['amount spent']);
-              const purchaseValueIdx = getColIdx(['purchases value', 'purchase value', 'website purchase value']);
-              const purchasesIdx = getExactColIdx(['purchases (all)', 'purchases', 'website purchases'], ['value']);
-              const impressionsIdx = getColIdx(['impressions']);
-              const clicksIdx = getColIdx(['link clicks', 'clicks']);
-              
-              dailyData[parsedDate].metaSpend += parseNumber(cols[spendIdx]);
-              dailyData[parsedDate].metaImpressions += parseNumber(cols[impressionsIdx]);
-              dailyData[parsedDate].metaClicks += parseNumber(cols[clicksIdx]);
-              dailyData[parsedDate].metaPurchases += parseNumber(cols[purchasesIdx]);
-              dailyData[parsedDate].metaPurchaseValue += parseNumber(cols[purchaseValueIdx]);
+              const spend = spendIdx >= 0 ? parseNumber(cols[spendIdx]) : 0;
+              dailyData[parsedDate].metaSpend += spend;
+              dailyData[parsedDate].metaImpressions += impressionsIdx >= 0 ? parseNumber(cols[impressionsIdx]) : 0;
+              dailyData[parsedDate].metaClicks += clicksIdx >= 0 ? parseNumber(cols[clicksIdx]) : 0;
+              dailyData[parsedDate].metaPurchases += purchasesIdx >= 0 ? parseNumber(cols[purchasesIdx]) : 0;
+              dailyData[parsedDate].metaPurchaseValue += purchaseValueIdx >= 0 ? parseNumber(cols[purchaseValueIdx]) : 0;
+              runningSpend += spend;
             } else if (isGoogleAds) {
-              const impressionsIdx = getColIdx(['impressions']);
-              const cpcIdx = getColIdx(['avg. cpc', 'avg cpc']);
-              const costIdx = getColIdx(['cost']);
-              const costPerConvIdx = getColIdx(['cost / conv', 'cost/conv', 'cost per conv']);
-              
-              dailyData[parsedDate].googleSpend += parseNumber(cols[costIdx]);
-              dailyData[parsedDate].googleImpressions += parseNumber(cols[impressionsIdx]);
-              dailyData[parsedDate].googleCPC = parseNumber(cols[cpcIdx]);
-              dailyData[parsedDate].googleCostPerConv = parseNumber(cols[costPerConvIdx]);
+              const spend = costIdx >= 0 ? parseNumber(cols[costIdx]) : 0;
+              dailyData[parsedDate].googleSpend += spend;
+              dailyData[parsedDate].googleImpressions += impressionsIdx >= 0 ? parseNumber(cols[impressionsIdx]) : 0;
+              runningSpend += spend;
 
-              const avgCpc = parseNumber(cols[cpcIdx]);
-              const costForClicks = parseNumber(cols[costIdx]);
-              if (avgCpc > 0) {
-                dailyData[parsedDate].googleClicks += Math.round(costForClicks / avgCpc);
+              if (clicksGoogleIdx >= 0) {
+                dailyData[parsedDate].googleClicks += parseNumber(cols[clicksGoogleIdx]);
+              } else if (cpcIdx >= 0 && costIdx >= 0) {
+                const avgCpc = parseNumber(cols[cpcIdx]);
+                if (avgCpc > 0) dailyData[parsedDate].googleClicks += Math.round(spend / avgCpc);
               }
 
-              const cost = parseNumber(cols[costIdx]);
-              const costPerConv = parseNumber(cols[costPerConvIdx]);
-              if (costPerConv > 0) {
-                dailyData[parsedDate].googleConversions += Math.round(cost / costPerConv);
+              if (convIdx >= 0) {
+                dailyData[parsedDate].googleConversions += parseNumber(cols[convIdx]);
+              } else if (costPerConvIdx >= 0 && spend > 0) {
+                const costPerConv = parseNumber(cols[costPerConvIdx]);
+                if (costPerConv > 0) dailyData[parsedDate].googleConversions += Math.round(spend / costPerConv);
               }
+
+              if (cpcIdx >= 0) dailyData[parsedDate].googleCPC = parseNumber(cols[cpcIdx]);
+              if (costPerConvIdx >= 0) dailyData[parsedDate].googleCostPerConv = parseNumber(cols[costPerConvIdx]);
             }
+          }
+
+          console.log(`[AdsUpload] ${file.name}: ${rowsParsed} rows parsed, ${rowsSkipped} skipped, total spend: $${runningSpend.toFixed(2)}`);
+          if (spendIdx === -1 && costIdx === -1) {
+            console.error(`[AdsUpload] WARNING: No spend/cost column found! Check CSV headers.`);
           }
           
           // Calculate derived metrics for Meta
@@ -254,182 +295,168 @@ const AdsBulkUploadModal = ({
   const processFiles = async () => {
     const totalFiles = adsSelectedFiles.length;
     const processResults = [];
-    let updatedDays = { ...allDaysData };
     let totalDaysUpdated = 0;
     let allDatesAffected = new Set();
+    let allParsedFiles = [];
     
+    // Phase 1: Parse all files
     for (let i = 0; i < adsSelectedFiles.length; i++) {
       const file = adsSelectedFiles[i];
-      
       setAdsProcessing({ current: i + 1, total: totalFiles, fileName: file.name });
-      
       try {
         const parsed = await parseAdsFile(file);
-        let daysUpdated = 0;
-        
-        Object.entries(parsed.dailyData).forEach(([date, adsData]) => {
-          allDatesAffected.add(date);
-          
-          const existingDay = updatedDays[date] || {
-            total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
-            amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
-            shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, netProfit: 0 },
-          };
-          
-          const newMetaSpend = parsed.type === 'meta' ? adsData.metaSpend : (existingDay.shopify?.metaSpend || 0);
-          const newGoogleSpend = parsed.type === 'google' ? adsData.googleSpend : (existingDay.shopify?.googleSpend || 0);
-          const totalAdSpend = newMetaSpend + newGoogleSpend;
-          
-          const adsMetrics = {
-            ...(existingDay.shopify?.adsMetrics || {}),
-            ...(parsed.type === 'meta' ? {
-              metaImpressions: adsData.metaImpressions,
-              metaClicks: adsData.metaClicks,
-              metaPurchases: adsData.metaPurchases,
-              metaPurchaseValue: adsData.metaPurchaseValue,
-              metaROAS: adsData.metaROAS,
-              metaCPM: adsData.metaCPM,
-              metaCPC: adsData.metaCPC,
-              metaCTR: adsData.metaCTR,
-            } : {}),
-            ...(parsed.type === 'google' ? {
-              googleImpressions: adsData.googleImpressions,
-              googleClicks: adsData.googleClicks,
-              googleConversions: adsData.googleConversions,
-              googleCTR: adsData.googleCTR,
-              googleCPC: adsData.googleCPC,
-              googleCostPerConv: adsData.googleCostPerConv,
-            } : {}),
-          };
-          
-          const shopifyRevenue = existingDay.shopify?.revenue || 0;
-          const shopifyCogs = existingDay.shopify?.cogs || 0;
-          const shopifyThreeplCosts = existingDay.shopify?.threeplCosts || 0;
-          const shopifyDiscounts = existingDay.shopify?.discounts || 0;
-          const newShopifyProfit = shopifyRevenue - shopifyCogs - totalAdSpend - shopifyThreeplCosts - shopifyDiscounts;
-          
-          const amazonProfit = existingDay.amazon?.netProfit || 0;
-          const totalProfit = amazonProfit + newShopifyProfit;
-          
-          updatedDays[date] = {
-            ...existingDay,
-            shopify: {
-              ...existingDay.shopify,
-              adSpend: totalAdSpend,
-              metaSpend: newMetaSpend,
-              googleSpend: newGoogleSpend,
-              netProfit: newShopifyProfit,
-              adsMetrics,
-            },
-            total: {
-              ...existingDay.total,
-              adSpend: totalAdSpend + (existingDay.amazon?.adSpend || 0),
-              netProfit: totalProfit,
-            },
-          };
-          
-          daysUpdated++;
+        let totalSpend = 0;
+        Object.values(parsed.dailyData).forEach(d => {
+          totalSpend += (parsed.type === 'meta' ? d.metaSpend : d.googleSpend) || 0;
         });
-        
-        totalDaysUpdated += daysUpdated;
+        allParsedFiles.push(parsed);
+        Object.keys(parsed.dailyData).forEach(d => allDatesAffected.add(d));
         processResults.push({
-          file: file.name,
-          status: 'success',
-          type: parsed.type,
-          daysUpdated,
-          dateRange: parsed.dateRange,
+          file: file.name, status: 'success', type: parsed.type,
+          daysUpdated: parsed.daysCount, dateRange: parsed.dateRange,
+          totalSpend,
         });
+        totalDaysUpdated += parsed.daysCount;
       } catch (err) {
         console.error('Error processing ads file:', file.name, err);
-        processResults.push({
-          file: file.name,
-          status: 'error',
-          error: err.message,
-        });
+        processResults.push({ file: file.name, status: 'error', error: err.message });
       }
     }
-    
-    // Save updated data
-    if (totalDaysUpdated > 0) {
-      setAllDaysData(updatedDays);
-      lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays));
+
+    // Phase 2: Merge into daily data using functional update
+    if (allParsedFiles.length > 0) {
+      setAllDaysData(prev => {
+        const updatedDays = { ...prev };
+        for (const parsed of allParsedFiles) {
+          Object.entries(parsed.dailyData).forEach(([date, adsData]) => {
+            const existingDay = updatedDays[date] || {
+              total: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
+              amazon: { revenue: 0, units: 0, cogs: 0, adSpend: 0, netProfit: 0 },
+              shopify: { revenue: 0, units: 0, cogs: 0, adSpend: 0, metaSpend: 0, googleSpend: 0, netProfit: 0 },
+            };
+
+            const newMetaSpend = parsed.type === 'meta' ? adsData.metaSpend : (existingDay.shopify?.metaSpend || 0);
+            const newGoogleSpend = parsed.type === 'google' ? adsData.googleSpend : (existingDay.shopify?.googleSpend || 0);
+            const dtcAdSpend = newMetaSpend + newGoogleSpend;
+
+            const adsMetrics = {
+              ...(existingDay.shopify?.adsMetrics || {}),
+              ...(parsed.type === 'meta' ? {
+                metaImpressions: adsData.metaImpressions, metaClicks: adsData.metaClicks,
+                metaPurchases: adsData.metaPurchases, metaPurchaseValue: adsData.metaPurchaseValue,
+                metaROAS: adsData.metaROAS, metaCPM: adsData.metaCPM,
+                metaCPC: adsData.metaCPC, metaCTR: adsData.metaCTR,
+              } : {}),
+              ...(parsed.type === 'google' ? {
+                googleImpressions: adsData.googleImpressions, googleClicks: adsData.googleClicks,
+                googleConversions: adsData.googleConversions, googleCTR: adsData.googleCTR,
+                googleCPC: adsData.googleCPC, googleCostPerConv: adsData.googleCostPerConv,
+              } : {}),
+            };
+
+            const shopRev = existingDay.shopify?.revenue || 0;
+            const shopCogs = existingDay.shopify?.cogs || 0;
+            const shopThreepl = existingDay.shopify?.threeplCosts || 0;
+            const shopProfit = shopRev - shopCogs - dtcAdSpend - shopThreepl;
+            const amzProfit = existingDay.amazon?.netProfit || 0;
+
+            updatedDays[date] = {
+              ...existingDay,
+              shopify: {
+                ...existingDay.shopify,
+                adSpend: dtcAdSpend, metaSpend: newMetaSpend, googleSpend: newGoogleSpend,
+                netProfit: shopProfit, adsMetrics,
+              },
+              metaSpend: newMetaSpend, metaAds: newMetaSpend,
+              googleSpend: newGoogleSpend, googleAds: newGoogleSpend,
+              total: {
+                ...existingDay.total,
+                adSpend: dtcAdSpend + (existingDay.amazon?.adSpend || 0),
+                netProfit: amzProfit + shopProfit,
+              },
+            };
+          });
+        }
+        try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch (e) {}
+
+        // Log final stored totals for verification
+        let storedMeta = 0, storedGoogle = 0;
+        allDatesAffected.forEach(date => {
+          storedMeta += updatedDays[date]?.shopify?.metaSpend || 0;
+          storedGoogle += updatedDays[date]?.shopify?.googleSpend || 0;
+        });
+        console.log(`[AdsUpload] Stored totals — Meta: $${storedMeta.toFixed(2)}, Google: $${storedGoogle.toFixed(2)}`);
+
+        return updatedDays;
+      });
       
-      // Also update weekly data with ads spend from daily data
-      if (allWeeksData && setAllWeeksData) {
-        const updatedWeeks = { ...allWeeksData };
+      // Also update weekly data using functional update
+      if (setAllWeeksData) {
         const weeksToUpdate = new Set();
-        
-        // Figure out which weeks need updating
         allDatesAffected.forEach(dateStr => {
           const d = new Date(dateStr + 'T12:00:00');
           const dayOfWeek = d.getDay();
           const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
           const weekEnd = new Date(d);
           weekEnd.setDate(weekEnd.getDate() + daysUntilSunday);
-          const weekKey = weekEnd.toISOString().split('T')[0];
-          weeksToUpdate.add(weekKey);
+          weeksToUpdate.add(weekEnd.toISOString().split('T')[0]);
         });
-        
-        // For each affected week, aggregate ads from daily data
-        weeksToUpdate.forEach(weekKey => {
-          if (!updatedWeeks[weekKey]) return;
-          
-          // Calculate all 7 days of this week
-          const weekEnd = new Date(weekKey + 'T12:00:00');
-          let weekMetaSpend = 0;
-          let weekGoogleSpend = 0;
-          
-          for (let i = 6; i >= 0; i--) {
-            const dayDate = new Date(weekEnd);
-            dayDate.setDate(weekEnd.getDate() - i);
-            const dayKey = dayDate.toISOString().split('T')[0];
-            const dayData = updatedDays[dayKey];
-            
-            if (dayData?.shopify) {
-              weekMetaSpend += dayData.shopify.metaSpend || 0;
-              weekGoogleSpend += dayData.shopify.googleSpend || 0;
-            }
+
+        setAllWeeksData(prev => {
+          const updatedWeeks = { ...prev };
+
+          // Build a quick lookup of all parsed ads data by date
+          const adsByDate = {};
+          for (const parsed of allParsedFiles) {
+            Object.entries(parsed.dailyData).forEach(([date, d]) => {
+              if (!adsByDate[date]) adsByDate[date] = { metaSpend: 0, googleSpend: 0 };
+              if (parsed.type === 'meta') adsByDate[date].metaSpend += d.metaSpend || 0;
+              else adsByDate[date].googleSpend += d.googleSpend || 0;
+            });
           }
-          
-          // Update week's Shopify data
-          const existingShopify = updatedWeeks[weekKey].shopify || {};
-          const totalShopifyAds = weekMetaSpend + weekGoogleSpend;
-          const shopifyRevenue = existingShopify.revenue || 0;
-          const shopifyCogs = existingShopify.cogs || 0;
-          const shopifyThreeplCosts = existingShopify.threeplCosts || 0;
-          const shopifyDiscounts = existingShopify.discounts || 0;
-          const shopifyProfit = shopifyRevenue - shopifyCogs - totalShopifyAds - shopifyThreeplCosts - shopifyDiscounts;
-          
-          updatedWeeks[weekKey] = {
-            ...updatedWeeks[weekKey],
-            shopify: {
-              ...existingShopify,
-              metaSpend: weekMetaSpend,
-              metaAds: weekMetaSpend,
-              googleSpend: weekGoogleSpend,
-              googleAds: weekGoogleSpend,
-              adSpend: totalShopifyAds,
-              netProfit: shopifyProfit,
-            },
-            total: {
-              ...updatedWeeks[weekKey].total,
-              adSpend: (updatedWeeks[weekKey].amazon?.adSpend || 0) + totalShopifyAds,
-              netProfit: (updatedWeeks[weekKey].amazon?.netProfit || 0) + shopifyProfit,
-            },
-          };
+
+          weeksToUpdate.forEach(weekKey => {
+            if (!updatedWeeks[weekKey]) return;
+            const weekEnd = new Date(weekKey + 'T12:00:00');
+            let weekMeta = 0, weekGoogle = 0;
+            for (let i = 6; i >= 0; i--) {
+              const dayDate = new Date(weekEnd);
+              dayDate.setDate(weekEnd.getDate() - i);
+              const dayKey = dayDate.toISOString().split('T')[0];
+              if (adsByDate[dayKey]) {
+                weekMeta += adsByDate[dayKey].metaSpend || 0;
+                weekGoogle += adsByDate[dayKey].googleSpend || 0;
+              } else {
+                weekMeta += updatedWeeks[weekKey]?.shopify?.metaSpend ? 0 : 0;
+                weekGoogle += updatedWeeks[weekKey]?.shopify?.googleSpend ? 0 : 0;
+              }
+            }
+            const existingShopify = updatedWeeks[weekKey].shopify || {};
+            const totalAds = weekMeta + weekGoogle;
+            const shopRev = existingShopify.revenue || 0;
+            const shopProfit = shopRev - (existingShopify.cogs || 0) - totalAds - (existingShopify.threeplCosts || 0);
+            updatedWeeks[weekKey] = {
+              ...updatedWeeks[weekKey],
+              shopify: {
+                ...existingShopify,
+                metaSpend: weekMeta, metaAds: weekMeta,
+                googleSpend: weekGoogle, googleAds: weekGoogle,
+                adSpend: totalAds, netProfit: shopProfit,
+              },
+              total: {
+                ...updatedWeeks[weekKey].total,
+                adSpend: (updatedWeeks[weekKey].amazon?.adSpend || 0) + totalAds,
+                netProfit: (updatedWeeks[weekKey].amazon?.netProfit || 0) + shopProfit,
+              },
+            };
+          });
+          try { lsSet('ecommerce_weekly_sales_v1', JSON.stringify(updatedWeeks)); } catch (e) {}
+          return updatedWeeks;
         });
-        
-        setAllWeeksData(updatedWeeks);
-        lsSet('ecommerce_weekly_sales_v1', JSON.stringify(updatedWeeks));
       }
-      
-      const freshCombinedData = {
-        ...combinedData,
-        dailySales: updatedDays,
-        weeklySales: allWeeksData ? { ...allWeeksData } : combinedData.weeklySales,
-      };
+
       if (session?.user?.id && supabase) {
-        pushToCloudNow(freshCombinedData);
+        setTimeout(() => pushToCloudNow(combinedData), 500);
       }
     }
     
@@ -583,7 +610,7 @@ const AdsBulkUploadModal = ({
                         <p className="text-white text-sm">{r.file}</p>
                         {r.status === 'success' ? (
                           <p className="text-slate-400 text-xs">
-                            {r.type === 'meta' ? '📘 Meta' : '🔶 Google'} • {r.daysUpdated} days • {r.dateRange?.start} to {r.dateRange?.end}
+                            {r.type === 'meta' ? '📘 Meta' : '🔶 Google'} • {r.daysUpdated} days • ${(r.totalSpend || 0).toFixed(2)} total spend • {r.dateRange?.start} to {r.dateRange?.end}
                           </p>
                         ) : (
                           <p className="text-rose-400 text-xs">{r.error}</p>
