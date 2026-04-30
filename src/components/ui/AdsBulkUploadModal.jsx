@@ -153,9 +153,12 @@ const AdsBulkUploadModal = ({
           let costIdx = -1, cpcIdx = -1, costPerConvIdx = -1;
           let convIdx = -1, clicksGoogleIdx = -1;
 
+          let roasIdx = -1;
+
           if (isMetaAds) {
             spendIdx = getColIdx(['amount spent', 'spend']);
-            purchaseValueIdx = getColIdx(['purchases value', 'purchase value', 'website purchase value', 'purchase roas']);
+            purchaseValueIdx = getColIdx(['purchases value', 'purchase value', 'website purchase value'], ['roas']);
+            roasIdx = getColIdx(['purchase roas', 'roas'], []);
             purchasesIdx = getColIdx(['purchases (all)', 'purchases', 'website purchases'], ['value', 'roas']);
             impressionsIdx = getColIdx(['impressions']);
             clicksIdx = getColIdx(['link clicks', 'clicks (all)', 'clicks'], ['link']);
@@ -176,7 +179,7 @@ const AdsBulkUploadModal = ({
           console.log(`[AdsUpload] ${file.name}: detected=${isMetaAds ? 'Meta' : 'Google'}`);
           console.log(`[AdsUpload] Headers: ${headers.join(' | ')}`);
           if (isMetaAds) {
-            console.log(`[AdsUpload] Column indices — spend:${spendIdx} impressions:${impressionsIdx} clicks:${clicksIdx} purchases:${purchasesIdx} purchaseValue:${purchaseValueIdx}`);
+            console.log(`[AdsUpload] Column indices — spend:${spendIdx} impressions:${impressionsIdx} clicks:${clicksIdx} purchases:${purchasesIdx} purchaseValue:${purchaseValueIdx} roas:${roasIdx}`);
           } else {
             console.log(`[AdsUpload] Column indices — cost:${costIdx} impressions:${impressionsIdx} cpc:${cpcIdx} costPerConv:${costPerConvIdx} conv:${convIdx} clicks:${clicksGoogleIdx}`);
           }
@@ -218,7 +221,11 @@ const AdsBulkUploadModal = ({
               dailyData[parsedDate].metaImpressions += impressionsIdx >= 0 ? parseNumber(cols[impressionsIdx]) : 0;
               dailyData[parsedDate].metaClicks += clicksIdx >= 0 ? parseNumber(cols[clicksIdx]) : 0;
               dailyData[parsedDate].metaPurchases += purchasesIdx >= 0 ? parseNumber(cols[purchasesIdx]) : 0;
-              dailyData[parsedDate].metaPurchaseValue += purchaseValueIdx >= 0 ? parseNumber(cols[purchaseValueIdx]) : 0;
+              if (purchaseValueIdx >= 0) {
+                dailyData[parsedDate].metaPurchaseValue += parseNumber(cols[purchaseValueIdx]);
+              } else if (roasIdx >= 0 && spend > 0) {
+                dailyData[parsedDate].metaPurchaseValue += spend * parseNumber(cols[roasIdx]);
+              }
               runningSpend += spend;
             } else if (isGoogleAds) {
               const spend = costIdx >= 0 ? parseNumber(cols[costIdx]) : 0;
@@ -426,9 +433,6 @@ const AdsBulkUploadModal = ({
               if (adsByDate[dayKey]) {
                 weekMeta += adsByDate[dayKey].metaSpend || 0;
                 weekGoogle += adsByDate[dayKey].googleSpend || 0;
-              } else {
-                weekMeta += updatedWeeks[weekKey]?.shopify?.metaSpend ? 0 : 0;
-                weekGoogle += updatedWeeks[weekKey]?.shopify?.googleSpend ? 0 : 0;
               }
             }
             const existingShopify = updatedWeeks[weekKey].shopify || {};

@@ -2075,10 +2075,9 @@ const DashboardView = ({
                                 const amzAds = dayData?.amazon?.adSpend || 0;
                                 const shopRev = dayData?.shopify?.revenue || 0;
                                 const shopCogs = dayData?.shopify?.cogs || 0;
-                                const shopAds = dayData?.shopify?.adSpend || dayData?.shopify?.metaSpend || 0;
-                                const metaAds = dayData?.metaSpend || dayData?.metaAds || 0;
-                                const googleAds = dayData?.googleSpend || dayData?.googleAds || 0;
-                                profit = (amzRev - amzCogs - amzFees - amzAds) + (shopRev - shopCogs - shopAds - metaAds - googleAds);
+                                const metaAds = dayData?.shopify?.metaSpend || dayData?.metaSpend || dayData?.metaAds || 0;
+                                const googleAds = dayData?.shopify?.googleSpend || dayData?.googleSpend || dayData?.googleAds || 0;
+                                profit = (amzRev - amzCogs - amzFees - amzAds) + (shopRev - shopCogs - metaAds - googleAds);
                               }
                             }
                             

@@ -16854,11 +16854,16 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
             ...stored.amazon,
             revenue: derived.amazon?.revenue ?? stored.amazon?.revenue,
             units: derived.amazon?.units ?? stored.amazon?.units,
+            adSpend: derived.amazon?.adSpend ?? stored.amazon?.adSpend,
           },
           shopify: {
             ...stored.shopify,
             revenue: derived.shopify?.revenue ?? stored.shopify?.revenue,
             units: derived.shopify?.units ?? stored.shopify?.units,
+            metaSpend: derived.shopify?.metaSpend ?? stored.shopify?.metaSpend,
+            googleSpend: derived.shopify?.googleSpend ?? stored.shopify?.googleSpend,
+            adSpend: derived.shopify?.adSpend ?? stored.shopify?.adSpend,
+            adsMetrics: derived.shopify?.adsMetrics ?? stored.shopify?.adsMetrics,
           },
         };
       }
