@@ -52,7 +52,8 @@ const UnitEconomicsView = ({
       let totalOrders = 0, shopifyOrders = 0;
       let newCustomers = 0, returningCustomers = 0;
       let newCustomerRevenue = 0, returningCustomerRevenue = 0;
-      let amazonAdSpend = 0, metaAdSpend = 0, googleAdSpend = 0;
+      let amazonAdSpend = 0;
+      let metaFromDaily = 0, googleFromDaily = 0;
       let totalCogs = 0;
       let totalDiscounts = 0;
       let totalShipping = 0;
@@ -83,8 +84,8 @@ const UnitEconomicsView = ({
         returningCustomerRevenue += shopDay.returningCustomerRevenue || 0;
 
         amazonAdSpend += amzDay.adSpend || 0;
-        metaAdSpend += shopDay.metaSpend || 0;
-        googleAdSpend += shopDay.googleSpend || 0;
+        metaFromDaily += shopDay.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
+        googleFromDaily += shopDay.googleSpend ?? day.googleSpend ?? day.googleAds ?? 0;
 
         totalDiscounts += shopDay.discounts || 0;
         totalShipping += shopDay.shippingCollected || 0;
@@ -101,22 +102,25 @@ const UnitEconomicsView = ({
         }
       }
 
-      // Fallback: pull meta/google from weekly data if daily didn't have any
-      if (metaAdSpend === 0 && googleAdSpend === 0) {
-        const weekKeys = Object.keys(allWeeksData || {}).sort();
-        for (const wk of weekKeys) {
-          const wkEnd = new Date(wk + 'T12:00:00');
-          const wkStart = new Date(wkEnd);
-          wkStart.setDate(wkStart.getDate() - 6);
-          const rangeStart = new Date(dates[dates.length - 1]);
-          const rangeEnd = new Date(dates[0]);
-          if (wkEnd >= rangeStart && wkStart <= rangeEnd) {
-            const wkData = allWeeksData[wk];
-            metaAdSpend += parseFloat(wkData?.shopify?.metaSpend || wkData?.metaSpend || wkData?.metaAds || 0);
-            googleAdSpend += parseFloat(wkData?.shopify?.googleSpend || wkData?.googleSpend || wkData?.googleAds || 0);
-          }
+      // Also check weekly data for meta/google spend (covers manual weekly entries)
+      let metaFromWeekly = 0, googleFromWeekly = 0;
+      const weekKeys = Object.keys(allWeeksData || {}).sort();
+      for (const wk of weekKeys) {
+        const wkEnd = new Date(wk + 'T12:00:00');
+        const wkStart = new Date(wkEnd);
+        wkStart.setDate(wkStart.getDate() - 6);
+        const rangeStart = new Date(dates[dates.length - 1] + 'T00:00:00');
+        const rangeEnd = new Date(dates[0] + 'T23:59:59');
+        if (wkEnd >= rangeStart && wkStart <= rangeEnd) {
+          const sh = allWeeksData[wk]?.shopify || {};
+          metaFromWeekly += parseFloat(sh.metaSpend || 0);
+          googleFromWeekly += parseFloat(sh.googleSpend || 0);
         }
       }
+
+      // Use whichever source found the spend (daily is more precise, weekly is fallback)
+      const metaAdSpend = Math.max(metaFromDaily, metaFromWeekly);
+      const googleAdSpend = Math.max(googleFromDaily, googleFromWeekly);
 
       const totalAdSpend = amazonAdSpend + metaAdSpend + googleAdSpend;
       const totalCustomers = newCustomers + returningCustomers;
