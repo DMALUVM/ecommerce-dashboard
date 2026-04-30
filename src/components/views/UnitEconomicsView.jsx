@@ -90,15 +90,26 @@ const UnitEconomicsView = ({
         totalDiscounts += shopDay.discounts || 0;
         totalShipping += shopDay.shippingCollected || 0;
 
-        // Estimate COGS from SKU data
-        const allSkus = [...(shopDay.skuData || []), ...(amzDay.skuData || [])];
-        for (const sku of allSkus) {
-          const skuId = sku.sku || sku.SKU || '';
-          const cogsEntry = savedCogs[skuId] || savedCogs[skuId.toUpperCase()] || savedCogs[skuId.toLowerCase()];
-          if (cogsEntry) {
-            const units = sku.units || sku.quantity || 1;
-            totalCogs += (parseFloat(cogsEntry.cost) || 0) * units;
+        // Amazon COGS: use pre-calculated cogs from SKU economics reports, fall back to uploaded COGS file
+        for (const sku of (amzDay.skuData || [])) {
+          if (sku.cogs > 0) {
+            totalCogs += sku.cogs;
+          } else {
+            const skuId = sku.sku || sku.SKU || '';
+            const cost = savedCogs[skuId] || savedCogs[skuId.toUpperCase()] || savedCogs[skuId.toLowerCase()];
+            if (cost) totalCogs += (parseFloat(cost) || 0) * (sku.unitsSold || sku.units || sku.quantity || 1);
           }
+        }
+        // Also use day-level Amazon COGS if no SKU-level data
+        if (!(amzDay.skuData?.length) && (amzDay.cogs || 0) > 0) {
+          totalCogs += amzDay.cogs;
+        }
+
+        // Shopify COGS: always from uploaded COGS file
+        for (const sku of (shopDay.skuData || [])) {
+          const skuId = sku.sku || sku.SKU || '';
+          const cost = savedCogs[skuId] || savedCogs[skuId.toUpperCase()] || savedCogs[skuId.toLowerCase()];
+          if (cost) totalCogs += (parseFloat(cost) || 0) * (sku.unitsSold || sku.units || sku.quantity || 1);
         }
       }
 

@@ -65,6 +65,7 @@ const UploadView = ({
   save,
   saveInv,
   savedCogs,
+  cogsSkuCount,
   savedProductNames,
   setAllDaysData,
   setAllWeeksData,
@@ -1664,7 +1665,7 @@ const UploadView = ({
                     <>
                       <Check className="w-5 h-5 text-emerald-400" />
                       <div>
-                        <p className="text-emerald-300 font-medium">{Object.keys(savedCogs).length} SKUs with COGS configured</p>
+                        <p className="text-emerald-300 font-medium">{cogsSkuCount || Object.keys(savedCogs).length} SKUs with COGS configured</p>
                         <p className="text-slate-400 text-xs">Profit calculations are accurate</p>
                       </div>
                     </>

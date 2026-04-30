@@ -5,6 +5,7 @@ const CogsManager = ({
   showCogsManager,
   setShowCogsManager,
   savedCogs,
+  cogsSkuCount,
   cogsLastUpdated,
   files,
   setFiles,
@@ -21,7 +22,7 @@ const CogsManager = ({
         {Object.keys(savedCogs).length > 0 ? (
           <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4 mb-4">
             <div className="flex items-center gap-2 text-emerald-400 mb-1"><Check className="w-5 h-5" /><span className="font-semibold">COGS Loaded</span></div>
-            <p className="text-slate-300 text-sm">{Object.keys(savedCogs).length} SKUs</p>
+            <p className="text-slate-300 text-sm">{cogsSkuCount || Object.keys(savedCogs).length} SKUs</p>
             {cogsLastUpdated && <p className="text-slate-500 text-xs">Updated: {new Date(cogsLastUpdated).toLocaleDateString()}</p>}
           </div>
         ) : (

@@ -1589,6 +1589,7 @@ const handleLogout = async () => {
   setAllPeriodsData({});
   setInvHistory({});
   setSavedCogs({});
+  setCogsSkuCount(0);
   setCogsLastUpdated(null);
   setSavedProductNames({});
   setStoreName('');
@@ -1664,6 +1665,7 @@ const handleLogout = async () => {
 
   
   const [savedCogs, setSavedCogs] = useState({});
+  const [cogsSkuCount, setCogsSkuCount] = useState(0);
   const [savedProductNames, setSavedProductNames] = useState({}); // SKU -> Product Name mapping
   const [cogsLastUpdated, setCogsLastUpdated] = useState(null);
   const [showCogsManager, setShowCogsManager] = useState(false);
@@ -2439,10 +2441,10 @@ const handleLogout = async () => {
                 <div className="bg-slate-800/50 rounded-xl p-4 max-w-md mx-auto mb-6">
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-slate-300">COGS Status</span>
-                    {Object.keys(savedCogs).filter(k => savedCogs[k]?.cost > 0).length > 0 ? (
+                    {Object.keys(savedCogs).length > 0 ? (
                       <span className="text-emerald-400 flex items-center gap-1">
                         <Check className="w-4 h-4" />
-                        {Object.keys(savedCogs).filter(k => savedCogs[k]?.cost > 0).length} SKUs configured
+                        {cogsSkuCount || Object.keys(savedCogs).length} SKUs configured
                       </span>
                     ) : (
                       <span className="text-amber-400">Not configured</span>
@@ -4229,6 +4231,7 @@ const loadFromLocal = useCallback(() => {
     if (r) {
       const d = JSON.parse(r);
       setSavedCogs(d.lookup || {});
+      setCogsSkuCount(d.skuCount || 0);
       setCogsLastUpdated(d.updatedAt || null);
     }
   } catch (e) { if (e.message) devWarn("[init]", e.message); }
@@ -4903,6 +4906,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     // Also persist merged inventory back to localStorage in case cloud had dates local didn't
     try { writeToLocal(INVENTORY_KEY, JSON.stringify(mergedInv)); } catch (e) { /* non-fatal */ }
     setSavedCogs(cloud.cogs?.lookup || {});
+    setCogsSkuCount(cloud.cogs?.skuCount || 0);
     setCogsLastUpdated(cloud.cogs?.updatedAt || null);
     setAllPeriodsData(cloud.periods || {});
     setStoreName(cloud.storeName || '');
@@ -5022,7 +5026,7 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     writeToLocal(STORAGE_KEY, JSON.stringify(cloud.sales || {}));
     writeToLocal('ecommerce_daily_sales_v1', JSON.stringify(cloud.dailySales || {})); // Daily data localStorage
     writeToLocal(INVENTORY_KEY, JSON.stringify(cloud.inventory || {}));
-    writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null }));
+    writeToLocal(COGS_KEY, JSON.stringify({ lookup: cloud.cogs?.lookup || {}, updatedAt: cloud.cogs?.updatedAt || null, skuCount: cloud.cogs?.skuCount || 0 }));
     writeToLocal(PERIODS_KEY, JSON.stringify(cloud.periods || {}));
     writeToLocal(STORE_KEY, cloud.storeName || '');
     if (cloud.storeLogo) safeLocalStorageSet('ecommerce_store_logo', cloud.storeLogo);
@@ -5738,15 +5742,17 @@ const saveInv = async (d) => {
   } catch (e) { devError("[error]", e); }
 };
 
-const saveCogs = async (lookup) => {
+const saveCogs = async (lookup, skuCount) => {
   try {
     const updatedAt = new Date().toISOString();
-    writeToLocal(COGS_KEY, JSON.stringify({ lookup, updatedAt }));
+    const count = skuCount || 0;
+    writeToLocal(COGS_KEY, JSON.stringify({ lookup, updatedAt, skuCount: count }));
     setSavedCogs(lookup);
+    setCogsSkuCount(count);
     setCogsLastUpdated(updatedAt);
     setShowSaveConfirm(true);
     setTimeout(() => setShowSaveConfirm(false), 2000);
-    queueCloudSave({ ...combinedData, cogs: { lookup, updatedAt } });
+    queueCloudSave({ ...combinedData, cogs: { lookup, updatedAt, skuCount: count } });
   } catch (e) { devError("[error]", e); }
 };
 
@@ -6119,12 +6125,14 @@ const savePeriods = async (d) => {
     if (!files.cogs) return;
     const lookup = {};
     const names = {};
+    let skuCount = 0;
 
     const upsert = (rawSku, cost, name) => {
       const sku = (rawSku || '').toString().trim();
       if (!sku) return;
       const c = typeof cost === 'number' ? cost : parseFloat(cost || 0);
       if (!(c > 0)) return;
+      skuCount++;
 
       const compact = sku.replace(/\s+/g, '');
       const base = compact.replace(/shop$/i, '');
@@ -6161,7 +6169,7 @@ const savePeriods = async (d) => {
       upsert(s, c, name);
     });
 
-    saveCogs(lookup);
+    saveCogs(lookup, skuCount);
     setSavedProductNames(names);
     try { safeLocalStorageSet(PRODUCT_NAMES_KEY, JSON.stringify(names)); } catch (e) { if (e?.message) devWarn("[catch]", e.message); }
     setFiles(p => ({ ...p, cogs: null }));
@@ -16000,7 +16008,7 @@ Analyze the data and respond with ONLY this JSON:
       </div>
       
       <div className="hidden sm:flex items-center gap-2">
-        {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
+        {Object.keys(savedCogs).length > 0 ? <span className="text-emerald-400 text-xs flex items-center gap-1"><Check className="w-3 h-3" />{cogsSkuCount || Object.keys(savedCogs).length} SKUs</span> : <span className="text-amber-400 text-xs">No COGS</span>}
         <button onClick={() => setShowCogsManager(true)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white flex items-center gap-1"><Settings className="w-3 h-3" />COGS</button>
         <button onClick={() => setShowProductCatalog(true)} className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/50 rounded text-xs text-violet-300 flex items-center gap-1"><Package className="w-3 h-3" />Catalog{Object.keys(savedProductNames).length > 0 && <span className="text-violet-400">✓</span>}</button>
       </div>
@@ -17173,7 +17181,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
   // ==================== DASHBOARD VIEW ====================
 
   // ==================== GLOBAL MODALS (rendered once, not per-view) ====================
-  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatPanelElement}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} switchingStore={switchingStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
+  const globalModals = (<><Toast toast={toast} setToast={setToast} showSaveConfirm={showSaveConfirm} /><DayDetailsModal viewingDayDetails={viewingDayDetails} setViewingDayDetails={setViewingDayDetails} allDaysData={allDaysData} setAllDaysData={setAllDaysData} getCogsCost={getCogsCost} savedProductNames={savedProductNames} editingDayAdSpend={editingDayAdSpend} setEditingDayAdSpend={setEditingDayAdSpend} dayAdSpendEdit={dayAdSpendEdit} setDayAdSpendEdit={setDayAdSpendEdit} queueCloudSave={queueCloudSave} combinedData={combinedData} setToast={setToast} /><ValidationModal showValidationModal={showValidationModal} setShowValidationModal={setShowValidationModal} dataValidationWarnings={dataValidationWarnings} setDataValidationWarnings={setDataValidationWarnings} pendingProcessAction={pendingProcessAction} setPendingProcessAction={setPendingProcessAction} />{aiChatPanelElement}{weeklyReportUI}<CogsManager showCogsManager={showCogsManager} setShowCogsManager={setShowCogsManager} savedCogs={savedCogs} cogsSkuCount={cogsSkuCount} cogsLastUpdated={cogsLastUpdated} files={files} setFiles={setFiles} setFileNames={setFileNames} processAndSaveCogs={processAndSaveCogs} FileBox={FileBox} /><ProductCatalogModal showProductCatalog={showProductCatalog} setShowProductCatalog={setShowProductCatalog} productCatalogFile={productCatalogFile} setProductCatalogFile={setProductCatalogFile} productCatalogFileName={productCatalogFileName} setProductCatalogFileName={setProductCatalogFileName} savedProductNames={savedProductNames} setSavedProductNames={setSavedProductNames} setToast={setToast} /><UploadHelpModal showUploadHelp={showUploadHelp} setShowUploadHelp={setShowUploadHelp} /><ForecastModal showForecast={showForecast} setShowForecast={setShowForecast} generateForecast={generateForecast} enhancedForecast={enhancedForecast} amazonForecasts={amazonForecasts} goals={goals} /><BreakEvenModal showBreakEven={showBreakEven} setShowBreakEven={setShowBreakEven} breakEvenInputs={breakEvenInputs} setBreakEvenInputs={setBreakEvenInputs} calculateBreakEven={calculateBreakEven} /><ExportModal showExportModal={showExportModal} setShowExportModal={setShowExportModal} exportWeeklyDataCSV={exportWeeklyDataCSV} exportSKUDataCSV={exportSKUDataCSV} exportInventoryCSV={exportInventoryCSV} exportAll={exportAll} invHistory={invHistory} allWeeksData={allWeeksData} allDaysData={allDaysData} /><ComparisonView compareMode={compareMode} setCompareMode={setCompareMode} compareItems={compareItems} setCompareItems={setCompareItems} allWeeksData={allWeeksData} weekNotes={weekNotes} /><InvoiceModal showInvoiceModal={showInvoiceModal} setShowInvoiceModal={setShowInvoiceModal} invoiceForm={invoiceForm} setInvoiceForm={setInvoiceForm} editingInvoice={editingInvoice} setEditingInvoice={setEditingInvoice} invoices={invoices} setInvoices={setInvoices} processingPdf={processingPdf} setProcessingPdf={setProcessingPdf} callAI={callAI} /><ThreePLBulkUploadModal show3PLBulkUpload={show3PLBulkUpload} setShow3PLBulkUpload={setShow3PLBulkUpload} threeplSelectedFiles={threeplSelectedFiles} setThreeplSelectedFiles={setThreeplSelectedFiles} threeplProcessing={threeplProcessing} setThreeplProcessing={setThreeplProcessing} threeplResults={threeplResults} setThreeplResults={setThreeplResults} threeplLedger={threeplLedger} parse3PLExcel={parse3PLExcel} save3PLLedger={save3PLLedger} get3PLForWeek={get3PLForWeek} getSunday={getSunday} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} save={save} /><AdsBulkUploadModal showAdsBulkUpload={showAdsBulkUpload} setShowAdsBulkUpload={setShowAdsBulkUpload} adsSelectedFiles={adsSelectedFiles} setAdsSelectedFiles={setAdsSelectedFiles} adsProcessing={adsProcessing} setAdsProcessing={setAdsProcessing} adsResults={adsResults} setAdsResults={setAdsResults} allDaysData={allDaysData} setAllDaysData={setAllDaysData} allWeeksData={allWeeksData} setAllWeeksData={setAllWeeksData} combinedData={combinedData} session={session} supabase={supabase} pushToCloudNow={pushToCloudNow} /><GoalsModal showGoalsModal={showGoalsModal} setShowGoalsModal={setShowGoalsModal} goals={goals} saveGoals={saveGoals} /><StoreSelectorModal showStoreModal={showStoreModal} setShowStoreModal={setShowStoreModal} session={session} stores={stores} activeStoreId={activeStoreId} switchStore={switchStore} deleteStore={deleteStore} createStore={createStore} switchingStore={switchingStore} /><ConflictResolutionModal showConflictModal={showConflictModal} setShowConflictModal={setShowConflictModal} conflictData={conflictData} setConflictData={setConflictData} conflictCheckRef={conflictCheckRef} pushToCloudNow={pushToCloudNow} loadFromCloud={loadFromCloud} setToast={setToast} setAllWeeksData={setAllWeeksData} setAllDaysData={setAllDaysData} setInvoices={setInvoices} /><WidgetConfigModal editingWidgets={editingWidgets} setEditingWidgets={setEditingWidgets} widgetConfig={widgetConfig} setWidgetConfig={setWidgetConfig} DEFAULT_DASHBOARD_WIDGETS={DEFAULT_DASHBOARD_WIDGETS} draggedWidgetId={draggedWidgetId} setDraggedWidgetId={setDraggedWidgetId} dragOverWidgetId={dragOverWidgetId} setDragOverWidgetId={setDragOverWidgetId} /><DtcAdsIntelModal show={showDtcIntelUpload} setShow={setShowDtcIntelUpload} dtcIntelData={dtcIntelData} setDtcIntelData={setDtcIntelData} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} /><AmazonAdsIntelModal show={showAdsIntelUpload} setShow={setShowAdsIntelUpload} adsIntelData={adsIntelData} setAdsIntelData={setAdsIntelData} combinedData={combinedData} queueCloudSave={queueCloudSave} allDaysData={allDaysData} setAllDaysData={setAllDaysData} amazonCampaigns={amazonCampaigns} setAmazonCampaigns={setAmazonCampaigns} setToast={setToast} callAI={callAI} saveReportToHistory={saveReportToHistory} onGoToAnalyst={() => { setAdsAiMessages([]); pendingAdsAnalysisRef.current = true; setView("ads"); setShowAdsAIChat(true); }} /><OnboardingWizard /><PdfExportModal /><KeyboardShortcuts setView={setView} exportAll={exportAll} setShowAdsAIChat={setShowAdsAIChat} setToast={setToast} /><AuditLog isOpen={showAuditLog} onClose={() => setShowAuditLog(false)} auditLog={getAuditLog()} /></>);
 
   if (view === 'dashboard') {
     return wrapView(<DashboardView
@@ -17215,6 +17223,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       revenueChange={revenueChange}
       salesTaxConfig={salesTaxConfig}
       savedCogs={savedCogs}
+      cogsSkuCount={cogsSkuCount}
       savedProductNames={savedProductNames}
       session={session}
       setAnalyticsTab={setAnalyticsTab}
@@ -17321,6 +17330,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       save={save}
       saveInv={saveInv}
       savedCogs={savedCogs}
+      cogsSkuCount={cogsSkuCount}
       savedProductNames={savedProductNames}
       setAllDaysData={setAllDaysData}
       setAllWeeksData={setAllWeeksData}
@@ -17788,6 +17798,7 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
       returnRates={returnRates}
       revenueChange={revenueChange}
       savedCogs={savedCogs}
+      cogsSkuCount={cogsSkuCount}
       savedProductNames={savedProductNames}
       setNavDropdown={setNavDropdown}
       setSelectedDay={setSelectedDay}

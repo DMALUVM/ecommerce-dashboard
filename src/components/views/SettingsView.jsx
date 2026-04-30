@@ -53,6 +53,7 @@ const SettingsView = ({
   shipSidekickCredentials,
   runAutoSync,
   savedCogs,
+  cogsSkuCount,
   savedProductNames,
   saveInv,
   saveSettings,
@@ -4543,7 +4544,7 @@ const SettingsView = ({
               <span className="text-slate-500">• {Object.keys(allWeeksData).length} weeks of sales data</span>
               <span className="text-slate-500">• {Object.keys(allPeriodsData).length} period reports</span>
               <span className="text-slate-500">• {Object.keys(invHistory).length} inventory snapshots</span>
-              <span className="text-slate-500">• {Object.keys(savedCogs).length} COGS entries</span>
+              <span className="text-slate-500">• {cogsSkuCount || Object.keys(savedCogs).length} COGS entries</span>
               <span className="text-slate-500">• {Object.keys(amazonForecasts).length} Amazon forecasts</span>
               <span className="text-slate-500">• {invoices.length} invoices/bills</span>
               <span className="text-slate-500">• All settings & goals</span>
@@ -4796,7 +4797,7 @@ const SettingsView = ({
             <span>•</span>
             <span>{Object.keys(allPeriodsData).length} periods saved</span>
             <span>•</span>
-            <span>{Object.keys(savedCogs).filter(k => savedCogs[k]?.cost > 0).length} SKUs configured</span>
+            <span>{cogsSkuCount || Object.keys(savedCogs).length} SKUs configured</span>
           </div>
           
           {/* Quick Actions */}

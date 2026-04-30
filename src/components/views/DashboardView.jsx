@@ -51,6 +51,7 @@ const DashboardView = ({
   revenueChange,
   salesTaxConfig,
   savedCogs,
+  cogsSkuCount,
   savedProductNames,
   session,
   setAnalyticsTab,
@@ -865,7 +866,7 @@ const DashboardView = ({
                   <button onClick={() => { setShowCogsManager(true); document.getElementById('store-settings-dropdown')?.classList.add('hidden'); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
                     <DollarSign className="w-4 h-4 text-emerald-400" />
                     <span className="text-white">COGS</span>
-                    {Object.keys(savedCogs).length > 0 && <span className="text-emerald-400 text-xs ml-auto">{Object.keys(savedCogs).length} SKUs</span>}
+                    {Object.keys(savedCogs).length > 0 && <span className="text-emerald-400 text-xs ml-auto">{cogsSkuCount || Object.keys(savedCogs).length} SKUs</span>}
                   </button>
                   <button onClick={() => { setShowProductCatalog(true); document.getElementById('store-settings-dropdown')?.classList.add('hidden'); }} className="w-full px-4 py-2.5 text-left hover:bg-slate-700 flex items-center gap-2 text-sm">
                     <Package className="w-4 h-4 text-violet-400" />
