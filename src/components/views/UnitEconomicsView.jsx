@@ -154,29 +154,37 @@ const UnitEconomicsView = ({
       const googleAdSpend = Math.max(googleFromDaily, googleFromWeekly);
 
       const totalAdSpend = amazonAdSpend + metaAdSpend + googleAdSpend;
+      const dtcAdSpend = metaAdSpend + googleAdSpend;
       const totalCustomers = newCustomers + returningCustomers;
       const estFees = shopifyRevenue * 0.026 + amazonRevenue * 0.15;
       const contributionProfit = totalRevenue - totalCogs - estFees - totalAdSpend;
       const contributionMargin = totalRevenue > 0 ? contributionProfit / totalRevenue : 0;
+
+      const shopifyCac = newCustomers > 0 ? dtcAdSpend / newCustomers : 0;
+      const blendedCac = newCustomers > 0 ? totalAdSpend / newCustomers : 0;
+      const shopifyRevPerCustomer = totalCustomers > 0 ? shopifyRevenue / totalCustomers : 0;
+      const ltvCacRatio = shopifyCac > 0 && totalCustomers > 0
+        ? shopifyRevPerCustomer / shopifyCac : 0;
 
       return {
         totalRevenue, shopifyRevenue, amazonRevenue,
         shopifyOrders, amazonUnits,
         newCustomers, returningCustomers, totalCustomers,
         newCustomerRevenue, returningCustomerRevenue,
-        amazonAdSpend, metaAdSpend, googleAdSpend, totalAdSpend,
+        amazonAdSpend, metaAdSpend, googleAdSpend, totalAdSpend, dtcAdSpend,
         totalCogs, totalDiscounts, totalShipping, estFees,
         contributionProfit, contributionMargin,
         daysWithData,
         mer: totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0,
-        blendedCac: newCustomers > 0 ? totalAdSpend / newCustomers : 0,
+        shopifyCac,
+        blendedCac,
         shopifyAov: shopifyOrders > 0 ? shopifyRevenue / shopifyOrders : 0,
         amazonAov: amazonUnits > 0 ? amazonRevenue / amazonUnits : 0,
         blendedAov: (shopifyOrders + amazonUnits) > 0 ? totalRevenue / (shopifyOrders + amazonUnits) : 0,
         repeatRate: totalCustomers > 0 ? (returningCustomers / totalCustomers) * 100 : 0,
         breakEvenRoas: contributionMargin > 0 ? 1 / contributionMargin : 0,
-        ltvCacRatio: (newCustomers > 0 && totalCustomers > 0)
-          ? (totalRevenue / totalCustomers) / (totalAdSpend / newCustomers) : 0,
+        ltvCacRatio,
+        shopifyRevPerCustomer,
       };
     };
 
@@ -337,10 +345,12 @@ const UnitEconomicsView = ({
         </Section>
 
         {/* Customer Acquisition */}
-        <Section title="Customer Acquisition" info="Customer counts are from Shopify only (Amazon doesn't expose customer data). Blended CAC uses total ad spend across all channels.">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Section title="Customer Acquisition" info="Customer counts are from Shopify only (Amazon doesn't expose customer data). Shopify CAC uses Meta + Google spend. Blended CAC includes Amazon ad spend.">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <MetricCard label="Shopify CAC" value={m.shopifyCac} prior={p.shopifyCac} color="cyan" icon={Users}
+              sublabel={`Meta + Google ÷ ${formatNumber(m.newCustomers)} new`} large />
             <MetricCard label="Blended CAC" value={m.blendedCac} prior={p.blendedCac} color="violet" icon={Users}
-              sublabel="Ad Spend ÷ New Customers" large />
+              sublabel="All Ad Spend ÷ New Customers" />
             <MetricCard label="New Customers" value={m.newCustomers} format="number" prior={p.newCustomers} color="cyan" icon={Users} />
             <MetricCard label="Returning Customers" value={m.returningCustomers} format="number" prior={p.returningCustomers} color="emerald" icon={RefreshCw} />
             <MetricCard label="Repeat Rate" value={m.repeatRate} format="percent" prior={p.repeatRate} color="blue" icon={RefreshCw}
@@ -373,15 +383,15 @@ const UnitEconomicsView = ({
         </Section>
 
         {/* LTV & Payback */}
-        <Section title="LTV & Payback" info="LTV:CAC should be ≥3.0 for a healthy business. Requires Shopify customer data (run a sync). True LTV needs 6+ months — use 180d or 365d lookback.">
+        <Section title="LTV & Payback" info="Uses Shopify-only data: LTV = Shopify revenue ÷ customers, CAC = (Meta + Google) ÷ new customers. LTV:CAC ≥3.0 is healthy. True LTV needs 6+ months — use 180d or 365d lookback.">
           {hasCustomerData ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <MetricCard label="LTV:CAC Ratio" value={m.ltvCacRatio} format="ratio" color={m.ltvCacRatio >= 3 ? 'emerald' : m.ltvCacRatio >= 1 ? 'amber' : 'rose'} icon={Target}
-                sublabel={m.ltvCacRatio >= 3 ? 'Healthy' : m.ltvCacRatio >= 1 ? 'Break-even range' : 'Below break-even'} large />
-              <MetricCard label={`Avg Revenue per Customer (${period})`} value={m.totalCustomers > 0 ? m.totalRevenue / m.totalCustomers : 0} color="cyan" icon={DollarSign}
-                sublabel="Shopify LTV proxy" />
-              <MetricCard label="Payback Period" value={m.blendedCac > 0 && m.contributionMargin > 0 ? m.blendedCac / ((m.totalRevenue * m.contributionMargin) / (m.totalCustomers || 1) / (periodDays[period] / 30)) : 0} format="number" color="violet" icon={RefreshCw}
-                sublabel={m.blendedCac > 0 ? 'Months to recover CAC' : 'N/A'} />
+                sublabel={m.ltvCacRatio >= 3 ? 'Healthy' : m.ltvCacRatio >= 1 ? 'Break-even range' : m.shopifyCac > 0 ? 'Below break-even' : 'No DTC ad spend'} large />
+              <MetricCard label={`Shopify Rev / Customer (${period})`} value={m.shopifyRevPerCustomer} color="cyan" icon={DollarSign}
+                sublabel="LTV proxy (Shopify only)" />
+              <MetricCard label="Payback Period" value={m.shopifyCac > 0 && m.contributionMargin > 0 ? m.shopifyCac / ((m.shopifyRevenue * m.contributionMargin) / (m.totalCustomers || 1) / (periodDays[period] / 30)) : 0} format="ratio" color="violet" icon={RefreshCw}
+                sublabel={m.shopifyCac > 0 ? 'Months to recover CAC' : 'No DTC ad spend'} />
             </div>
           ) : (
             <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 text-center">
@@ -399,12 +409,12 @@ const UnitEconomicsView = ({
               <div>
                 <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">New Customer Revenue</div>
                 <div className="text-lg font-bold text-white">{formatCurrency(m.newCustomerRevenue)}</div>
-                <div className="text-xs text-slate-500">{m.totalRevenue > 0 ? ((m.newCustomerRevenue / m.totalRevenue) * 100).toFixed(0) : 0}% of total</div>
+                <div className="text-xs text-slate-500">{m.shopifyRevenue > 0 ? ((m.newCustomerRevenue / m.shopifyRevenue) * 100).toFixed(0) : 0}% of Shopify</div>
               </div>
               <div>
                 <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Returning Revenue</div>
                 <div className="text-lg font-bold text-white">{formatCurrency(m.returningCustomerRevenue)}</div>
-                <div className="text-xs text-slate-500">{m.totalRevenue > 0 ? ((m.returningCustomerRevenue / m.totalRevenue) * 100).toFixed(0) : 0}% of total</div>
+                <div className="text-xs text-slate-500">{m.shopifyRevenue > 0 ? ((m.returningCustomerRevenue / m.shopifyRevenue) * 100).toFixed(0) : 0}% of Shopify</div>
               </div>
               <div>
                 <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Amazon Revenue</div>
