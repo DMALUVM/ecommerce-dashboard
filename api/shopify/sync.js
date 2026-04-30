@@ -1034,7 +1034,6 @@ export default async function handler(req, res) {
           Object.entries(dailyData).map(([k, v]) => {
             if (v.shopify?.uniqueCustomerIds) {
               v.shopify.uniqueCustomers = v.shopify.uniqueCustomerIds.length;
-              delete v.shopify.uniqueCustomerIds;
             }
             return [k, v];
           })
@@ -1043,7 +1042,6 @@ export default async function handler(req, res) {
           Object.entries(weeklyData).map(([k, v]) => {
             if (v.shopify?.uniqueCustomerIds) {
               v.shopify.uniqueCustomers = v.shopify.uniqueCustomerIds.length;
-              delete v.shopify.uniqueCustomerIds;
             }
             return [k, v];
           })

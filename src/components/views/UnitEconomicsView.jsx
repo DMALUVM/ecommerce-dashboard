@@ -47,7 +47,7 @@ const UnitEconomicsView = ({
     const currentDates = getDatesInRange(days, 0);
     const priorDates = getDatesInRange(days, days);
 
-    const aggregate = (dates) => {
+    const aggregate = (dates, priorSeenCustomerIds) => {
       let totalRevenue = 0, shopifyRevenue = 0, amazonRevenue = 0;
       let shopifyOrders = 0, amazonUnits = 0;
       let newCustomers = 0, returningCustomers = 0;
@@ -59,7 +59,11 @@ const UnitEconomicsView = ({
       let totalShipping = 0;
       let daysWithData = 0;
 
-      for (const date of dates) {
+      const seenIds = new Set(priorSeenCustomerIds || []);
+      const sortedDates = [...dates].sort();
+      let hasCustomerIdData = false;
+
+      for (const date of sortedDates) {
         const day = allDaysData[date];
         if (!day) continue;
 
@@ -78,10 +82,26 @@ const UnitEconomicsView = ({
         shopifyOrders += shopDay.orders || 0;
         amazonUnits += amzDay.units || 0;
 
-        newCustomers += shopDay.newCustomers || 0;
-        returningCustomers += shopDay.returningCustomers || 0;
-        newCustomerRevenue += shopDay.newCustomerRevenue || 0;
-        returningCustomerRevenue += shopDay.returningCustomerRevenue || 0;
+        const dayCustomerIds = shopDay.uniqueCustomerIds || [];
+        if (dayCustomerIds.length > 0) {
+          hasCustomerIdData = true;
+          const dayRevPerCustomer = dayCustomerIds.length > 0 ? shopRev / dayCustomerIds.length : 0;
+          for (const cid of dayCustomerIds) {
+            if (seenIds.has(cid)) {
+              returningCustomers++;
+              returningCustomerRevenue += dayRevPerCustomer;
+            } else {
+              newCustomers++;
+              newCustomerRevenue += dayRevPerCustomer;
+              seenIds.add(cid);
+            }
+          }
+        } else if ((shopDay.newCustomers || 0) > 0 || (shopDay.returningCustomers || 0) > 0) {
+          newCustomers += shopDay.newCustomers || 0;
+          returningCustomers += shopDay.returningCustomers || 0;
+          newCustomerRevenue += shopDay.newCustomerRevenue || 0;
+          returningCustomerRevenue += shopDay.returningCustomerRevenue || 0;
+        }
 
         amazonAdSpend += amzDay.adSpend || 0;
         metaFromDaily += shopDay.metaSpend ?? day.metaSpend ?? day.metaAds ?? 0;
@@ -160,8 +180,29 @@ const UnitEconomicsView = ({
       };
     };
 
-    const current = aggregate(currentDates);
-    const prior = aggregate(priorDates);
+    const collectPriorCustomerIds = (beforeDate) => {
+      const ids = new Set();
+      const allDates = Object.keys(allDaysData).sort();
+      for (const d of allDates) {
+        if (d >= beforeDate) break;
+        const shopDay = allDaysData[d]?.shopify || {};
+        for (const cid of (shopDay.uniqueCustomerIds || [])) {
+          ids.add(cid);
+        }
+      }
+      return ids;
+    };
+
+    const currentSorted = [...currentDates].sort();
+    const priorSorted = [...priorDates].sort();
+    const currentStart = currentSorted[0] || '';
+    const priorStart = priorSorted[0] || '';
+
+    const priorIdsBeforeCurrent = collectPriorCustomerIds(currentStart);
+    const priorIdsBeforePrior = collectPriorCustomerIds(priorStart);
+
+    const current = aggregate(currentDates, priorIdsBeforeCurrent);
+    const prior = aggregate(priorDates, priorIdsBeforePrior);
 
     const pctChange = (curr, prev) => {
       if (!prev || prev === 0) return null;
