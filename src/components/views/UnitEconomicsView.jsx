@@ -27,7 +27,7 @@ const UnitEconomicsView = ({
 }) => {
   const [period, setPeriod] = useState('30d');
 
-  const periodDays = { '7d': 7, '14d': 14, '30d': 30, '90d': 90 };
+  const periodDays = { '7d': 7, '14d': 14, '30d': 30, '90d': 90, '180d': 180, '365d': 365 };
 
   const metrics = useMemo(() => {
     const days = periodDays[period] || 30;
@@ -83,6 +83,8 @@ const UnitEconomicsView = ({
         returningCustomerRevenue += shopDay.returningCustomerRevenue || 0;
 
         amazonAdSpend += amzDay.adSpend || 0;
+        metaAdSpend += shopDay.metaSpend || 0;
+        googleAdSpend += shopDay.googleSpend || 0;
 
         totalDiscounts += shopDay.discounts || 0;
         totalShipping += shopDay.shippingCollected || 0;
@@ -99,18 +101,20 @@ const UnitEconomicsView = ({
         }
       }
 
-      // Pull meta/google spend from weekly data (manual uploads)
-      const weekKeys = Object.keys(allWeeksData || {}).sort();
-      for (const wk of weekKeys) {
-        const wkEnd = new Date(wk + 'T12:00:00');
-        const wkStart = new Date(wkEnd);
-        wkStart.setDate(wkStart.getDate() - 6);
-        const rangeStart = new Date(dates[dates.length - 1]);
-        const rangeEnd = new Date(dates[0]);
-        if (wkEnd >= rangeStart && wkStart <= rangeEnd) {
-          const wkData = allWeeksData[wk];
-          metaAdSpend += parseFloat(wkData?.metaAdSpend || wkData?.shopify?.metaAdSpend || 0);
-          googleAdSpend += parseFloat(wkData?.googleAdSpend || wkData?.shopify?.googleAdSpend || 0);
+      // Fallback: pull meta/google from weekly data if daily didn't have any
+      if (metaAdSpend === 0 && googleAdSpend === 0) {
+        const weekKeys = Object.keys(allWeeksData || {}).sort();
+        for (const wk of weekKeys) {
+          const wkEnd = new Date(wk + 'T12:00:00');
+          const wkStart = new Date(wkEnd);
+          wkStart.setDate(wkStart.getDate() - 6);
+          const rangeStart = new Date(dates[dates.length - 1]);
+          const rangeEnd = new Date(dates[0]);
+          if (wkEnd >= rangeStart && wkStart <= rangeEnd) {
+            const wkData = allWeeksData[wk];
+            metaAdSpend += parseFloat(wkData?.shopify?.metaSpend || wkData?.metaSpend || wkData?.metaAds || 0);
+            googleAdSpend += parseFloat(wkData?.shopify?.googleSpend || wkData?.googleSpend || wkData?.googleAds || 0);
+          }
         }
       }
 
