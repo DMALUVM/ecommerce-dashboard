@@ -49,7 +49,7 @@ const UnitEconomicsView = ({
 
     const aggregate = (dates) => {
       let totalRevenue = 0, shopifyRevenue = 0, amazonRevenue = 0;
-      let totalOrders = 0, shopifyOrders = 0;
+      let shopifyOrders = 0, amazonUnits = 0;
       let newCustomers = 0, returningCustomers = 0;
       let newCustomerRevenue = 0, returningCustomerRevenue = 0;
       let amazonAdSpend = 0;
@@ -76,7 +76,7 @@ const UnitEconomicsView = ({
         totalRevenue += shopRev + amzRev;
 
         shopifyOrders += shopDay.orders || 0;
-        totalOrders += (shopDay.orders || 0) + (amzDay.orders || amzDay.units || 0);
+        amazonUnits += amzDay.units || 0;
 
         newCustomers += shopDay.newCustomers || 0;
         returningCustomers += shopDay.returningCustomers || 0;
@@ -141,7 +141,7 @@ const UnitEconomicsView = ({
 
       return {
         totalRevenue, shopifyRevenue, amazonRevenue,
-        totalOrders, shopifyOrders,
+        shopifyOrders, amazonUnits,
         newCustomers, returningCustomers, totalCustomers,
         newCustomerRevenue, returningCustomerRevenue,
         amazonAdSpend, metaAdSpend, googleAdSpend, totalAdSpend,
@@ -150,9 +150,9 @@ const UnitEconomicsView = ({
         daysWithData,
         mer: totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0,
         blendedCac: newCustomers > 0 ? totalAdSpend / newCustomers : 0,
-        aov: totalOrders > 0 ? totalRevenue / totalOrders : 0,
-        aovNew: newCustomers > 0 ? newCustomerRevenue / newCustomers : 0,
-        aovReturning: returningCustomers > 0 ? returningCustomerRevenue / returningCustomers : 0,
+        shopifyAov: shopifyOrders > 0 ? shopifyRevenue / shopifyOrders : 0,
+        amazonAov: amazonUnits > 0 ? amazonRevenue / amazonUnits : 0,
+        blendedAov: (shopifyOrders + amazonUnits) > 0 ? totalRevenue / (shopifyOrders + amazonUnits) : 0,
         repeatRate: totalCustomers > 0 ? (returningCustomers / totalCustomers) * 100 : 0,
         breakEvenRoas: contributionMargin > 0 ? 1 / contributionMargin : 0,
         ltvCacRatio: (newCustomers > 0 && totalCustomers > 0)
@@ -273,7 +273,7 @@ const UnitEconomicsView = ({
         {!hasCustomerData && (
           <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-3 mb-4 flex items-center gap-2">
             <Info className="w-4 h-4 text-blue-400 flex-shrink-0" />
-            <span className="text-sm text-blue-300">No customer data yet — run a Shopify sync to populate new vs. returning customer metrics.</span>
+            <span className="text-sm text-blue-300">Customer data requires a fresh Shopify sync — existing data pre-dates customer tracking. Run a new sync to populate new vs. returning metrics, CAC, and LTV.</span>
           </div>
         )}
 
@@ -308,12 +308,14 @@ const UnitEconomicsView = ({
         </Section>
 
         {/* Order Economics */}
-        <Section title="Order Economics" info="AOV split by new vs returning reveals if your bundle/upsell strategy works. Returning AOV should be higher than new.">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MetricCard label="AOV (Blended)" value={m.aov} prior={p.aov} color="emerald" icon={ShoppingCart} />
-            <MetricCard label="AOV (New)" value={m.aovNew} prior={p.aovNew} color="cyan" icon={ShoppingCart} />
-            <MetricCard label="AOV (Returning)" value={m.aovReturning} prior={p.aovReturning} color="violet" icon={ShoppingCart} />
-            <MetricCard label="Total Orders" value={m.totalOrders} format="number" prior={p.totalOrders} color="slate" icon={ShoppingCart} />
+        <Section title="Order Economics" info="Shopify AOV = revenue ÷ orders. Amazon AOV = revenue ÷ units (Amazon doesn't expose order count, only units sold). Blended combines both.">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <MetricCard label="Shopify AOV" value={m.shopifyAov} prior={p.shopifyAov} color="cyan" icon={ShoppingCart}
+              sublabel={`${formatNumber(m.shopifyOrders)} orders`} />
+            <MetricCard label="Amazon AOV" value={m.amazonAov} prior={p.amazonAov} color="amber" icon={ShoppingCart}
+              sublabel={`${formatNumber(m.amazonUnits)} units sold`} />
+            <MetricCard label="Blended AOV" value={m.blendedAov} prior={p.blendedAov} color="emerald" icon={ShoppingCart}
+              sublabel={`${formatNumber(m.shopifyOrders + m.amazonUnits)} total`} large />
           </div>
         </Section>
 
@@ -323,22 +325,30 @@ const UnitEconomicsView = ({
             <MetricCard label="Contribution Profit" value={m.contributionProfit} prior={p.contributionProfit} color="emerald" icon={DollarSign} large />
             <MetricCard label="Contribution Margin" value={m.contributionMargin * 100} format="percent" prior={p.contributionMargin * 100} color="cyan" />
             <MetricCard label="COGS" value={m.totalCogs} prior={p.totalCogs} color="rose" icon={DollarSign}
-              sublabel={hasCogs ? `${(m.totalRevenue > 0 ? (m.totalCogs / m.totalRevenue * 100).toFixed(0) : 0)}% of revenue` : 'Not configured'} />
+              sublabel={m.totalCogs > 0 ? `${(m.totalRevenue > 0 ? (m.totalCogs / m.totalRevenue * 100).toFixed(0) : 0)}% of revenue` : 'Upload COGS or SKU Economics'} />
             <MetricCard label="Est. Fees" value={m.estFees} prior={p.estFees} color="amber" icon={DollarSign}
               sublabel="Shopify 2.6% + AMZ 15%" />
           </div>
         </Section>
 
         {/* LTV & Payback */}
-        <Section title="LTV & Payback" info="LTV:CAC should be ≥3.0 for a healthy business. These are approximate — true LTV requires cohort analysis over 6+ months of data.">
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <MetricCard label="LTV:CAC Ratio" value={m.ltvCacRatio} format="ratio" color={m.ltvCacRatio >= 3 ? 'emerald' : m.ltvCacRatio >= 1 ? 'amber' : 'rose'} icon={Target}
-              sublabel={m.ltvCacRatio >= 3 ? 'Healthy' : m.ltvCacRatio >= 1 ? 'Break-even range' : 'Below break-even'} large />
-            <MetricCard label={`Avg Revenue per Customer (${period})`} value={m.totalCustomers > 0 ? m.totalRevenue / m.totalCustomers : 0} color="cyan" icon={DollarSign}
-              sublabel="Approximate LTV proxy" />
-            <MetricCard label="Payback Period" value={m.blendedCac > 0 && m.contributionMargin > 0 ? m.blendedCac / ((m.totalRevenue * m.contributionMargin) / (m.totalCustomers || 1) / (periodDays[period] / 30)) : 0} format="number" color="violet" icon={RefreshCw}
-              sublabel={m.blendedCac > 0 ? 'Months to recover CAC' : 'N/A'} />
-          </div>
+        <Section title="LTV & Payback" info="LTV:CAC should be ≥3.0 for a healthy business. Requires Shopify customer data (run a sync). True LTV needs 6+ months — use 180d or 365d lookback.">
+          {hasCustomerData ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <MetricCard label="LTV:CAC Ratio" value={m.ltvCacRatio} format="ratio" color={m.ltvCacRatio >= 3 ? 'emerald' : m.ltvCacRatio >= 1 ? 'amber' : 'rose'} icon={Target}
+                sublabel={m.ltvCacRatio >= 3 ? 'Healthy' : m.ltvCacRatio >= 1 ? 'Break-even range' : 'Below break-even'} large />
+              <MetricCard label={`Avg Revenue per Customer (${period})`} value={m.totalCustomers > 0 ? m.totalRevenue / m.totalCustomers : 0} color="cyan" icon={DollarSign}
+                sublabel="Shopify LTV proxy" />
+              <MetricCard label="Payback Period" value={m.blendedCac > 0 && m.contributionMargin > 0 ? m.blendedCac / ((m.totalRevenue * m.contributionMargin) / (m.totalCustomers || 1) / (periodDays[period] / 30)) : 0} format="number" color="violet" icon={RefreshCw}
+                sublabel={m.blendedCac > 0 ? 'Months to recover CAC' : 'N/A'} />
+            </div>
+          ) : (
+            <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 text-center">
+              <Users className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+              <p className="text-slate-400 text-sm">LTV:CAC requires customer data from Shopify</p>
+              <p className="text-slate-500 text-xs mt-1">Run a Shopify sync to populate — existing daily data was saved before customer tracking was added</p>
+            </div>
+          )}
         </Section>
 
         {/* Revenue Split */}
