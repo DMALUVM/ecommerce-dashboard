@@ -2102,21 +2102,24 @@ const UploadView = ({
                             
                             // Merge daily data (only for selected days if smart sync enabled)
                             // IMPORTANT: Preserve all Amazon data, only add/update Shopify data
-                            const updatedDays = { ...allDaysData };
+                            // Use functional update to avoid stale closure overwriting concurrent changes
                             let syncedDayCount = 0;
+                            let mergedDaysSnapshot = null;
+                            setAllDaysData(prev => {
+                            const updatedDays = { ...prev };
                             Object.entries(data.dailyData || {}).forEach(([dateKey, dayData]) => {
                               // Skip this day if smart sync is enabled and it's not in the missing days list
                               if (shopifySmartSync.enabled && !daysToInclude.has(dateKey)) {
                                 return;
                               }
                               syncedDayCount++;
-                              
+
                               const existing = updatedDays[dateKey] || {};
-                              
+
                               // Preserve ALL existing Amazon data
                               const amazonData = existing.amazon || { revenue: 0, units: 0, orders: 0 };
                               const shopifyData = dayData.shopify || { revenue: 0, units: 0, orders: 0 };
-                              
+
                               // Calculate COGS from SKU data if not already calculated
                               let calculatedCogs = shopifyData.cogs || 0;
                               if (!calculatedCogs && shopifyData.skuData && Object.keys(cogsLookup).length > 0) {
@@ -2136,11 +2139,11 @@ const UploadView = ({
                                   calculatedCogs += unitCost * (item.quantity || 0);
                                 });
                               }
-                              
+
                               // Preserve existing ad data (from Meta/Google uploads)
                               const existingMetaSpend = existing.metaSpend || existing.shopify?.metaSpend || 0;
                               const existingGoogleSpend = existing.googleSpend || existing.shopify?.googleSpend || 0;
-                              
+
                               // Merge ad data into shopify object for consistency
                               const mergedShopifyData = {
                                 ...shopifyData,
@@ -2151,7 +2154,7 @@ const UploadView = ({
                                 googleAds: existingGoogleSpend,
                                 adSpend: existingMetaSpend + existingGoogleSpend,
                               };
-                              
+
                               // Recalculate profit with COGS and ad spend
                               const grossProfit = (mergedShopifyData.revenue || 0) - calculatedCogs - (mergedShopifyData.threeplCosts || 0);
                               mergedShopifyData.netProfit = grossProfit - mergedShopifyData.adSpend;
@@ -2159,7 +2162,7 @@ const UploadView = ({
                               if (mergedShopifyData.adSpend > 0) {
                                 mergedShopifyData.roas = mergedShopifyData.revenue / mergedShopifyData.adSpend;
                               }
-                              
+
                               updatedDays[dateKey] = {
                                 ...existing,
                                 // Keep Amazon exactly as-is
@@ -2196,22 +2199,26 @@ const UploadView = ({
                                 notes: existing.notes,
                               };
                             });
-                            setAllDaysData(updatedDays);
                             // Save daily data to localStorage
                             try { lsSet('ecommerce_daily_sales_v1', JSON.stringify(updatedDays)); } catch(e) {}
+                            mergedDaysSnapshot = updatedDays;
+                            return updatedDays;
+                            });
                             
                             // Merge weekly data - PRESERVE existing ad data
-                            const updatedWeeks = { ...allWeeksData };
+                            // Use functional update to avoid stale closure overwriting concurrent changes
+                            setAllWeeksData(prev => {
+                            const updatedWeeks = { ...prev };
                             Object.entries(data.weeklyData || {}).forEach(([weekKey, weekData]) => {
                               if (updatedWeeks[weekKey]) {
                                 const existingWeek = updatedWeeks[weekKey];
                                 const existingShopify = existingWeek.shopify || {};
-                                
+
                                 // Preserve existing ad data
                                 const metaSpend = existingShopify.metaSpend || existingShopify.metaAds || 0;
                                 const googleSpend = existingShopify.googleSpend || existingShopify.googleAds || 0;
                                 const totalAds = metaSpend + googleSpend;
-                                
+
                                 // Calculate COGS from SKU data if not already calculated
                                 let weekCogs = weekData.shopify?.cogs || 0;
                                 if (!weekCogs && weekData.shopify?.skuData && Object.keys(cogsLookup).length > 0) {
@@ -2220,7 +2227,7 @@ const UploadView = ({
                                     weekCogs += unitCost * (sku.unitsSold || sku.units || 0);
                                   });
                                 }
-                                
+
                                 // Merge shopify data, preserving ads and adding COGS
                                 const mergedShopify = {
                                   ...weekData.shopify,
@@ -2231,7 +2238,7 @@ const UploadView = ({
                                   googleAds: googleSpend,
                                   adSpend: totalAds,
                                 };
-                                
+
                                 // Recalculate profit with COGS and ad spend
                                 const grossProfit = (mergedShopify.revenue || 0) - weekCogs - (mergedShopify.threeplCosts || 0);
                                 mergedShopify.netProfit = grossProfit - totalAds;
@@ -2239,7 +2246,7 @@ const UploadView = ({
                                 if (totalAds > 0) {
                                   mergedShopify.roas = mergedShopify.revenue / totalAds;
                                 }
-                                
+
                                 updatedWeeks[weekKey] = {
                                   ...existingWeek,
                                   shopify: mergedShopify,
@@ -2261,7 +2268,7 @@ const UploadView = ({
                                     newWeekCogs += unitCost * (sku.unitsSold || sku.units || 0);
                                   });
                                 }
-                                
+
                                 // Update the week data with calculated COGS
                                 const updatedWeekData = { ...weekData };
                                 if (updatedWeekData.shopify) {
@@ -2282,8 +2289,9 @@ const UploadView = ({
                                 updatedWeeks[weekKey] = updatedWeekData;
                               }
                             });
-                            setAllWeeksData(updatedWeeks);
                             save(updatedWeeks);
+                            return updatedWeeks;
+                            });
                             
                             const updatedCreds = { ...shopifyCredentials, lastSync: new Date().toISOString() };
                             setShopifyCredentials(updatedCreds);
@@ -2312,7 +2320,7 @@ const UploadView = ({
                               
                               for (let d = new Date(lastSunday); d <= lastSaturday; d.setDate(d.getDate() + 1)) {
                                 const dateKey = formatDate(d);
-                                const dayData = updatedDays[dateKey];
+                                const dayData = mergedDaysSnapshot?.[dateKey] || allDaysData[dateKey];
                                 if (!dayData) continue;
                                 daysFound++;
                                 
