@@ -81,6 +81,7 @@ export default async function handler(req, res) {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': adsClientId,
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
     };
     if (adsProfileId) headers['Amazon-Advertising-API-Scope'] = adsProfileId;
 
@@ -90,18 +91,18 @@ export default async function handler(req, res) {
     const response = await fetch(`${ADS_BASE}${endpoint}`, opts);
     if (!response.ok) {
       const errText = await response.text();
-      // 429 = throttled — one quick retry then let caller handle
       if (response.status === 429) {
         const wait = parseInt(response.headers.get('Retry-After')) * 1000 || 1500;
         console.log(`[AdsSync] 429 throttled on ${endpoint}, retry in ${Math.round(wait/1000)}s...`);
         await new Promise(r => setTimeout(r, wait));
         const retryRes = await fetch(`${ADS_BASE}${endpoint}`, opts);
-        if (retryRes.ok) return retryRes.json();
-        // Don't retry again — just throw so polling loop can move on
+        if (retryRes.ok) {
+          const retryText = await retryRes.text();
+          try { return JSON.parse(retryText); } catch (e) { return retryText; }
+        }
         const retryErr = await retryRes.text();
         throw new Error(`Ads API ${retryRes.status} after 429 retry: ${retryErr.slice(0, 2000)}`);
       }
-      // 425 = duplicate report already exists — extract reportId and treat as success
       if (response.status === 425) {
         const dupMatch = errText.match(/duplicate of\s*:\s*([a-f0-9-]+)/i);
         if (dupMatch) {
@@ -111,8 +112,9 @@ export default async function handler(req, res) {
       }
       throw new Error(`Ads API ${response.status}: ${errText.slice(0, 2000)}`);
     }
-    const ct = response.headers.get('content-type') || '';
-    return ct.includes('application/json') ? response.json() : response.text();
+    const text = await response.text();
+    try { return JSON.parse(text); }
+    catch (e) { return text; }
   };
 
   // ============ TEST CONNECTION ============
@@ -407,17 +409,28 @@ export default async function handler(req, res) {
     const completed = reports.filter(r => r.status === 'COMPLETED');
     const errors = reports.filter(r => r.status === 'ERROR');
 
-    // Poll for up to ~80 seconds at 2-second intervals (matches original working version)
+    // Poll with a wall-clock budget that fits inside Vercel's maxDuration.
+    // Leave 15s headroom for download+transform after reports complete.
+    const pollDeadline = Date.now() + 90_000;
     let polls = 0;
-    while (pending.length > 0 && polls < 40) {
+    console.log(`[AdsSync] Polling ${pending.length} pending reports (IDs: ${pending.map(r => r.reportId).join(', ')})`);
+    while (pending.length > 0 && Date.now() < pollDeadline) {
       polls++;
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
 
       for (let i = pending.length - 1; i >= 0; i--) {
         const rpt = pending[i];
         try {
-          const statusRes = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
-          rpt.status = statusRes.status || rpt.status;
+          let statusRes = await adsRequest(token, `/reporting/reports/${rpt.reportId}`);
+          if (typeof statusRes === 'string') {
+            try { statusRes = JSON.parse(statusRes); }
+            catch (pe) { console.error(`[AdsSync] Non-JSON status response for ${rpt.label}:`, statusRes.slice(0, 200)); continue; }
+          }
+          const newStatus = statusRes.status || rpt.status;
+          if (polls <= 3 || newStatus !== rpt.status || polls % 10 === 0) {
+            console.log(`[AdsSync] Poll ${polls}: ${rpt.label} (${rpt.reportId}) → ${newStatus}`, statusRes.url ? '(has URL)' : '');
+          }
+          rpt.status = newStatus;
           if (statusRes.status === 'COMPLETED') {
             rpt.downloadUrl = statusRes.url;
             completed.push(rpt);
@@ -434,6 +447,7 @@ export default async function handler(req, res) {
         }
       }
     }
+    console.log(`[AdsSync] Poll loop done after ${polls} iterations. Completed: ${completed.length}, pending: ${pending.length}, errors: ${errors.length}`);
 
     // If ANY reports are still pending, return pending status so client retries
     if (pending.length > 0) {

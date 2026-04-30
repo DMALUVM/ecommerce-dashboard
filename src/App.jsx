@@ -12097,7 +12097,7 @@ const savePeriods = async (d) => {
                 // faster than 8, so this is the difference between "ready in 2 min" vs
                 // "still generating after 10 min". Full 8-report sync runs on manual trigger.
                 essentialOnly: true,
-                daysBack: 30,
+                daysBack: 14,
                 adsClientId: amazonCredentials.adsClientId,
                 adsClientSecret: amazonCredentials.adsClientSecret,
                 adsRefreshToken: amazonCredentials.adsRefreshToken,
@@ -12127,7 +12127,8 @@ const savePeriods = async (d) => {
                 console.log(`[AutoSync] Amazon Ads response:`, adsData.status || 'complete', adsData.error || '');
 
                 if (adsData.status === 'pending' && adsData.pendingReports) {
-                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 30s...`);
+                  const statuses = (adsData.pendingReports || []).map(r => `${r.label || r.reportKey}: ${r.status}`).join(', ');
+                  console.log(`[AutoSync] Amazon Ads: ${adsData.completedCount || 0}/${adsData.totalCount || '?'} ready, retry ${adsRetries + 1}/${maxAdsRetries} in 30s... [${statuses}]`);
                   adsSyncBody.pendingReports = adsData.pendingReports;
                   adsRetries++;
                   await new Promise(r => setTimeout(r, 30000));
