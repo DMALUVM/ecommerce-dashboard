@@ -608,6 +608,10 @@ export default async function handler(req, res) {
       // Prefer shipping (tax nexus destination), fall back to billing for digital goods
       return shipping?.province_code || billing?.province_code || null;
     };
+    // Sort orders chronologically so we can identify first vs repeat purchases by email
+    orders.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const seenCustomerEmails = new Set();
+
     // Process each order
     for (const order of orders) {
       try {
@@ -627,10 +631,19 @@ export default async function handler(req, res) {
         const stateCode = getStateCode(order);
 
         // Customer acquisition tracking for CAC/LTV calculations
-        const customerId = order.customer?.id;
-        const customerOrdersCount = parseInt(order.customer?.orders_count) || 0;
-        const isNewCustomer = customerOrdersCount <= 1;
-        const isReturningCustomer = customerOrdersCount > 1;
+        // Use email (works for both guest checkouts and registered accounts)
+        const customerEmail = (order.email || order.customer?.email || '').toLowerCase().trim();
+        const customerId = order.customer?.id || customerEmail;
+        let isNewCustomer = false;
+        let isReturningCustomer = false;
+        if (customerEmail) {
+          if (seenCustomerEmails.has(customerEmail)) {
+            isReturningCustomer = true;
+          } else {
+            isNewCustomer = true;
+            seenCustomerEmails.add(customerEmail);
+          }
+        }
      
       if (isShopPay) shopPayOrderCount++;
      
@@ -991,13 +1004,15 @@ export default async function handler(req, res) {
     console.log('Payment Gateways Found:', Array.from(allPaymentGateways));
     console.log('Shop Pay Gateways Matched:', Array.from(shopPayGatewaysFound));
     console.log(`Shop Pay Orders: ${shopPayOrderCount} out of ${orders.length} total orders`);
-   
+    console.log(`Unique customers: ${seenCustomerEmails.size} (new/returning split across ${orders.length} orders)`);
+
     return res.status(200).json({
       success: true,
       orderCount: orders.length,
       totalRevenue,
       totalUnits,
       totalDiscounts,
+      uniqueCustomers: seenCustomerEmails.size,
       uniqueDays: Object.keys(dailyData).length,
       uniqueWeeks: Object.keys(weeklyData).length,
       skuBreakdown,
