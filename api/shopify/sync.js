@@ -625,6 +625,12 @@ export default async function handler(req, res) {
         const weekEnding = getWeekEnding(orderDate);
         const isShopPay = isShopPayOrder(order);
         const stateCode = getStateCode(order);
+
+        // Customer acquisition tracking for CAC/LTV calculations
+        const customerId = order.customer?.id;
+        const customerOrdersCount = parseInt(order.customer?.orders_count) || 0;
+        const isNewCustomer = customerOrdersCount <= 1;
+        const isReturningCustomer = customerOrdersCount > 1;
      
       if (isShopPay) shopPayOrderCount++;
      
@@ -645,6 +651,11 @@ export default async function handler(req, res) {
             taxByState: {},
             shopPayOrders: 0,
             shopPayTaxExcluded: 0,
+            newCustomers: 0,
+            returningCustomers: 0,
+            newCustomerRevenue: 0,
+            returningCustomerRevenue: 0,
+            uniqueCustomerIds: [],
           },
           total: { revenue: 0, units: 0 },
         };
@@ -667,6 +678,11 @@ export default async function handler(req, res) {
             taxByState: {},
             shopPayOrders: 0,
             shopPayTaxExcluded: 0,
+            newCustomers: 0,
+            returningCustomers: 0,
+            newCustomerRevenue: 0,
+            returningCustomerRevenue: 0,
+            uniqueCustomerIds: [],
           },
           total: { revenue: 0, units: 0 },
         };
@@ -694,7 +710,19 @@ export default async function handler(req, res) {
       dailyData[orderDate].shopify.taxTotalAll += orderTax;
       dailyData[orderDate].shopify.orders += 1;
       dailyData[orderDate].total.revenue += orderRevenue;
-     
+
+      // Customer acquisition metrics
+      if (isNewCustomer) {
+        dailyData[orderDate].shopify.newCustomers += 1;
+        dailyData[orderDate].shopify.newCustomerRevenue += orderRevenue;
+      } else if (isReturningCustomer) {
+        dailyData[orderDate].shopify.returningCustomers += 1;
+        dailyData[orderDate].shopify.returningCustomerRevenue += orderRevenue;
+      }
+      if (customerId && !dailyData[orderDate].shopify.uniqueCustomerIds.includes(customerId)) {
+        dailyData[orderDate].shopify.uniqueCustomerIds.push(customerId);
+      }
+
       weeklyData[weekEnding].shopify.revenue += orderRevenue;
       weeklyData[weekEnding].shopify.discounts += orderDiscount;
       weeklyData[weekEnding].shopify.netSales += orderNetItemSales;
@@ -702,7 +730,18 @@ export default async function handler(req, res) {
       weeklyData[weekEnding].shopify.taxTotalAll += orderTax;
       weeklyData[weekEnding].shopify.orders += 1;
       weeklyData[weekEnding].total.revenue += orderRevenue;
-     
+
+      if (isNewCustomer) {
+        weeklyData[weekEnding].shopify.newCustomers += 1;
+        weeklyData[weekEnding].shopify.newCustomerRevenue += orderRevenue;
+      } else if (isReturningCustomer) {
+        weeklyData[weekEnding].shopify.returningCustomers += 1;
+        weeklyData[weekEnding].shopify.returningCustomerRevenue += orderRevenue;
+      }
+      if (customerId && !weeklyData[weekEnding].shopify.uniqueCustomerIds.includes(customerId)) {
+        weeklyData[weekEnding].shopify.uniqueCustomerIds.push(customerId);
+      }
+
       totalRevenue += orderRevenue;
       totalDiscounts += orderDiscount;
       // Process tax - EXCLUDE Shop Pay orders from tax totals
@@ -975,7 +1014,26 @@ export default async function handler(req, res) {
       },
       taxByJurisdiction, // Keep for backward compatibility
       dateRange: { start: startDate, end: endDate },
-      ...(preview ? {} : { dailyData, weeklyData }),
+      ...(preview ? {} : {
+        dailyData: Object.fromEntries(
+          Object.entries(dailyData).map(([k, v]) => {
+            if (v.shopify?.uniqueCustomerIds) {
+              v.shopify.uniqueCustomers = v.shopify.uniqueCustomerIds.length;
+              delete v.shopify.uniqueCustomerIds;
+            }
+            return [k, v];
+          })
+        ),
+        weeklyData: Object.fromEntries(
+          Object.entries(weeklyData).map(([k, v]) => {
+            if (v.shopify?.uniqueCustomerIds) {
+              v.shopify.uniqueCustomers = v.shopify.uniqueCustomerIds.length;
+              delete v.shopify.uniqueCustomerIds;
+            }
+            return [k, v];
+          })
+        ),
+      }),
     });
   } catch (err) {
     console.error('Sync error:', err);

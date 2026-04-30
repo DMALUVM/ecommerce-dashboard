@@ -66,6 +66,7 @@ import UploadView from './components/views/UploadView';
 import TrendsView from './components/views/TrendsView';
 import ForecastView from './components/views/ForecastView';
 import ProfitabilityView from './components/views/ProfitabilityView';
+import UnitEconomicsView from './components/views/UnitEconomicsView';
 import SkuRankingsView from './components/views/SkuRankingsView';
 import ThreePLView from './components/views/ThreePLView';
 import WeeklyView from './components/views/WeeklyView';
@@ -17995,6 +17996,31 @@ Write markdown: Summary(3 sentences), Metrics Table(✅⚠️❌), Wins(3), Conc
     />;
   }
 
+  // ==================== UNIT ECONOMICS VIEW ====================
+  if (view === 'unit-economics') {
+    return <UnitEconomicsView
+      allDaysData={allDaysData}
+      allWeeksData={allWeeksData}
+      allPeriodsData={allPeriodsData}
+      appSettings={appSettings}
+      bankingData={bankingData}
+      dataBar={dataBar}
+      globalModals={globalModals}
+      hasDailySalesData={hasDailySalesData}
+      invHistory={invHistory}
+      navDropdown={navDropdown}
+      savedCogs={savedCogs}
+      savedProductNames={savedProductNames}
+      setNavDropdown={setNavDropdown}
+      setSelectedDay={setSelectedDay}
+      setSelectedInvDate={setSelectedInvDate}
+      setSelectedPeriod={setSelectedPeriod}
+      setSelectedWeek={setSelectedWeek}
+      setUploadTab={setUploadTab}
+      setView={setView}
+      view={view}
+    />;
+  }
 
   // ==================== FORECAST VIEW (Unified Forecasting System) ====================
   if (view === 'forecast') {
