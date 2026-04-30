@@ -159,7 +159,7 @@ const AdsBulkUploadModal = ({
             spendIdx = getColIdx(['amount spent', 'spend']);
             purchaseValueIdx = getColIdx(['purchases value', 'purchase value', 'website purchase value'], ['roas']);
             roasIdx = getColIdx(['purchase roas', 'roas'], []);
-            purchasesIdx = getColIdx(['purchases (all)', 'purchases', 'website purchases'], ['value', 'roas']);
+            purchasesIdx = getColIdx(['purchases (all)', 'purchases', 'website purchases', 'results'], ['value', 'roas', 'type']);
             impressionsIdx = getColIdx(['impressions']);
             clicksIdx = getColIdx(['link clicks', 'clicks (all)', 'clicks'], ['link']);
             // Prefer "link clicks" over generic "clicks"

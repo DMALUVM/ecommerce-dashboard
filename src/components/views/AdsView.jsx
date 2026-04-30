@@ -517,7 +517,7 @@ const AdsView = ({
               {cur.gSpend > 0 ? <>
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <div><span className="text-slate-500">Clicks</span><p className="text-white font-medium">{formatNumber(cur.gClicks)}</p></div>
-                  <div><span className="text-slate-500">Conv</span><p className="text-emerald-400 font-medium">{cur.gConv}</p></div>
+                  <div><span className="text-slate-500">Conv</span><p className="text-emerald-400 font-medium">{formatNumber(Math.round(cur.gConv))}</p></div>
                   <div><span className="text-slate-500">CPA</span><p className={`font-medium ${cur.gConv > 0 ? ((cur.gSpend / cur.gConv) <= 15 ? 'text-emerald-400' : (cur.gSpend / cur.gConv) <= 30 ? 'text-amber-400' : 'text-rose-400') : 'text-slate-500'}`}>{cur.gConv > 0 ? formatCurrency(cur.gSpend / cur.gConv) : '—'}</p></div>
                 </div>
                 <Sparkline data={periodData.gTrend} color="bg-red-500" h={24} />
