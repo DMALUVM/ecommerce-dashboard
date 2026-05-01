@@ -12097,7 +12097,7 @@ const savePeriods = async (d) => {
                 // faster than 8, so this is the difference between "ready in 2 min" vs
                 // "still generating after 10 min". Full 8-report sync runs on manual trigger.
                 essentialOnly: true,
-                daysBack: 14,
+                daysBack: 30,
                 adsClientId: amazonCredentials.adsClientId,
                 adsClientSecret: amazonCredentials.adsClientSecret,
                 adsRefreshToken: amazonCredentials.adsRefreshToken,
