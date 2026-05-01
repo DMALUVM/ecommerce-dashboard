@@ -20,6 +20,7 @@
  */
 
 import * as XLSX from 'xlsx';
+import { parseGoogleRows, parseMetaRows } from './adsCsvParser';
 
 // ─── HEADER SIGNATURES ───────────────────────────────────────────────────────
 // Each signature is an array of column names that MUST be present to match.
@@ -469,151 +470,77 @@ const parseAmazonDailyAggregate = (rows, headers) => {
 };
 
 /**
- * Parse Google Ads Daily CSV
- * Per-ad-per-day rows → aggregated to daily totals
+ * Parse Google Ads Daily CSV — delegates to shared adsCsvParser
  */
 const parseGoogleDaily = (rows, headers) => {
-  const colIdx = {};
-  headers.forEach((h, i) => { colIdx[String(h).trim()] = i; });
-
-  const findCol = (...names) => {
-    for (const n of names) { if (colIdx[n] !== undefined) return colIdx[n]; }
-    return undefined;
-  };
-  const dateCol = findCol('Day', 'Date', 'day', 'date');
-  const costCol = findCol('Cost', 'cost');
-  const convValueCol = findCol('All conv. value', 'Conv. value', 'Conversion value');
-  const conversionsCol = findCol('Conversions', 'Conv.', 'conversions');
-  const impressionsCol = findCol('Impressions', 'Impr.', 'impressions');
-  const clicksCol = findCol('Clicks', 'clicks');
-
-  const dayMap = {};
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const date = parseDate(row[dateCol]);
-    if (!date) continue;
-
-    if (!dayMap[date]) {
-      dayMap[date] = { spend: 0, convValue: 0, conversions: 0, impressions: 0, clicks: 0 };
-    }
-
-    dayMap[date].spend += num(row[costCol]);
-    dayMap[date].convValue += num(row[convValueCol]);
-    dayMap[date].conversions += num(row[conversionsCol]);
-    dayMap[date].impressions += num(row[impressionsCol]);
-    dayMap[date].clicks += num(row[clicksCol]);
-  }
-  
+  const result = parseGoogleRows(rows, headers);
   const dailyRecords = {};
-  let totalSpend = 0;
-  
-  for (const [date, agg] of Object.entries(dayMap)) {
+
+  for (const [date, d] of Object.entries(result.dailyData)) {
     dailyRecords[date] = {
       shopify: {
-        googleSpend: agg.spend,
+        googleSpend: d.spend,
         adsMetrics: {
-          googleImpressions: agg.impressions,
-          googleClicks: agg.clicks,
-          googleConversions: agg.conversions,
-          googleConvValue: agg.convValue,
-          googleCPC: agg.clicks > 0 ? agg.spend / agg.clicks : 0,
-          googleCTR: agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0,
-          googleCostPerConv: agg.conversions > 0 ? agg.spend / agg.conversions : 0,
-          googleROAS: agg.spend > 0 ? agg.convValue / agg.spend : 0,
+          googleImpressions: d.impressions,
+          googleClicks: d.clicks,
+          googleConversions: d.conversions,
+          googleConvValue: d.convValue,
+          googleCPC: d.cpc,
+          googleCTR: d.ctr,
+          googleCostPerConv: d.costPerConv,
+          googleROAS: d.roas,
         }
       }
     };
-    totalSpend += agg.spend;
   }
-  
+
   return {
     dailyRecords,
     reportMeta: {
       type: 'google_daily',
       platform: 'google',
       tier: 1,
-      days: Object.keys(dailyRecords).length,
+      days: result.daysCount,
       dateRange: Object.keys(dailyRecords).sort(),
-      totalSpend,
+      totalSpend: result.totalSpend,
     }
   };
 };
 
 /**
- * Parse Meta Ads Daily CSV
- * Per-ad-per-day rows → aggregated to daily totals
+ * Parse Meta Ads Daily CSV — delegates to shared adsCsvParser
  */
 const parseMetaDaily = (rows, headers) => {
-  const colIdx = {};
-  headers.forEach((h, i) => { colIdx[String(h).trim()] = i; });
-
-  // Flexible column lookup — try multiple known aliases
-  const findCol = (...names) => {
-    for (const n of names) { if (colIdx[n] !== undefined) return colIdx[n]; }
-    return undefined;
-  };
-  const spendCol = findCol('Amount spent', 'Amount Spent (USD)', 'Spend');
-  const purchaseValueCol = findCol('Purchases value (all)', 'Value:Paid Purchases', 'Purchase Value', 'Website Purchase ROAS');
-  const purchasesCol = findCol('Purchases (all)', 'Paid Purchases', 'Purchases', 'Website Purchases', 'Results');
-  const roasCol = findCol('Purchase (ROAS) (all)', 'Purchase ROAS', 'ROAS');
-  const impressionsCol = findCol('Impressions');
-  const clicksCol = findCol('Link clicks', 'Link Clicks', 'Clicks (all)', 'Clicks');
-
-  const dayMap = {};
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const date = parseDate(row[colIdx['Date']]);
-    if (!date) continue;
-
-    if (!dayMap[date]) {
-      dayMap[date] = { spend: 0, purchaseValue: 0, purchases: 0, impressions: 0, clicks: 0 };
-    }
-
-    const spend = num(row[spendCol]);
-    dayMap[date].spend += spend;
-    dayMap[date].impressions += num(row[impressionsCol]);
-    dayMap[date].clicks += num(row[clicksCol]);
-    dayMap[date].purchases += num(row[purchasesCol]);
-    if (purchaseValueCol !== undefined) {
-      dayMap[date].purchaseValue += num(row[purchaseValueCol]);
-    } else if (roasCol !== undefined && spend > 0) {
-      dayMap[date].purchaseValue += spend * num(row[roasCol]);
-    }
-  }
-  
+  const result = parseMetaRows(rows, headers);
   const dailyRecords = {};
-  let totalSpend = 0;
-  
-  for (const [date, agg] of Object.entries(dayMap)) {
+
+  for (const [date, d] of Object.entries(result.dailyData)) {
     dailyRecords[date] = {
       shopify: {
-        metaSpend: agg.spend,
+        metaSpend: d.spend,
         adsMetrics: {
-          metaImpressions: agg.impressions,
-          metaClicks: agg.clicks,
-          metaPurchases: agg.purchases,
-          metaPurchaseValue: agg.purchaseValue,
-          metaCPC: agg.clicks > 0 ? agg.spend / agg.clicks : 0,
-          metaCTR: agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0,
-          metaCPM: agg.impressions > 0 ? (agg.spend / agg.impressions) * 1000 : 0,
-          metaROAS: agg.spend > 0 ? agg.purchaseValue / agg.spend : 0,
+          metaImpressions: d.impressions,
+          metaClicks: d.clicks,
+          metaPurchases: d.purchases,
+          metaPurchaseValue: d.purchaseValue,
+          metaCPC: d.cpc,
+          metaCTR: d.ctr,
+          metaCPM: d.cpm,
+          metaROAS: d.roas,
         }
       }
     };
-    totalSpend += agg.spend;
   }
-  
+
   return {
     dailyRecords,
     reportMeta: {
       type: 'meta_daily',
       platform: 'meta',
       tier: 1,
-      days: Object.keys(dailyRecords).length,
+      days: result.daysCount,
       dateRange: Object.keys(dailyRecords).sort(),
-      totalSpend,
+      totalSpend: result.totalSpend,
     }
   };
 };
