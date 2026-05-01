@@ -52,7 +52,7 @@ const REPORT_SIGNATURES = [
     label: 'Meta Ads Daily',
     // Meta daily CSV: Date, Ad name, Amount spent, Impressions, Link clicks
     required: ['Date', 'Ad name', 'Amount spent', 'Impressions'],
-    optional: ['Purchases value (all)', 'Purchases (all)', 'Purchase (ROAS) (all)', 'Link clicks', 'CTR (all)', 'CPM'],
+    optional: ['Purchases value (all)', 'Value:Paid Purchases', 'Purchases (all)', 'Paid Purchases', 'Purchase (ROAS) (all)', 'Link clicks', 'CTR (all)', 'CPM'],
   },
 
   // ── TIER 2: Amazon Sponsored Products ──
@@ -475,23 +475,34 @@ const parseAmazonDailyAggregate = (rows, headers) => {
 const parseGoogleDaily = (rows, headers) => {
   const colIdx = {};
   headers.forEach((h, i) => { colIdx[String(h).trim()] = i; });
-  
+
+  const findCol = (...names) => {
+    for (const n of names) { if (colIdx[n] !== undefined) return colIdx[n]; }
+    return undefined;
+  };
+  const dateCol = findCol('Day', 'Date', 'day', 'date');
+  const costCol = findCol('Cost', 'cost');
+  const convValueCol = findCol('All conv. value', 'Conv. value', 'Conversion value');
+  const conversionsCol = findCol('Conversions', 'Conv.', 'conversions');
+  const impressionsCol = findCol('Impressions', 'Impr.', 'impressions');
+  const clicksCol = findCol('Clicks', 'clicks');
+
   const dayMap = {};
-  
+
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const date = parseDate(row[colIdx['Day']]);
+    const date = parseDate(row[dateCol]);
     if (!date) continue;
-    
+
     if (!dayMap[date]) {
       dayMap[date] = { spend: 0, convValue: 0, conversions: 0, impressions: 0, clicks: 0 };
     }
-    
-    dayMap[date].spend += num(row[colIdx['Cost']]);
-    dayMap[date].convValue += num(row[colIdx['All conv. value']]);
-    dayMap[date].conversions += num(row[colIdx['Conversions']]);
-    dayMap[date].impressions += num(row[colIdx['Impressions']]);
-    dayMap[date].clicks += num(row[colIdx['Clicks']]);
+
+    dayMap[date].spend += num(row[costCol]);
+    dayMap[date].convValue += num(row[convValueCol]);
+    dayMap[date].conversions += num(row[conversionsCol]);
+    dayMap[date].impressions += num(row[impressionsCol]);
+    dayMap[date].clicks += num(row[clicksCol]);
   }
   
   const dailyRecords = {};
@@ -536,23 +547,40 @@ const parseGoogleDaily = (rows, headers) => {
 const parseMetaDaily = (rows, headers) => {
   const colIdx = {};
   headers.forEach((h, i) => { colIdx[String(h).trim()] = i; });
-  
+
+  // Flexible column lookup — try multiple known aliases
+  const findCol = (...names) => {
+    for (const n of names) { if (colIdx[n] !== undefined) return colIdx[n]; }
+    return undefined;
+  };
+  const spendCol = findCol('Amount spent', 'Amount Spent (USD)', 'Spend');
+  const purchaseValueCol = findCol('Purchases value (all)', 'Value:Paid Purchases', 'Purchase Value', 'Website Purchase ROAS');
+  const purchasesCol = findCol('Purchases (all)', 'Paid Purchases', 'Purchases', 'Website Purchases', 'Results');
+  const roasCol = findCol('Purchase (ROAS) (all)', 'Purchase ROAS', 'ROAS');
+  const impressionsCol = findCol('Impressions');
+  const clicksCol = findCol('Link clicks', 'Link Clicks', 'Clicks (all)', 'Clicks');
+
   const dayMap = {};
-  
+
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const date = parseDate(row[colIdx['Date']]);
     if (!date) continue;
-    
+
     if (!dayMap[date]) {
       dayMap[date] = { spend: 0, purchaseValue: 0, purchases: 0, impressions: 0, clicks: 0 };
     }
-    
-    dayMap[date].spend += num(row[colIdx['Amount spent']]);
-    dayMap[date].purchaseValue += num(row[colIdx['Purchases value (all)']]);
-    dayMap[date].purchases += num(row[colIdx['Purchases (all)']]);
-    dayMap[date].impressions += num(row[colIdx['Impressions']]);
-    dayMap[date].clicks += num(row[colIdx['Link clicks']]);
+
+    const spend = num(row[spendCol]);
+    dayMap[date].spend += spend;
+    dayMap[date].impressions += num(row[impressionsCol]);
+    dayMap[date].clicks += num(row[clicksCol]);
+    dayMap[date].purchases += num(row[purchasesCol]);
+    if (purchaseValueCol !== undefined) {
+      dayMap[date].purchaseValue += num(row[purchaseValueCol]);
+    } else if (roasCol !== undefined && spend > 0) {
+      dayMap[date].purchaseValue += spend * num(row[roasCol]);
+    }
   }
   
   const dailyRecords = {};
@@ -965,22 +993,30 @@ export const mergeTier1IntoDailySales = (dailySales, tier1Results) => {
       }
       
       if (result.reportType === 'google_daily') {
-        // Merge Google metrics into shopify
         if (!day.shopify) day.shopify = {};
-        day.shopify.googleSpend = record.shopify.googleSpend;  // Replace with latest upload
-        
+        day.shopify.googleSpend = record.shopify.googleSpend;
+        day.googleSpend = record.shopify.googleSpend;
+        day.googleAds = record.shopify.googleSpend;
         if (!day.shopify.adsMetrics) day.shopify.adsMetrics = {};
-        // Overwrite with new data (more granular)
         Object.assign(day.shopify.adsMetrics, record.shopify.adsMetrics);
       }
-      
+
       if (result.reportType === 'meta_daily') {
-        // Merge Meta metrics into shopify
         if (!day.shopify) day.shopify = {};
-        day.shopify.metaSpend = record.shopify.metaSpend;  // Replace with latest upload
-        
+        day.shopify.metaSpend = record.shopify.metaSpend;
+        day.metaSpend = record.shopify.metaSpend;
+        day.metaAds = record.shopify.metaSpend;
         if (!day.shopify.adsMetrics) day.shopify.adsMetrics = {};
         Object.assign(day.shopify.adsMetrics, record.shopify.adsMetrics);
+      }
+
+      // Update combined ad spend totals
+      if (result.reportType === 'google_daily' || result.reportType === 'meta_daily') {
+        const metaS = day.shopify?.metaSpend || day.metaSpend || 0;
+        const googleS = day.shopify?.googleSpend || day.googleSpend || 0;
+        day.shopify.adSpend = metaS + googleS;
+        if (!day.total) day.total = {};
+        day.total.adSpend = metaS + googleS + (day.amazon?.adSpend || day.amazonAdsMetrics?.spend || 0);
       }
     }
   }
