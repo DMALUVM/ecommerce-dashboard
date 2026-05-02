@@ -10691,7 +10691,8 @@ const savePeriods = async (d) => {
   };
 
   // COMPLETE BACKUP - includes ALL dashboard data
-  const exportAll = () => { 
+  const exportAll = () => {
+    try {
     const fullBackup = {
       version: '3.0',
       exportedAt: new Date().toISOString(),
@@ -10701,7 +10702,7 @@ const savePeriods = async (d) => {
       sales: allWeeksData,
       dailySales: allDaysData, // Daily data export
       periods: allPeriodsData,
-      inventory: invHistory, 
+      inventory: invHistory,
       cogs: savedCogs,
       // Settings & config
       goals,
@@ -10734,19 +10735,26 @@ const savePeriods = async (d) => {
       // Banking data
       bankingData,
     };
-    const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' }); 
+    const blob = new Blob([JSON.stringify(fullBackup, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     // Use local date for filename (not UTC)
     const backupDate = new Date();
     const localDate = `${backupDate.getFullYear()}-${String(backupDate.getMonth() + 1).padStart(2, '0')}-${String(backupDate.getDate()).padStart(2, '0')}`;
-    a.href = URL.createObjectURL(blob); 
-    a.download = `${storeName || 'dashboard'}_FULL_backup_${localDate}.json`; 
+    a.href = URL.createObjectURL(blob);
+    a.download = `${storeName || 'dashboard'}_FULL_backup_${localDate}.json`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
     // Track last backup date
     const backupTimestamp = new Date().toISOString();
     safeLocalStorageSet('ecommerce_last_backup', backupTimestamp);
     setLastBackupDate(backupTimestamp);
     audit('backup_export', 'Complete backup v3.0'); setToast({ message: 'Complete backup downloaded (v3.0)', type: 'success' });
+    } catch (err) {
+      console.error('Backup export failed:', err);
+      setToast({ message: `Backup failed: ${err.message}`, type: 'error' });
+    }
   };
   
   // COMPLETE RESTORE - restores ALL dashboard data

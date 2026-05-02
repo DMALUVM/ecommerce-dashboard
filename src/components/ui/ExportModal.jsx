@@ -316,7 +316,7 @@ const ExportModal = ({
           
           {/* Full Backup */}
           <div className="pt-3 border-t border-slate-700">
-            <button onClick={() => { exportAll(); setShowExportModal(false); }}
+            <button onClick={() => { exportAll(); setTimeout(() => setShowExportModal(false), 100); }}
               className="w-full p-4 bg-slate-900/50 hover:bg-slate-700 border border-slate-600 rounded-xl text-left flex items-center gap-3 transition-colors">
               <Database className="w-6 h-6 text-slate-400" />
               <div className="flex-1">

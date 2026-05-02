@@ -131,6 +131,15 @@ export default async function handler(req, res) {
     console.log(`Found ${deposits.length} deposits`);
 
     deposits.forEach(d => {
+      const lineDescs = (d.Line || []).map(l => l.Description || '').join(' ');
+      const depositDesc = ((d.PrivateNote || '') + ' ' + lineDescs).toLowerCase();
+      let depositCategory = 'Deposit';
+      if (depositDesc.includes('amazon') || depositDesc.includes('amzn')) {
+        depositCategory = 'Channel Sales';
+      } else if (depositDesc.includes('shopify') || depositDesc.includes('shop pay')) {
+        depositCategory = 'Channel Sales';
+      }
+
       transactions.push({
         id: `qbo-deposit-${d.Id}`,
         qboId: d.Id,
@@ -142,7 +151,7 @@ export default async function handler(req, res) {
         account: d.DepositToAccountRef?.name || 'Unknown Account',
         accountId: d.DepositToAccountRef?.value,
         vendor: '',
-        category: 'Deposit',
+        category: depositCategory,
         memo: d.PrivateNote || '',
         lineItems: (d.Line || []).map(line => ({
           description: line.Description || '',

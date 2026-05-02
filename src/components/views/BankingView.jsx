@@ -406,11 +406,12 @@ const BankingView = ({
   const expensesByCategory = {};
   const incomeByCategory = {};
   filteredTxns.forEach(t => {
-    const cat = normalizeCategory(t.topCategory);
+    let cat = normalizeCategory(t.topCategory);
     if (t.isExpense) {
       if (!expensesByCategory[cat]) expensesByCategory[cat] = 0;
       expensesByCategory[cat] += t.amount;
     } else if (t.isIncome) {
+      if (cat === 'Deposit') cat = 'Channel Sales';
       if (!incomeByCategory[cat]) incomeByCategory[cat] = 0;
       incomeByCategory[cat] += t.amount;
     }
