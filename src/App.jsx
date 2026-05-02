@@ -9,7 +9,7 @@ import { devWarn, devError, audit, getAuditLog } from './utils/logger';
 import { hasDailySalesData, formatDateKey, getSunday } from './utils/date';
 import { deriveWeeksFromDays, mergeWeekData } from './utils/weekly';
 import { getShopifyAdsForDay } from './utils/ads';
-import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData, buildComprehensiveAdsPrompt } from './utils/adsReportParser';
+import { processUploadedFiles, mergeTier1IntoDailySales, mergeTier2IntoIntelData, buildComprehensiveAdsPrompt, sanitizeDayAdsMetrics } from './utils/adsReportParser';
 import { withShippingSkuRow, sumSkuRows } from './utils/reconcile';
 import {
   STORAGE_KEY, INVENTORY_KEY, COGS_KEY, STORE_KEY, GOALS_KEY, PERIODS_KEY, SALES_TAX_KEY, PRODUCT_NAMES_KEY,
@@ -4845,6 +4845,12 @@ const loadFromCloud = useCallback(async (storeId = null) => {
     if (invalidCloudKeys.length > 0) {
       console.warn(`[CloudLoad] Removing ${invalidCloudKeys.length} invalid date keys:`, invalidCloudKeys);
       invalidCloudKeys.forEach(k => delete cloudDaily[k]);
+    }
+    // Sanitize ads metrics — coerce any lingering string "null" or NaN values to 0.
+    // A prior ingest may have stored raw Meta CSV values (literal "null" strings)
+    // which poison the accumulator loops via string concatenation (0 + "null" → "0null").
+    for (const day of Object.values(cloudDaily)) {
+      sanitizeDayAdsMetrics(day);
     }
     setAllDaysData(cloudDaily); // Load daily data
     const today = new Date();

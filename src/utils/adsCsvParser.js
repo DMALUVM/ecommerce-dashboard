@@ -76,10 +76,50 @@ export const detectPlatform = (headers) => {
 
 // ─── VALUE HELPERS ──────────────────────────────────────────────────────────
 
-export const num = (v) => {
-  if (v === null || v === undefined || v === '' || v === '—' || v === 'null' || v === '-') return 0;
-  const n = Number(String(v).replace(/[$,%]/g, ''));
+/**
+ * Coerce any CSV cell value to a finite number.
+ * Meta exports literal "null" strings in 7+ columns when there are no conversions
+ * for a given ad/day. This must always produce a finite number — never NaN,
+ * never the string "null", never undefined.
+ */
+export const toNum = (v) => {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  const s = String(v).trim();
+  if (s === '' || s === '-' || s === '—') return 0;
+  if (/^null$/i.test(s)) return 0;
+  const n = Number(s.replace(/[$,%]/g, ''));
   return Number.isFinite(n) ? n : 0;
+};
+
+export const num = toNum;
+
+/**
+ * Sanitize a day record loaded from Supabase / localStorage.
+ * Coerces any lingering string "null" or NaN values in ads metrics to 0.
+ * Call this on every day record after loading from cloud to prevent
+ * string concatenation bugs in the accumulator loops.
+ */
+export const sanitizeDayAdsMetrics = (day) => {
+  if (!day) return day;
+  const numFields = [
+    'metaSpend', 'googleSpend', 'metaAds', 'googleAds',
+    'metaImpressions', 'googleImpressions', 'metaClicks', 'googleClicks',
+    'metaPurchases', 'metaConversions', 'googleConversions',
+    'metaPurchaseValue', 'metaCpc', 'metaCpa', 'googleCpc', 'googleCpa',
+  ];
+  for (const k of numFields) {
+    if (k in day && typeof day[k] !== 'number') day[k] = toNum(day[k]);
+    if (k in day && !Number.isFinite(day[k])) day[k] = 0;
+  }
+  const am = day.shopify?.adsMetrics;
+  if (am) {
+    for (const k of Object.keys(am)) {
+      if (typeof am[k] !== 'number') am[k] = toNum(am[k]);
+      if (!Number.isFinite(am[k])) am[k] = 0;
+    }
+  }
+  return day;
 };
 
 export const parseDate = (val) => {

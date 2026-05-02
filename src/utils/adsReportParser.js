@@ -20,7 +20,7 @@
  */
 
 import * as XLSX from 'xlsx';
-import { parseGoogleRows, parseMetaRows } from './adsCsvParser';
+import { parseGoogleRows, parseMetaRows, toNum, sanitizeDayAdsMetrics } from './adsCsvParser';
 
 // ─── HEADER SIGNATURES ───────────────────────────────────────────────────────
 // Each signature is an array of column names that MUST be present to match.
@@ -300,11 +300,7 @@ const REPORT_SIGNATURES = [
 
 // ─── UTILITY HELPERS ──────────────────────────────────────────────────────────
 
-const num = (v) => {
-  if (v === null || v === undefined || v === '' || v === '—' || v === 'null' || v === '-') return 0;
-  const n = Number(String(v).replace(/[$,%]/g, ''));
-  return Number.isFinite(n) ? n : 0;
-};
+const num = toNum;
 
 /**
  * Parse date strings from various formats:
@@ -1143,4 +1139,4 @@ CROSS-PLATFORM TOTALS:
 
 
 // ─── EXPORTS ─────────────────────────────────────────────────────────────────
-export { classifyHeaders, parseDate, num, REPORT_SIGNATURES };
+export { classifyHeaders, parseDate, num, REPORT_SIGNATURES, sanitizeDayAdsMetrics };
