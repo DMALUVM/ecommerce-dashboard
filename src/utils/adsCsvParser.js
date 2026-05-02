@@ -1,14 +1,38 @@
 /**
- * adsCsvParser.js — Shared Ads CSV Parser (Google + Meta)
+ * adsCsvParser.js — Ads CSV Ingest (Google Campaign-grain + Meta Ad-grain)
  *
- * Single source of truth for parsing Google/Meta ad CSV data.
- * Used by: adsReportParser.js (Ads view upload), AdsBulkUploadModal.jsx (Settings bulk import)
+ * SPEC: Ads CSV Ingestion — Google (Campaign-grain) + Meta (Ad-grain)
  *
- * Handles: auto-detection, flexible column aliases, CTR normalization,
- * Meta "null" strings, Google Ad ID as string, date parsing with quoted commas.
+ * Google: Report Editor export at Campaign × Day grain. Captures all campaign
+ * types including Performance Max. Has a 2-line preamble ("Google report" + date range).
+ *
+ * Meta: Standard daily table export at Ad × Day grain. Uses literal "null" strings
+ * in 7+ columns when there are no conversions for a given ad/day.
+ *
+ * The deprecated Ad-grain Google export (Day, Campaign, Ad ID, Cost...) is REJECTED
+ * because it silently excludes Performance Max spend (~48% of total).
  */
 
-// ─── CSV TEXT PARSER (handles quoted fields with commas) ────────────────────
+// ─── ERROR CLASSES ──────────────────────────────────────────────────────────
+
+export class DeprecatedAdsCsvFormat extends Error {
+  constructor() {
+    super(
+      'This is an Ad-grain Google export, which excludes Performance Max spend. ' +
+      'Re-export from Report Editor at the Campaign × Day grain. See parser spec §1.'
+    );
+    this.name = 'DeprecatedAdsCsvFormat';
+  }
+}
+
+export class UnknownAdsCsvFormat extends Error {
+  constructor(hint) {
+    super(`Unknown CSV format${hint ? ': ' + hint : ''}. Expected Google (Report Editor campaign-grain) or Meta (daily table) export.`);
+    this.name = 'UnknownAdsCsvFormat';
+  }
+}
+
+// ─── CSV TEXT PARSER ────────────────────────────────────────────────────────
 
 export const parseCSV = (csvText) => {
   const rows = [];
@@ -22,105 +46,46 @@ export const parseCSV = (csvText) => {
       if (inQuotes && csvText[i + 1] === '"') { current += '"'; i++; }
       else inQuotes = !inQuotes;
     } else if (ch === ',' && !inQuotes) {
-      row.push(current.trim());
+      row.push(current);
       current = '';
     } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
       if (ch === '\r' && csvText[i + 1] === '\n') i++;
-      row.push(current.trim());
-      if (row.some(v => v !== '')) rows.push(row);
+      row.push(current);
+      if (row.some(v => v.trim() !== '')) rows.push(row);
       row = [];
       current = '';
     } else {
       current += ch;
     }
   }
-  row.push(current.trim());
-  if (row.some(v => v !== '')) rows.push(row);
+  row.push(current);
+  if (row.some(v => v.trim() !== '')) rows.push(row);
   return rows;
-};
-
-// ─── HEADER ROW DETECTION ───────────────────────────────────────────────────
-
-export const findHeaderRow = (rows, maxScan = 5) => {
-  for (let i = 0; i < Math.min(rows.length, maxScan); i++) {
-    const cols = (rows[i] || []).map(v => String(v || '').toLowerCase().trim());
-    if (cols.some(h => h === 'date' || h === 'day')) return i;
-  }
-  let bestRow = 0, bestCount = 0;
-  for (let i = 0; i < Math.min(rows.length, maxScan); i++) {
-    const count = (rows[i] || []).filter(v => v != null && String(v).trim() !== '').length;
-    if (count > bestCount) { bestCount = count; bestRow = i; }
-  }
-  return bestRow;
-};
-
-// ─── PLATFORM DETECTION ─────────────────────────────────────────────────────
-
-const GOOGLE_TRIPLET = ['Cost', 'All conv. value', 'Conv. value / cost'];
-const META_TRIPLET = ['Amount spent', 'Value:Paid Purchases', 'Purchase (ROAS) (all)'];
-
-export const detectPlatform = (headers) => {
-  const trimmed = headers.map(h => String(h || '').trim());
-  const hasAll = (needles) => needles.every(n => trimmed.some(h => h === n));
-
-  if (hasAll(GOOGLE_TRIPLET)) return 'google';
-  if (hasAll(META_TRIPLET)) return 'meta';
-
-  const lc = trimmed.map(h => h.toLowerCase());
-  if (lc.includes('day') && lc.includes('campaign') && lc.includes('cost')) return 'google';
-  if (lc.some(h => h.includes('amount spent')) && lc.some(h => h.includes('ad name'))) return 'meta';
-  if (lc.includes('cost') && lc.some(h => h.includes('avg') && h.includes('cpc'))) return 'google';
-
-  return null;
 };
 
 // ─── VALUE HELPERS ──────────────────────────────────────────────────────────
 
 /**
- * Coerce any CSV cell value to a finite number.
- * Meta exports literal "null" strings in 7+ columns when there are no conversions
- * for a given ad/day. This must always produce a finite number — never NaN,
- * never the string "null", never undefined.
+ * Coerce a CSV cell to a number.
+ *
+ * @param {unknown} v        Raw cell value
+ * @param {number|null} fallback  Value when the cell is empty / null / unparseable.
+ *                                Use 0 for count fields, null for ratio fields.
+ * @returns {number|null}
  */
-export const toNum = (v) => {
-  if (v == null || v === '') return 0;
-  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+export const toNum = (v, fallback = 0) => {
+  if (v == null || v === '') return fallback;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
   const s = String(v).trim();
-  if (s === '' || s === '-' || s === '—') return 0;
-  if (/^null$/i.test(s)) return 0;
-  const n = Number(s.replace(/[$,%]/g, ''));
-  return Number.isFinite(n) ? n : 0;
+  if (s === '' || s === '-' || s === '--' || s === '—' || s === ' --') return fallback;
+  if (/^null$/i.test(s)) return fallback;
+  const cleaned = s.replace(/[$,%\s]/g, '');
+  if (cleaned === '' || cleaned === '-') return fallback;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : fallback;
 };
 
-export const num = toNum;
-
-/**
- * Sanitize a day record loaded from Supabase / localStorage.
- * Coerces any lingering string "null" or NaN values in ads metrics to 0.
- * Call this on every day record after loading from cloud to prevent
- * string concatenation bugs in the accumulator loops.
- */
-export const sanitizeDayAdsMetrics = (day) => {
-  if (!day) return day;
-  const numFields = [
-    'metaSpend', 'googleSpend', 'metaAds', 'googleAds',
-    'metaImpressions', 'googleImpressions', 'metaClicks', 'googleClicks',
-    'metaPurchases', 'metaConversions', 'googleConversions',
-    'metaPurchaseValue', 'metaCpc', 'metaCpa', 'googleCpc', 'googleCpa',
-  ];
-  for (const k of numFields) {
-    if (k in day && typeof day[k] !== 'number') day[k] = toNum(day[k]);
-    if (k in day && !Number.isFinite(day[k])) day[k] = 0;
-  }
-  const am = day.shopify?.adsMetrics;
-  if (am) {
-    for (const k of Object.keys(am)) {
-      if (typeof am[k] !== 'number') am[k] = toNum(am[k]);
-      if (!Number.isFinite(am[k])) am[k] = 0;
-    }
-  }
-  return day;
-};
+export const num = (v) => toNum(v, 0);
 
 export const parseDate = (val) => {
   if (!val) return null;
@@ -129,7 +94,6 @@ export const parseDate = (val) => {
     if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
   }
   let s = String(val).trim();
-  // Strip leading day-of-week: "Wednesday, Feb 6, 2026" → "Feb 6, 2026"
   s = s.replace(/^[A-Za-z]+,\s*/, '');
 
   const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -153,178 +117,367 @@ export const parseDate = (val) => {
   return null;
 };
 
+/**
+ * Derive a campaign name from a Meta ad name.
+ * First segment when split on ` - `. Handles "Manual Ad - creatorHandle" specially.
+ */
+export function deriveMetaCampaign(adName) {
+  if (!adName) return adName || '';
+  const parts = adName.split(' - ').map(s => s.trim()).filter(Boolean);
+  if (parts.length === 0) return adName;
+  if (parts.length === 1) return parts[0];
+  if (parts[0] === 'Manual Ad') return `Manual Ad - ${parts[1]}`;
+  return parts[0];
+}
+
+// ─── PLATFORM DETECTION (first-3-lines) ─────────────────────────────────────
+
+/**
+ * Detect platform from raw CSV text. Reads first 3 lines.
+ * @param {string} csvText
+ * @returns {'google' | 'meta'}
+ * @throws {DeprecatedAdsCsvFormat | UnknownAdsCsvFormat}
+ */
+export function detectPlatform(csvText) {
+  const lines = csvText.split('\n', 4);
+  const line1 = (lines[0] || '').trim();
+
+  if (line1 === 'Google report') {
+    const line3 = (lines[2] || '').trim();
+    if (!line3.includes('Campaign type')) {
+      throw new UnknownAdsCsvFormat('Google report detected but line 3 missing "Campaign type" column — may be an older export format.');
+    }
+    return 'google';
+  }
+
+  if (line1.startsWith('Day,Campaign,Ad ID,Cost')) {
+    throw new DeprecatedAdsCsvFormat();
+  }
+
+  if (line1.startsWith('Date,Ad name,Amount spent')) {
+    return 'meta';
+  }
+
+  throw new UnknownAdsCsvFormat(`First line: "${line1.slice(0, 80)}"`);
+}
+
+// ─── GOOGLE CAMPAIGN-GRAIN PARSER ───────────────────────────────────────────
+
 const findCol = (colIdx, ...names) => {
   for (const n of names) { if (colIdx[n] !== undefined) return colIdx[n]; }
   return undefined;
 };
 
-// ─── GOOGLE DAILY PARSER ────────────────────────────────────────────────────
+/**
+ * Parse Google Report Editor CSV (campaign × day grain) with 2-line preamble.
+ * @param {string} csvText  Full CSV text including preamble
+ * @returns {NormalizedAdRow[]}
+ */
+export function parseGoogleCampaignCsv(csvText) {
+  const csvBody = csvText.split('\n').slice(2).join('\n');
+  const allRows = parseCSV(csvBody);
+  if (allRows.length < 2) return [];
 
-export const parseGoogleRows = (dataRows, headers) => {
+  const headers = allRows[0].map(v => v.trim());
+  const dataRows = allRows.slice(1);
+  return parseGoogleCampaignRows(dataRows, headers);
+}
+
+/**
+ * Parse Google campaign-grain rows from pre-split data (also used by XLSX path).
+ */
+export function parseGoogleCampaignRows(dataRows, headers) {
   const colIdx = {};
-  headers.forEach((h, i) => { colIdx[String(h).trim()] = i; });
+  headers.forEach((h, i) => { colIdx[h.trim()] = i; });
 
-  const dateCol        = findCol(colIdx, 'Day', 'Date', 'day', 'date');
-  const costCol        = findCol(colIdx, 'Cost', 'cost');
-  const convValueCol   = findCol(colIdx, 'All conv. value', 'Conv. value', 'Conversion value');
-  const conversionsCol = findCol(colIdx, 'Conversions', 'Conv.', 'conversions');
-  const impressionsCol = findCol(colIdx, 'Impressions', 'Impr.', 'impressions');
-  const clicksCol      = findCol(colIdx, 'Clicks', 'clicks');
-  const cpcCol         = findCol(colIdx, 'Avg. CPC', 'Avg CPC', 'avg. cpc', 'avg cpc');
-  const costPerConvCol = findCol(colIdx, 'Cost / conv.', 'Cost/conv.', 'Cost per conversion');
+  const dateCol         = findCol(colIdx, 'Day', 'Date');
+  const campaignCol     = findCol(colIdx, 'Campaign');
+  const campaignTypeCol = findCol(colIdx, 'Campaign type');
+  const currencyCol     = findCol(colIdx, 'Currency code');
+  const costPerConvCol  = findCol(colIdx, 'Cost / all conv.', 'Cost / conv.');
+  const imprCol         = findCol(colIdx, 'Impr.', 'Impressions');
+  const clicksCol       = findCol(colIdx, 'Clicks');
+  const convCol         = findCol(colIdx, 'All conv.', 'Conversions');
+  const convValueCol    = findCol(colIdx, 'Conv. value', 'All conv. value');
+  const costCol         = findCol(colIdx, 'Cost');
 
-  const columnMapping = {
-    'Cost':        costCol !== undefined ? headers[costCol] : 'NOT FOUND',
-    'Conversions': conversionsCol !== undefined ? headers[conversionsCol] : 'NOT FOUND',
-    'Conv. Value': convValueCol !== undefined ? headers[convValueCol] : 'NOT FOUND',
-    'Impressions': impressionsCol !== undefined ? headers[impressionsCol] : 'NOT FOUND',
-    'Clicks':      clicksCol !== undefined ? headers[clicksCol] : 'NOT FOUND',
-    'CPC':         cpcCol !== undefined ? headers[cpcCol] : 'NOT FOUND',
-  };
-
-  const dayMap = {};
-  let rowsParsed = 0, rowsSkipped = 0, totalSpend = 0;
-
+  const rows = [];
   for (const row of dataRows) {
     const date = parseDate(row[dateCol]);
-    if (!date) { rowsSkipped++; continue; }
-    rowsParsed++;
+    if (!date) continue;
 
-    if (!dayMap[date]) {
-      dayMap[date] = { spend: 0, convValue: 0, conversions: 0, impressions: 0, clicks: 0 };
-    }
-    const spend = num(row[costCol]);
-    dayMap[date].spend += spend;
-    dayMap[date].convValue += num(row[convValueCol]);
-    dayMap[date].conversions += num(row[conversionsCol]);
-    dayMap[date].impressions += num(row[impressionsCol]);
-    dayMap[date].clicks += num(row[clicksCol]);
-    totalSpend += spend;
-  }
+    const spend = toNum(row[costCol], 0);
+    const revenue = toNum(row[convValueCol], 0);
+    const campaign = (row[campaignCol] || '').trim();
 
-  const dailyData = {};
-  for (const [date, agg] of Object.entries(dayMap)) {
-    dailyData[date] = {
+    rows.push({
       date,
-      spend:       agg.spend,
-      impressions: agg.impressions,
-      clicks:      agg.clicks,
-      conversions: agg.conversions,
-      convValue:   agg.convValue,
-      ctr:         agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0,
-      cpc:         agg.clicks > 0 ? agg.spend / agg.clicks : 0,
-      costPerConv: agg.conversions > 0 ? agg.spend / agg.conversions : 0,
-      roas:        agg.spend > 0 ? agg.convValue / agg.spend : 0,
-    };
+      platform: 'google',
+      campaign,
+      campaign_type: campaignTypeCol !== undefined ? (row[campaignTypeCol] || '').trim() || null : null,
+      ad_identifier: campaign,
+      ad_name: null,
+      spend,
+      revenue,
+      conversions: toNum(row[convCol], 0),
+      cost_per_conversion: toNum(row[costPerConvCol], null),
+      roas: spend > 0 ? revenue / spend : null,
+      impressions: toNum(row[imprCol], 0),
+      clicks: toNum(row[clicksCol], 0),
+      ctr_pct: null,
+      cpc: null,
+      cpm: null,
+      currency: currencyCol !== undefined ? (row[currencyCol] || 'USD').trim() : 'USD',
+    });
   }
+  return rows;
+}
 
-  const dates = Object.keys(dailyData).sort();
-  return {
-    platform: 'google',
-    dailyData,
-    columnMapping,
-    rowsParsed,
-    rowsSkipped,
-    totalSpend,
-    dateRange: dates.length > 0 ? { start: dates[0], end: dates[dates.length - 1] } : null,
-    daysCount: dates.length,
-  };
-};
+// ─── META AD-GRAIN PARSER ───────────────────────────────────────────────────
 
-// ─── META DAILY PARSER ──────────────────────────────────────────────────────
+/**
+ * Parse Meta daily table CSV (ad × day grain).
+ * @param {string} csvText  Full CSV text (no preamble)
+ * @returns {NormalizedAdRow[]}
+ */
+export function parseMetaAdsCsv(csvText) {
+  const allRows = parseCSV(csvText);
+  if (allRows.length < 2) return [];
 
-export const parseMetaRows = (dataRows, headers) => {
+  const headers = allRows[0].map(v => v.trim());
+  const dataRows = allRows.slice(1);
+  return parseMetaAdsRows(dataRows, headers);
+}
+
+/**
+ * Parse Meta ad-grain rows from pre-split data (also used by XLSX path).
+ */
+export function parseMetaAdsRows(dataRows, headers) {
   const colIdx = {};
-  headers.forEach((h, i) => { colIdx[String(h).trim()] = i; });
+  headers.forEach((h, i) => { colIdx[h.trim()] = i; });
 
   const dateCol          = findCol(colIdx, 'Date', 'date');
+  const adNameCol        = findCol(colIdx, 'Ad name', 'Ad Name');
   const spendCol         = findCol(colIdx, 'Amount spent', 'Amount Spent (USD)', 'Spend');
   const purchaseValueCol = findCol(colIdx, 'Value:Paid Purchases', 'Purchases value (all)', 'Purchase Value');
   const purchasesCol     = findCol(colIdx, 'Paid Purchases', 'Purchases (all)', 'Purchases', 'Website Purchases', 'Results');
+  const costPerPurchCol  = findCol(colIdx, 'Cost:Paid Purchases', 'Cost per purchase');
   const roasCol          = findCol(colIdx, 'Purchase (ROAS) (all)', 'Purchase ROAS', 'ROAS');
   const impressionsCol   = findCol(colIdx, 'Impressions');
   const clicksCol        = findCol(colIdx, 'Link clicks', 'Link Clicks', 'Clicks (all)', 'Clicks');
+  const ctrCol           = findCol(colIdx, 'CTR (all)', 'CTR');
+  const cpcCol           = findCol(colIdx, 'Cost per link click', 'CPC');
+  const cpmCol           = findCol(colIdx, 'CPM');
 
-  const columnMapping = {
-    'Spend':          spendCol !== undefined ? headers[spendCol] : 'NOT FOUND',
-    'Purchases':      purchasesCol !== undefined ? headers[purchasesCol] : 'NOT FOUND',
-    'Purchase Value': purchaseValueCol !== undefined
-      ? headers[purchaseValueCol]
-      : (roasCol !== undefined ? `computed from ${headers[roasCol]}` : 'NOT FOUND'),
-    'Impressions':    impressionsCol !== undefined ? headers[impressionsCol] : 'NOT FOUND',
-    'Clicks':         clicksCol !== undefined ? headers[clicksCol] : 'NOT FOUND',
-  };
-
-  const dayMap = {};
-  let rowsParsed = 0, rowsSkipped = 0, totalSpend = 0;
-
+  const rows = [];
   for (const row of dataRows) {
     const date = parseDate(row[dateCol]);
-    if (!date) { rowsSkipped++; continue; }
-    rowsParsed++;
+    if (!date) continue;
 
-    if (!dayMap[date]) {
-      dayMap[date] = { spend: 0, purchaseValue: 0, purchases: 0, impressions: 0, clicks: 0 };
+    const adName = adNameCol !== undefined ? (row[adNameCol] || '').trim() : '';
+    const spend = toNum(row[spendCol], 0);
+    let revenue = toNum(row[purchaseValueCol], 0);
+    if (revenue === 0 && roasCol !== undefined && spend > 0) {
+      const roas = toNum(row[roasCol], null);
+      if (roas !== null) revenue = spend * roas;
     }
 
-    const spend = num(row[spendCol]);
-    dayMap[date].spend += spend;
-    dayMap[date].impressions += num(row[impressionsCol]);
-    dayMap[date].clicks += num(row[clicksCol]);
-    dayMap[date].purchases += num(row[purchasesCol]);
+    rows.push({
+      date,
+      platform: 'meta',
+      campaign: deriveMetaCampaign(adName),
+      campaign_type: null,
+      ad_identifier: adName,
+      ad_name: adName,
+      spend,
+      revenue,
+      conversions: toNum(row[purchasesCol], 0),
+      cost_per_conversion: toNum(row[costPerPurchCol], null),
+      roas: toNum(row[roasCol], null),
+      impressions: toNum(row[impressionsCol], 0),
+      clicks: toNum(row[clicksCol], 0),
+      ctr_pct: toNum(row[ctrCol], null),
+      cpc: toNum(row[cpcCol], null),
+      cpm: toNum(row[cpmCol], null),
+      currency: 'USD',
+    });
+  }
+  return rows;
+}
 
-    if (purchaseValueCol !== undefined) {
-      dayMap[date].purchaseValue += num(row[purchaseValueCol]);
-    } else if (roasCol !== undefined && spend > 0) {
-      dayMap[date].purchaseValue += spend * num(row[roasCol]);
+// ─── PUBLIC ENTRY POINT ─────────────────────────────────────────────────────
+
+/**
+ * Parse a Google or Meta ads CSV.
+ * @param {string} csvText  Full file contents
+ * @returns {{ platform: 'google'|'meta', rows: NormalizedAdRow[], totalSpend: number, rowCount: number, dateRange: {start:string, end:string}|null }}
+ * @throws {DeprecatedAdsCsvFormat | UnknownAdsCsvFormat}
+ */
+export function parseAdsCsv(csvText) {
+  const platform = detectPlatform(csvText);
+  const rows = platform === 'google'
+    ? parseGoogleCampaignCsv(csvText)
+    : parseMetaAdsCsv(csvText);
+
+  let totalSpend = 0;
+  let minDate = null, maxDate = null;
+  for (const r of rows) {
+    totalSpend += r.spend;
+    if (!minDate || r.date < minDate) minDate = r.date;
+    if (!maxDate || r.date > maxDate) maxDate = r.date;
+  }
+
+  return {
+    platform,
+    rows,
+    totalSpend,
+    rowCount: rows.length,
+    dateRange: minDate ? { start: minDate, end: maxDate } : null,
+  };
+}
+
+// ─── RECONCILIATION GUARDRAIL (§6.9) ────────────────────────────────────────
+
+/**
+ * Check that the parsed spend total is within 0.5% of the expected total.
+ * @param {number} csvTotal
+ * @param {number} expectedTotal  User-supplied expected total (optional)
+ * @returns {{ ok: boolean, diff: number, pct: number, message: string }}
+ */
+export function checkReconciliation(csvTotal, expectedTotal) {
+  if (!expectedTotal || expectedTotal <= 0) {
+    return { ok: true, diff: 0, pct: 0, message: `Ingested $${csvTotal.toFixed(2)} — verify this matches your ads platform UI.` };
+  }
+  const diff = Math.abs(csvTotal - expectedTotal);
+  const pct = (diff / expectedTotal) * 100;
+  if (pct > 0.5) {
+    return {
+      ok: false, diff, pct,
+      message: `Spend mismatch: CSV total $${csvTotal.toFixed(2)} vs expected $${expectedTotal.toFixed(2)} (${pct.toFixed(2)}% off). Threshold is 0.5%.`,
+    };
+  }
+  return { ok: true, diff, pct, message: `Spend reconciled: $${csvTotal.toFixed(2)} (${pct.toFixed(3)}% variance).` };
+}
+
+// ─── DAILY AGGREGATION (for dashboard display) ──────────────────────────────
+
+/**
+ * Aggregate per-row NormalizedAdRow[] into per-day totals for dashboard display.
+ * Produces the same shape expected by adsReportParser.js merge logic and AdsView.
+ */
+export function aggregateRowsByDay(rows) {
+  if (!rows || rows.length === 0) return { dailyData: {}, platform: null, totalSpend: 0, daysCount: 0 };
+
+  const platform = rows[0].platform;
+  const dayMap = {};
+
+  for (const r of rows) {
+    if (!dayMap[r.date]) {
+      dayMap[r.date] = { spend: 0, revenue: 0, conversions: 0, impressions: 0, clicks: 0 };
     }
-
-    totalSpend += spend;
+    const d = dayMap[r.date];
+    d.spend += r.spend;
+    d.revenue += r.revenue;
+    d.conversions += r.conversions;
+    d.impressions += r.impressions;
+    d.clicks += r.clicks;
   }
 
   const dailyData = {};
+  let totalSpend = 0;
   for (const [date, agg] of Object.entries(dayMap)) {
-    dailyData[date] = {
-      date,
-      spend:         agg.spend,
-      impressions:   agg.impressions,
-      clicks:        agg.clicks,
-      purchases:     agg.purchases,
-      purchaseValue: agg.purchaseValue,
-      ctr:           agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0,
-      cpc:           agg.clicks > 0 ? agg.spend / agg.clicks : 0,
-      cpm:           agg.impressions > 0 ? (agg.spend / agg.impressions) * 1000 : 0,
-      roas:          agg.spend > 0 ? agg.purchaseValue / agg.spend : 0,
-    };
+    if (platform === 'google') {
+      dailyData[date] = {
+        date,
+        spend: agg.spend,
+        impressions: agg.impressions,
+        clicks: agg.clicks,
+        conversions: agg.conversions,
+        convValue: agg.revenue,
+        ctr: agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0,
+        cpc: agg.clicks > 0 ? agg.spend / agg.clicks : 0,
+        costPerConv: agg.conversions > 0 ? agg.spend / agg.conversions : 0,
+        roas: agg.spend > 0 ? agg.revenue / agg.spend : 0,
+      };
+    } else {
+      dailyData[date] = {
+        date,
+        spend: agg.spend,
+        impressions: agg.impressions,
+        clicks: agg.clicks,
+        purchases: agg.conversions,
+        purchaseValue: agg.revenue,
+        ctr: agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0,
+        cpc: agg.clicks > 0 ? agg.spend / agg.clicks : 0,
+        cpm: agg.impressions > 0 ? (agg.spend / agg.impressions) * 1000 : 0,
+        roas: agg.spend > 0 ? agg.revenue / agg.spend : 0,
+      };
+    }
+    totalSpend += agg.spend;
   }
 
   const dates = Object.keys(dailyData).sort();
   return {
-    platform: 'meta',
+    platform,
     dailyData,
-    columnMapping,
-    rowsParsed,
-    rowsSkipped,
     totalSpend,
-    dateRange: dates.length > 0 ? { start: dates[0], end: dates[dates.length - 1] } : null,
     daysCount: dates.length,
+    dateRange: dates.length > 0 ? { start: dates[0], end: dates[dates.length - 1] } : null,
   };
-};
+}
 
-// ─── HIGH-LEVEL: PARSE ADS CSV TEXT ─────────────────────────────────────────
+// ─── BACKWARD-COMPAT WRAPPERS (for adsReportParser.js XLSX path) ────────────
 
-export const parseAdsCsv = (csvText) => {
-  const allRows = parseCSV(csvText);
-  if (allRows.length < 2) return null;
+/**
+ * Parse Google rows from pre-split data. Used by adsReportParser for XLSX files.
+ * Rejects deprecated Ad-grain format (has 'Ad ID' column).
+ */
+export function parseGoogleRows(dataRows, headers) {
+  const headerSet = new Set(headers.map(h => String(h).trim()));
+  if (headerSet.has('Ad ID')) throw new DeprecatedAdsCsvFormat();
 
-  const headerIdx = findHeaderRow(allRows);
-  const headers = allRows[headerIdx].map(v => String(v || '').trim());
-  const dataRows = allRows.slice(headerIdx + 1);
+  if (headerSet.has('Campaign type')) {
+    const rows = parseGoogleCampaignRows(dataRows, headers);
+    return aggregateRowsByDay(rows);
+  }
 
-  const platform = detectPlatform(headers);
-  if (!platform) return null;
+  // Legacy fallback for sheets without Campaign type — parse best-effort
+  const rows = parseGoogleCampaignRows(dataRows, headers);
+  return aggregateRowsByDay(rows);
+}
 
-  if (platform === 'google') return parseGoogleRows(dataRows, headers);
-  if (platform === 'meta') return parseMetaRows(dataRows, headers);
-  return null;
+/**
+ * Parse Meta rows from pre-split data. Used by adsReportParser for XLSX files.
+ */
+export function parseMetaRows(dataRows, headers) {
+  const rows = parseMetaAdsRows(dataRows, headers);
+  return aggregateRowsByDay(rows);
+}
+
+// ─── SANITIZE CLOUD DATA ───────────────────────────────────────────────────
+
+/**
+ * Sanitize a day record loaded from Supabase / localStorage.
+ * Coerces any lingering string "null" or NaN values in ads metrics to 0.
+ */
+export const sanitizeDayAdsMetrics = (day) => {
+  if (!day) return day;
+  const numFields = [
+    'metaSpend', 'googleSpend', 'metaAds', 'googleAds',
+    'metaImpressions', 'googleImpressions', 'metaClicks', 'googleClicks',
+    'metaPurchases', 'metaConversions', 'googleConversions',
+    'metaPurchaseValue', 'metaCpc', 'metaCpa', 'googleCpc', 'googleCpa',
+  ];
+  for (const k of numFields) {
+    if (k in day && typeof day[k] !== 'number') day[k] = toNum(day[k], 0);
+    if (k in day && !Number.isFinite(day[k])) day[k] = 0;
+  }
+  const am = day.shopify?.adsMetrics;
+  if (am) {
+    for (const k of Object.keys(am)) {
+      if (typeof am[k] !== 'number') am[k] = toNum(am[k], 0);
+      if (!Number.isFinite(am[k])) am[k] = 0;
+    }
+  }
+  return day;
 };

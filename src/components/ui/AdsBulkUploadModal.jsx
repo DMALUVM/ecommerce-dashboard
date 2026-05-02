@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { TrendingUp, X, Upload, FileSpreadsheet, RefreshCw, CheckCircle, AlertTriangle, Eye } from 'lucide-react';
 import { lsSet } from '../../utils/storage';
-import { parseAdsCsv } from '../../utils/adsCsvParser';
+import { parseAdsCsv, aggregateRowsByDay, DeprecatedAdsCsvFormat, UnknownAdsCsvFormat } from '../../utils/adsCsvParser';
 
 const AdsBulkUploadModal = ({
   showAdsBulkUpload,
@@ -51,17 +51,14 @@ const AdsBulkUploadModal = ({
   const parseAdsFile = async (file) => {
     const text = await file.text();
     const result = parseAdsCsv(text);
-    if (!result) {
-      throw new Error('Unrecognized format. Expected Google or Meta Ads CSV.');
-    }
 
-    console.log(`[AdsUpload] ${file.name}: detected=${result.platform}, ${result.rowsParsed} rows, $${result.totalSpend.toFixed(2)} spend`);
-    console.log(`[AdsUpload] Column mapping:`, result.columnMapping);
-
+    const agg = aggregateRowsByDay(result.rows);
     const isMeta = result.platform === 'meta';
-    const dailyData = {};
 
-    for (const [date, d] of Object.entries(result.dailyData)) {
+    console.log(`[AdsUpload] ${file.name}: detected=${result.platform}, ${result.rowCount} rows, $${result.totalSpend.toFixed(2)} spend`);
+
+    const dailyData = {};
+    for (const [date, d] of Object.entries(agg.dailyData)) {
       dailyData[date] = {
         metaSpend: isMeta ? d.spend : 0,
         googleSpend: isMeta ? 0 : d.spend,
@@ -96,11 +93,10 @@ const AdsBulkUploadModal = ({
       type: result.platform,
       dailyData,
       dateRange: result.dateRange,
-      daysCount: result.daysCount,
-      columnMapping: result.columnMapping,
+      daysCount: agg.daysCount,
       sampleDays,
-      rowsParsed: result.rowsParsed,
-      rowsSkipped: result.rowsSkipped,
+      rowsParsed: result.rowCount,
+      rowsSkipped: 0,
     };
   };
 
@@ -125,7 +121,6 @@ const AdsBulkUploadModal = ({
           file: file.name, status: 'success', type: parsed.type,
           daysUpdated: parsed.daysCount, dateRange: parsed.dateRange,
           totalSpend,
-          columnMapping: parsed.columnMapping,
           sampleDays: parsed.sampleDays,
           rowsParsed: parsed.rowsParsed,
           rowsSkipped: parsed.rowsSkipped,
@@ -331,19 +326,6 @@ const AdsBulkUploadModal = ({
                         </span>
                       </div>
 
-                      {/* Column mapping */}
-                      <div className="bg-slate-900/50 rounded-lg p-3 mb-3">
-                        <p className="text-slate-500 text-xs font-medium mb-2 uppercase tracking-wider">Column Mapping</p>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                          {Object.entries(r.columnMapping).map(([field, col]) => (
-                            <div key={field} className="flex justify-between gap-2">
-                              <span className="text-slate-400">{field}</span>
-                              <span className={`font-mono truncate ${col === 'NOT FOUND' ? 'text-rose-400' : 'text-emerald-400'}`}>{col}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
                       {/* Sample data */}
                       {r.sampleDays && r.sampleDays.length > 0 && (
                         <div className="bg-slate-900/50 rounded-lg p-3 mb-3">
@@ -415,8 +397,8 @@ const AdsBulkUploadModal = ({
                   </div>
                   <div className="bg-amber-900/30 rounded-lg p-3 border border-amber-500/30">
                     <p className="text-amber-400 font-medium mb-1">Google Ads</p>
-                    <p className="text-slate-400 text-xs">Export from Google Ads with:</p>
-                    <p className="text-slate-300 text-xs mt-1">Day, Cost, Conversions, Impressions, Clicks, Avg. CPC</p>
+                    <p className="text-slate-400 text-xs">Export from Report Editor (Campaign × Day):</p>
+                    <p className="text-slate-300 text-xs mt-1">Day, Campaign, Campaign type, Cost, Impr., Clicks, All conv.</p>
                   </div>
                 </div>
               </div>

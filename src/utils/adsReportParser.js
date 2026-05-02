@@ -20,7 +20,7 @@
  */
 
 import * as XLSX from 'xlsx';
-import { parseGoogleRows, parseMetaRows, toNum, sanitizeDayAdsMetrics } from './adsCsvParser';
+import { parseGoogleRows, parseMetaRows, toNum, sanitizeDayAdsMetrics, DeprecatedAdsCsvFormat } from './adsCsvParser';
 
 // ─── HEADER SIGNATURES ───────────────────────────────────────────────────────
 // Each signature is an array of column names that MUST be present to match.
@@ -42,9 +42,10 @@ const REPORT_SIGNATURES = [
     tier: 1,
     platform: 'google',
     label: 'Google Ads Daily',
-    // Google daily CSV: Day, Campaign, Ad ID, Cost, Impressions, Clicks
-    required: ['Day', 'Campaign', 'Cost', 'Impressions', 'Clicks'],
-    optional: ['Ad ID', 'All conv. value', 'Conversions', 'CTR', 'Avg. CPC', 'Conv. value / cost'],
+    // Campaign-grain Report Editor export (Day, Campaign, Campaign type, Cost, ...)
+    // Also matches legacy Ad-grain (Day, Campaign, Ad ID, Cost, ...) which parseGoogleRows rejects at parse time
+    required: ['Day', 'Campaign', 'Cost'],
+    optional: ['Campaign type', 'Currency code', 'Cost / all conv.', 'Impr.', 'Clicks', 'All conv.', 'Conv. value', 'Ad ID', 'Impressions', 'Conversions', 'All conv. value', 'CTR', 'Avg. CPC', 'Conv. value / cost'],
   },
   {
     id: 'meta_daily',
@@ -766,8 +767,16 @@ export const parseFile = async (file) => {
   if (ext === 'csv' || ext === 'tsv') {
     const text = await file.text();
     const rows = parseCSVString(text);
-    const sheetResults = parseSingleSheet(rows, fileName);
-    results.push(...sheetResults);
+    try {
+      const sheetResults = parseSingleSheet(rows, fileName);
+      results.push(...sheetResults);
+    } catch (err) {
+      if (err instanceof DeprecatedAdsCsvFormat) {
+        results.push({ unrecognized: true, fileName, error: err.message });
+      } else {
+        throw err;
+      }
+    }
   } else if (ext === 'xlsx' || ext === 'xls') {
     const buffer = await file.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
@@ -776,8 +785,16 @@ export const parseFile = async (file) => {
       const ws = wb.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
       if (rows.length > 1) {
-        const sheetResults = parseSingleSheet(rows, `${fileName} [${sheetName}]`);
-        results.push(...sheetResults);
+        try {
+          const sheetResults = parseSingleSheet(rows, `${fileName} [${sheetName}]`);
+          results.push(...sheetResults);
+        } catch (err) {
+          if (err instanceof DeprecatedAdsCsvFormat) {
+            results.push({ unrecognized: true, fileName: `${fileName} [${sheetName}]`, error: err.message });
+          } else {
+            throw err;
+          }
+        }
       }
     }
   }
